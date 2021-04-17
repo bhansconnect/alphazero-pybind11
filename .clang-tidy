@@ -1,0 +1,1 @@
+Checks: '-*,google-*,bugprone-*,performance-*,clang-analyzer-*,cert-*,concurrency-*,cppcoreguidelines-*,hicpp-*,misc-*,modernize-*,portability-*,readability-*,-misc-non-private-member-variables-in-classes,-modernize-use-trailing-return-type,-readability-magic-numbers,-cppcoreguidelines-avoid-magic-numbers'

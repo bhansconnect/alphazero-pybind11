@@ -11,10 +11,9 @@ namespace {
 // NOLINTNEXTLINE
 TEST(PlayManager, Basic) {
   auto params = PlayParams{};
-  params.base_gs = std::make_unique<connect4_gs::Connect4GS>();
   params.games_to_play = 32;
   params.concurrent_games = 8;
-  auto pm = PlayManager{std::move(params)};
+  auto pm = PlayManager{std::make_unique<connect4_gs::Connect4GS>(), params};
   auto play = std::async(std::launch::async, [&] {
     try {
       pm.play();
@@ -38,11 +37,10 @@ TEST(PlayManager, MultiThreaded) {
   const auto workers = cores - 1;
 
   auto params = PlayParams{};
-  params.base_gs = std::make_unique<connect4_gs::Connect4GS>();
   params.games_to_play = 32 * workers;
   params.concurrent_games = 8 * workers;
 
-  auto pm = PlayManager{std::move(params)};
+  auto pm = PlayManager{std::make_unique<connect4_gs::Connect4GS>(), params};
   auto play_workers = std::vector<std::future<void>>{workers};
   for (auto& pw : play_workers) {
     pw = std::async(std::launch::async, [&] {
@@ -64,6 +62,7 @@ TEST(PlayManager, MultiThreaded) {
     pw.wait();
   }
   infer.wait();
+  std::cout << "Scores: " << pm.scores() << std::endl;
 }
 
 }  // namespace

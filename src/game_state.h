@@ -20,8 +20,8 @@ class GameState {
   virtual ~GameState() = default;
 
   [[nodiscard]] virtual std::unique_ptr<GameState> copy() const noexcept = 0;
-  [[nodiscard]] virtual bool operator==(
-      const GameState& other) const noexcept = 0;
+  [[nodiscard]] virtual bool operator==(const GameState& other) const
+      noexcept = 0;
   [[nodiscard]] bool operator!=(const GameState& other) const noexcept {
     return !(*this == other);
   }
@@ -45,8 +45,8 @@ class GameState {
   // Returns nullopt if the game isn't over.
   // Returns the score for each player if the game is over.
   // Normally this is: 1 for win, -1 for loss, 0 for draw.
-  [[nodiscard]] virtual std::optional<Vector<float>> scores()
-      const noexcept = 0;
+  [[nodiscard]] virtual std::optional<Vector<float>> scores() const
+      noexcept = 0;
 
   // Returns the canonicalized form of the board, ready for feeding to a NN.
   [[nodiscard]] virtual Tensor<float, 3> canonicalized() const noexcept = 0;
@@ -63,6 +63,7 @@ class GameState {
   auto values = Vector<float>{gs.num_players()};
   values.setZero();
   auto policy = Vector<float>{gs.num_moves()};
+  policy.setZero();
   float sum = valids.sum();
   if (sum == 0.0) {
     return {values, policy};

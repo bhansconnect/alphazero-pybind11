@@ -6,6 +6,8 @@ namespace alphazero::connect4_gs {
 
 constexpr const int WIDTH = 7;
 constexpr const int HEIGHT = 6;
+constexpr const int NUM_MOVES = WIDTH;
+constexpr const int NUM_PLAYERS = 2;
 constexpr const std::array<int, 3> BOARD_SHAPE = {2, HEIGHT, WIDTH};
 constexpr const std::array<int, 3> CANONICAL_SHAPE = {4, HEIGHT, WIDTH};
 

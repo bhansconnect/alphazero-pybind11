@@ -2,23 +2,25 @@
 
 namespace alphazero {
 
-using namespace std::chrono_literals;
-
-constexpr const auto MAX_WAIT = 100us;
-
-PlayManager::PlayManager(PlayParams p)
-    : params_(std::move(p)), games_started_(params_.concurrent_games) {
+PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
+    : base_gs_(std::move(gs)),
+      params_(p),
+      games_started_(params_.concurrent_games) {
   games_.reserve(params_.concurrent_games);
   for (auto i = 0U; i < params_.concurrent_games; ++i) {
     auto gd = GameData{};
-    gd.gs = params_.base_gs->copy();
-    for (auto j = 0; j < params_.base_gs->num_players(); ++j) {
-      gd.mcts.emplace_back(params_.cpuct, params_.base_gs->num_moves());
+    gd.gs = base_gs_->copy();
+    for (auto j = 0; j < base_gs_->num_players(); ++j) {
+      gd.mcts.emplace_back(params_.cpuct, base_gs_->num_moves());
     }
+    gd.v = Vector<float>{base_gs_->num_players()};
+    gd.pi = Vector<float>{base_gs_->num_moves()};
+    gd.v.setZero();
+    gd.pi.setZero();
     games_.push_back(std::move(gd));
     awaiting_mcts_.push(i);
   }
-  scores_ = Vector<float>{params_.base_gs->num_players()};
+  scores_ = Vector<float>{base_gs_->num_players()};
   scores_.setZero();
 }
 
@@ -54,9 +56,9 @@ void PlayManager::play() {
             ++games_started_;
           }
           // Setup next game.
-          game.gs = params_.base_gs->copy();
+          game.gs = base_gs_->copy();
           for (auto& m : game.mcts) {
-            m = MCTS{params_.cpuct, params_.base_gs->num_moves()};
+            m = MCTS{params_.cpuct, base_gs_->num_moves()};
           }
         }
       }

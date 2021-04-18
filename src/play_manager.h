@@ -12,6 +12,10 @@
 
 namespace alphazero {
 
+using namespace std::chrono_literals;
+
+constexpr const auto MAX_WAIT = 100us;
+
 struct GameData {
   std::unique_ptr<GameState> gs;
   bool initialized;
@@ -22,7 +26,6 @@ struct GameData {
 };
 
 struct PlayParams {
-  std::unique_ptr<GameState> base_gs;
   uint32_t games_to_play;
   uint32_t concurrent_games;
   uint32_t mcts_depth = 10;
@@ -35,7 +38,7 @@ struct PlayParams {
 
 class PlayManager {
  public:
-  explicit PlayManager(PlayParams p);
+  PlayManager(std::unique_ptr<GameState> gs, PlayParams p);
 
   // play will keep playing games until all games are completed.
   void play();
@@ -43,7 +46,22 @@ class PlayManager {
   // dumb_inference is a random inference function for testing.
   void dumb_inference();
 
+  [[nodiscard]] const Vector<float> scores() const noexcept { return scores_; }
+  [[nodiscard]] uint32_t remaining_games() const noexcept {
+    return params_.games_to_play - games_completed_;
+  }
+  [[nodiscard]] uint32_t games_completed() const noexcept {
+    return games_completed_;
+  }
+
+  [[nodiscard]] std::optional<uint32_t> pop_game() noexcept {
+    return awaiting_inference_.pop(MAX_WAIT);
+  }
+  void push_inference(const uint32_t i) noexcept { awaiting_mcts_.push(i); }
+  [[nodiscard]] GameData& game_data(uint32_t i) noexcept { return games_[i]; }
+
  private:
+  std::unique_ptr<GameState> base_gs_;
   const PlayParams params_;
   std::vector<GameData> games_;
 

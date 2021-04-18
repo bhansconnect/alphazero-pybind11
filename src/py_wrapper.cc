@@ -4,6 +4,7 @@
 #include <pybind11/stl.h>
 
 #include "connect4_gs.h"
+#include "play_manager.h"
 
 // This file deals with exposing C++ to Python.
 // It uses Pybind11 for this.
@@ -17,7 +18,73 @@ using connect4_gs::Connect4GS;
 PYBIND11_MODULE(alphazero, m) {
   m.doc() = "the c++ parts of an alphazero implementation";
 
-  py::class_<Connect4GS>(m, "Connect4GS")
+  py::class_<GameState>(m, "GameState")
+      .def("copy", &GameState::copy, py::call_guard<py::gil_scoped_release>())
+      .def("__eq__", &GameState::operator==,
+           py::call_guard<py::gil_scoped_release>())
+      .def("__str__", &GameState::dump,
+           py::call_guard<py::gil_scoped_release>())
+      .def("current_player", &GameState::current_player)
+      .def("num_moves", &GameState::num_moves)
+      .def("valid_moves", &GameState::valid_moves,
+           py::call_guard<py::gil_scoped_release>())
+      .def("play_move", &GameState::play_move,
+           py::call_guard<py::gil_scoped_release>())
+      .def("scores", &GameState::scores,
+           py::call_guard<py::gil_scoped_release>())
+      .def(
+          "canonicalized",
+          [](const GameState* gs) {
+            auto out_tensor = gs->canonicalized();
+            py::gil_scoped_acquire acquire;
+            return py::array_t<float, py::array::c_style>(
+                connect4_gs::CANONICAL_SHAPE, out_tensor.data());
+          },
+          py::call_guard<py::gil_scoped_release>());
+
+  py::class_<GameData>(m, "GameData")
+      .def(
+          "valid_moves",
+          [](const GameData& gd) { return gd.gs->valid_moves(); },
+          py::call_guard<py::gil_scoped_release>())
+      .def(
+          "v", [](GameData& gd) { return &gd.v; },
+          py::return_value_policy::reference_internal)
+      .def(
+          "pi", [](GameData& gd) { return &gd.pi; },
+          py::return_value_policy::reference_internal)
+      .def(
+          "canonical", [](GameData& gd) { return &gd.canonical; },
+          py::return_value_policy::reference_internal);
+
+  py::class_<PlayParams>(m, "PlayParams")
+      .def(py::init<>())
+      .def_readwrite("games_to_play", &PlayParams::games_to_play)
+      .def_readwrite("concurrent_games", &PlayParams::concurrent_games)
+      .def_readwrite("mcts_depth", &PlayParams::mcts_depth)
+      .def_readwrite("cpuct", &PlayParams::cpuct)
+      .def_readwrite("history_enabled", &PlayParams::history_enabled);
+
+  py::class_<PlayManager>(m, "PlayManager")
+      .def(py::init([](const GameState* gs, PlayParams params) {
+             return std::make_unique<PlayManager>(gs->copy(), params);
+           }),
+           py::arg().none(false), py::arg())
+      .def("game_data", &PlayManager::game_data,
+           py::return_value_policy::reference_internal)
+      .def("scores", &PlayManager::scores)
+      .def("games_completed", &PlayManager::games_completed)
+      .def("remaining_games", &PlayManager::remaining_games)
+      .def("play", &PlayManager::play, py::call_guard<py::gil_scoped_release>())
+      .def("pop_game", &PlayManager::pop_game,
+           py::call_guard<py::gil_scoped_release>(),
+           py::return_value_policy::reference_internal)
+      .def("push_inference", &PlayManager::push_inference,
+           py::call_guard<py::gil_scoped_release>())
+      .def("dumb_inference", &PlayManager::dumb_inference,
+           py::call_guard<py::gil_scoped_release>());
+
+  py::class_<Connect4GS, GameState>(m, "Connect4GS")
       .def(py::init<>())
       .def(py::init([](const py::array_t<int8_t>& board, int8_t player) {
         if (board.ndim() != connect4_gs::BOARD_SHAPE.size() ||
@@ -37,33 +104,8 @@ PYBIND11_MODULE(alphazero, m) {
         }
         return Connect4GS(tensor_board, player);
       }))
-      .def("copy", &Connect4GS::copy, py::call_guard<py::gil_scoped_release>())
-      .def("__eq__", &Connect4GS::operator==,
-           py::call_guard<py::gil_scoped_release>())
-      .def("__str__", &Connect4GS::dump,
-           py::call_guard<py::gil_scoped_release>())
-      .def("current_player", &Connect4GS::current_player)
-      .def("num_moves", &Connect4GS::num_moves)
-      .def("valid_moves", &Connect4GS::valid_moves,
-           py::call_guard<py::gil_scoped_release>())
-      .def("play_move", &Connect4GS::play_move,
-           py::call_guard<py::gil_scoped_release>())
-      .def("scores", &Connect4GS::scores,
-           py::call_guard<py::gil_scoped_release>())
-      .def(
-          "canonicalized",
-          [](const Connect4GS& gs) {
-            auto out_tensor = gs.canonicalized();
-            py::gil_scoped_acquire acquire;
-            return py::array_t<float, py::array::c_style>(
-                connect4_gs::CANONICAL_SHAPE, out_tensor.data());
-          },
-          py::call_guard<py::gil_scoped_release>());
-  // m.def("play_game", &play_game, py::call_guard<py::gil_scoped_release>());
-  // m.def("play_games", &play_games,
-  // py::call_guard<py::gil_scoped_release>()); m.def("dumb_eval", &dumb_eval,
-  // py::call_guard<py::gil_scoped_release>()); m.def("mutli_dumb_eval",
-  // &multi_dumb_eval,
-  //       py::call_guard<py::gil_scoped_release>());
+      .def_static("NUM_MOVES", [] { return connect4_gs::NUM_MOVES; })
+      .def_static("NUM_PLAYERS", [] { return connect4_gs::NUM_PLAYERS; });
 }
+
 }  // namespace alphazero

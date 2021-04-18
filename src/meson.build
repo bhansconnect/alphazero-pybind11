@@ -65,6 +65,6 @@ test('gtest tests', play_manager_test)
 py3_install.extension_module(
   'alphazero',
   sources: ['py_wrapper.cc'],
-  link_with: [connect4_gs],
+  link_with: [connect4_gs, play_manager],
   dependencies : [pybind11_dep, py3_dep, eigen_dep],
 )

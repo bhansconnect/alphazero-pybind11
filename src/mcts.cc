@@ -89,13 +89,14 @@ void MCTS::process_result(Vector<float>& value, const Vector<float>& pi) {
 
 Vector<uint32_t> MCTS::counts() const noexcept {
   auto counts = Vector<uint32_t>{num_moves_};
+  counts.setZero();
   for (const auto& c : root_.children) {
     counts(c.move) = c.n;
   }
   return counts;
 }
 
-Vector<float> MCTS::probs(float temp) const noexcept {
+Vector<float> MCTS::probs(const float temp) const noexcept {
   auto counts = this->counts();
   auto probs = Vector<float>{num_moves_};
   if (temp == 0) {
@@ -130,17 +131,26 @@ Vector<float> MCTS::probs(float temp) const noexcept {
   return probs;
 }
 
-std::tuple<Vector<float>, Vector<float>> dumb_eval(const GameState& gs) {
-  auto valids = gs.valid_moves();
-  auto values = Vector<float>{gs.num_players()};
-  values.setZero();
-  auto policy = Vector<float>{gs.num_moves()};
-  float sum = valids.sum();
-  if (sum == 0.0) {
-    return {values, policy};
+uint32_t MCTS::pick_move(const float temp, const uint32_t num_moves) const {
+  thread_local std::default_random_engine re{std::random_device{}()};
+  thread_local std::uniform_real_distribution<float> dist{0.0F, 1.0F};
+  auto choice = dist(re);
+  auto p = probs(temp);
+  auto sum = 0.0F;
+  for (auto m = 0U; m < num_moves; ++m) {
+    sum += p(m);
+    if (sum > choice) {
+      return m;
+    }
   }
-  policy = valids.cast<float>() / sum;
-  return {values, policy};
+  // Due to floating point error we didn't pick a move.
+  // Pick the last valid move.
+  for (auto m = static_cast<int64_t>(num_moves); m >= 0; --m) {
+    if (p(m) > 0) {
+      return m;
+    }
+  }
+  throw std::runtime_error{"this shouldn't be possible."};
 }
 
 }  // namespace alphazero

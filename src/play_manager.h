@@ -3,6 +3,7 @@
 #include <atomic>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 #include "concurrent_queue.h"
@@ -36,17 +37,21 @@ class PlayManager {
  public:
   explicit PlayManager(PlayParams p);
 
+  // play will keep playing games until all games are completed.
   void play();
 
+  // dumb_inference is a random inference function for testing.
   void dumb_inference();
 
  private:
   const PlayParams params_;
   std::vector<GameData> games_;
 
-  std::atomic<uint32_t> games_started_;
   std::atomic<uint32_t> games_completed_ = 0;
-  std::vector<std::atomic<float>> scores;
+
+  std::mutex game_end_mutex_;
+  Vector<float> scores_;
+  uint32_t games_started_;
 
   ConcurrentQueue<uint32_t> awaiting_mcts_;
   ConcurrentQueue<uint32_t> awaiting_inference_;

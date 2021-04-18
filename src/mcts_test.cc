@@ -37,19 +37,12 @@ TEST(MCTS, Basic) {
   gs.play_move(3);
   gs.play_move(6);
   auto mcts = MCTS{2, gs.num_moves()};
-  while (mcts.depth() < 400) {
+  while (mcts.depth() < 800) {
     auto leaf = mcts.find_leaf(gs);
     auto [value, pi] = dumb_eval(*leaf);
     mcts.process_result(value, pi);
   }
-  auto counts = mcts.counts();
-  EXPECT_LT(counts[0], 100);
-  EXPECT_LT(counts[1], 100);
-  EXPECT_GT(counts[2], 200);
-  EXPECT_LT(counts[3], 100);
-  EXPECT_LT(counts[4], 100);
-  EXPECT_LT(counts[5], 100);
-  EXPECT_LT(counts[6], 100);
+  EXPECT_EQ(mcts.pick_move(0, gs.num_moves()), 2);
 }
 
 }  // namespace

@@ -55,4 +55,20 @@ class GameState {
   [[nodiscard]] virtual std::string dump() const noexcept = 0;
 };
 
+// A sample evaluation function for testing.
+// It just returns even probablity.
+[[nodiscard]] std::tuple<Vector<float>, Vector<float>> dumb_eval(
+    const GameState& gs) {
+  auto valids = gs.valid_moves();
+  auto values = Vector<float>{gs.num_players()};
+  values.setZero();
+  auto policy = Vector<float>{gs.num_moves()};
+  float sum = valids.sum();
+  if (sum == 0.0) {
+    return {values, policy};
+  }
+  policy = valids.cast<float>() / sum;
+  return {values, policy};
+}
+
 }  // namespace alphazero

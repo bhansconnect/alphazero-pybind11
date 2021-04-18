@@ -104,8 +104,10 @@ PYBIND11_MODULE(alphazero, m) {
         }
         return Connect4GS(tensor_board, player);
       }))
+      .def_static("NUM_PLAYERS", [] { return connect4_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return connect4_gs::NUM_MOVES; })
-      .def_static("NUM_PLAYERS", [] { return connect4_gs::NUM_PLAYERS; });
+      .def_static("CANONICAL_SHAPE",
+                  [] { return connect4_gs::CANONICAL_SHAPE; });
 }
 
 }  // namespace alphazero

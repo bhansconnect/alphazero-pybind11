@@ -3,3 +3,5 @@
 build
 subprojects/*
 !subprojects/*.wrap
+
+__pycache__

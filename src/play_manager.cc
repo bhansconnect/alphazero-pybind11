@@ -5,7 +5,8 @@ namespace alphazero {
 PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     : base_gs_(std::move(gs)),
       params_(p),
-      games_started_(params_.concurrent_games) {
+      games_started_(params_.concurrent_games),
+      cache_(Cache{params_.max_cache_size}) {
   games_.reserve(params_.concurrent_games);
   for (auto i = 0U; i < params_.concurrent_games; ++i) {
     auto gd = GameData{};
@@ -69,6 +70,14 @@ void PlayManager::play() {
     auto& mcts = game.mcts[game.gs->current_player()];
     auto leaf = mcts.find_leaf(*game.gs);
     game.canonical = leaf->canonicalized();
+    if (params_.max_cache_size > 0) {
+      auto opt = cache_.find(game.canonical);
+      if (opt.has_value()) {
+        std::tie(game.v, game.pi) = opt.value();
+        awaiting_mcts_.push(i.value());
+        continue;
+      }
+    }
     awaiting_inference_.push(i.value());
   }
 }
@@ -92,6 +101,9 @@ void PlayManager::update_inferences(const std::vector<uint32_t>& game_indices,
     auto& game = games_[game_indices[i]];
     game.v = v.row(i);
     game.pi = pi.row(i);
+    if (params_.max_cache_size > 0) {
+      cache_.insert(game.canonical, {game.v, game.pi});
+    }
     awaiting_mcts_.push(game_indices[i]);
   }
 }

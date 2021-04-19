@@ -1,5 +1,7 @@
 #pragma once
 
+#include <absl/hash/hash.h>
+
 #include <atomic>
 #include <deque>
 #include <mutex>
@@ -8,13 +10,41 @@
 
 #include "concurrent_queue.h"
 #include "game_state.h"
+#include "lru_cache.h"
 #include "mcts.h"
 
 namespace alphazero {
 
+struct TensorKeyWrapper {
+  TensorKeyWrapper(const Tensor<float, 3>& tensor) : t(tensor) {}
+  Tensor<float, 3> t;
+};
+template <typename H>
+H AbslHashValue(H h, const TensorKeyWrapper& t) {
+  return H::combine_contiguous(std::move(h), t.t.data(), t.t.size());
+}
+bool operator==(const TensorKeyWrapper& lhs, const TensorKeyWrapper& rhs) {
+  if (lhs.t.dimensions() != rhs.t.dimensions()) {
+    return false;
+  }
+  for (auto i = 0; i < lhs.t.dimension(0); ++i) {
+    for (auto j = 0; j < lhs.t.dimension(1); ++j) {
+      for (auto k = 0; k < lhs.t.dimension(2); ++k) {
+        if (lhs.t(i, j, k) != rhs.t(i, j, k)) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+using Cache =
+    LRUCache<TensorKeyWrapper, std::tuple<Vector<float>, Vector<float>>>;
+
 using namespace std::chrono_literals;
 
-constexpr const auto MAX_WAIT = 100us;
+constexpr const auto MAX_WAIT = 10ms;
 
 struct GameData {
   std::unique_ptr<GameState> gs;
@@ -29,6 +59,7 @@ struct PlayParams {
   uint32_t games_to_play;
   uint32_t concurrent_games;
   uint32_t max_batch_size = 1;
+  uint32_t max_cache_size = 0;
   uint32_t mcts_depth = 10;
   float cpuct = 2.0;
   bool history_enabled = true;
@@ -72,6 +103,9 @@ class PlayManager {
   size_t awaiting_inference_count() noexcept {
     return awaiting_inference_.size();
   }
+  [[nodiscard]] size_t cache_hits() { return cache_.hits(); };
+  [[nodiscard]] size_t cache_misses() { return cache_.misses(); };
+  [[nodiscard]] size_t cache_size() { return cache_.size(); };
 
  private:
   std::unique_ptr<GameState> base_gs_;
@@ -87,7 +121,7 @@ class PlayManager {
   ConcurrentQueue<uint32_t> awaiting_mcts_;
   ConcurrentQueue<uint32_t> awaiting_inference_;
 
-  // Eventually contain LRU cache.
+  Cache cache_;
   // Eventaully contain history, maybe store it in GameData.
 };
 

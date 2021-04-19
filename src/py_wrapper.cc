@@ -71,6 +71,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("games_to_play", &PlayParams::games_to_play)
       .def_readwrite("concurrent_games", &PlayParams::concurrent_games)
       .def_readwrite("max_batch_size", &PlayParams::max_batch_size)
+      .def_readwrite("max_cache_size", &PlayParams::max_cache_size)
       .def_readwrite("mcts_depth", &PlayParams::mcts_depth)
       .def_readwrite("cpuct", &PlayParams::cpuct)
       .def_readwrite("history_enabled", &PlayParams::history_enabled);
@@ -89,6 +90,9 @@ PYBIND11_MODULE(alphazero, m) {
       .def("remaining_games", &PlayManager::remaining_games)
       .def("awaiting_inference_count", &PlayManager::awaiting_inference_count)
       .def("awaiting_mcts_count", &PlayManager::awaiting_mcts_count)
+      .def("cache_hits", &PlayManager::cache_hits)
+      .def("cache_misses", &PlayManager::cache_misses)
+      .def("cache_size", &PlayManager::cache_size)
       .def("play", &PlayManager::play, py::call_guard<py::gil_scoped_release>())
       .def("pop_game", &PlayManager::pop_game,
            py::call_guard<py::gil_scoped_release>())

@@ -91,10 +91,13 @@ class GameRunner:
             total_batch_time += time.time() - last_batch
             last_batch = time.time()
             if time.time() - last_update > 1:
+                hits = self.pm.cache_hits()
+                hits /= self.pm.cache_misses()
+                pbar.set_postfix({'hit rate': hits,
+                                  'batches/s': batch_count/total_batch_time,
+                                  'samples/s': sample_count/total_batch_time})
                 completed = self.pm.games_completed()
                 pbar.update(completed-last_completed)
-                pbar.set_postfix({'batches/s': batch_count/total_batch_time,
-                                  'samples/s': sample_count/total_batch_time})
                 last_completed = completed
                 last_update = time.time()
         pbar.update(self.pm.params().games_to_play - last_completed)
@@ -152,10 +155,11 @@ if __name__ == '__main__':
     params.concurrent_games = bs * (cb+1)
     params.max_batch_size = bs
     params.mcts_depth = 50
+    # params.max_cache_size = 10000
 
     pm = alphazero.PlayManager(Game(), params)
 
-    grargs = GRArgs(game=Game, nnargs=neural_net.NNArgs(num_channels=128, depth=5), max_batch_size=bs,
+    grargs = GRArgs(game=Game, nnargs=neural_net.NNArgs(num_channels=256, depth=5), max_batch_size=bs,
                     concurrent_batches=cb)
     gr = GameRunner(pm, grargs)
     gr.run()

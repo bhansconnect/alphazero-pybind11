@@ -3,6 +3,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cmath>
+
 #include "connect4_gs.h"
 #include "play_manager.h"
 
@@ -38,7 +40,7 @@ PYBIND11_MODULE(alphazero, m) {
             auto out_tensor = gs->canonicalized();
             py::gil_scoped_acquire acquire;
             return py::array_t<float, py::array::c_style>(
-                connect4_gs::CANONICAL_SHAPE, out_tensor.data());
+                out_tensor.dimensions(), out_tensor.data());
           },
           py::call_guard<py::gil_scoped_release>());
 
@@ -54,13 +56,21 @@ PYBIND11_MODULE(alphazero, m) {
           "pi", [](GameData& gd) { return &gd.pi; },
           py::return_value_policy::reference_internal)
       .def(
-          "canonical", [](GameData& gd) { return &gd.canonical; },
+          "canonical",
+          [](GameData& gd) {
+            const auto dims = gd.canonical.dimensions();
+            const auto size = sizeof(float);
+            return py::memoryview::from_buffer(
+                gd.canonical.data(), dims,
+                {size * dims[1] * dims[2], size * dims[2], size});
+          },
           py::return_value_policy::reference_internal);
 
   py::class_<PlayParams>(m, "PlayParams")
       .def(py::init<>())
       .def_readwrite("games_to_play", &PlayParams::games_to_play)
       .def_readwrite("concurrent_games", &PlayParams::concurrent_games)
+      .def_readwrite("max_batch_size", &PlayParams::max_batch_size)
       .def_readwrite("mcts_depth", &PlayParams::mcts_depth)
       .def_readwrite("cpuct", &PlayParams::cpuct)
       .def_readwrite("history_enabled", &PlayParams::history_enabled);
@@ -72,17 +82,68 @@ PYBIND11_MODULE(alphazero, m) {
            py::arg().none(false), py::arg())
       .def("game_data", &PlayManager::game_data,
            py::return_value_policy::reference_internal)
+      .def("params", &PlayManager::params,
+           py::return_value_policy::reference_internal)
       .def("scores", &PlayManager::scores)
       .def("games_completed", &PlayManager::games_completed)
       .def("remaining_games", &PlayManager::remaining_games)
+      .def("awaiting_inference_count", &PlayManager::awaiting_inference_count)
+      .def("awaiting_mcts_count", &PlayManager::awaiting_mcts_count)
       .def("play", &PlayManager::play, py::call_guard<py::gil_scoped_release>())
       .def("pop_game", &PlayManager::pop_game,
-           py::call_guard<py::gil_scoped_release>(),
-           py::return_value_policy::reference_internal)
+           py::call_guard<py::gil_scoped_release>())
+      .def("pop_games_upto", &PlayManager::pop_games_upto,
+           py::call_guard<py::gil_scoped_release>())
       .def("push_inference", &PlayManager::push_inference,
            py::call_guard<py::gil_scoped_release>())
+      .def("update_inferences", &PlayManager::update_inferences,
+           py::call_guard<py::gil_scoped_release>())
       .def("dumb_inference", &PlayManager::dumb_inference,
-           py::call_guard<py::gil_scoped_release>());
+           py::call_guard<py::gil_scoped_release>())
+      .def(
+          "build_batch",
+          [](PlayManager& pm, py::array_t<float>& batch,
+             uint32_t concurrent_batches) {
+            const auto mbs = pm.params().max_batch_size;
+            const auto max_bs = [&]() {
+              auto remaining_ratio =
+                  static_cast<float>(pm.remaining_games()) / concurrent_batches;
+              return std::min(
+                  mbs, static_cast<uint32_t>(std::ceil(remaining_ratio)));
+            };
+            auto out = std::vector<uint32_t>{};
+            out.reserve(mbs);
+            auto raw = batch.mutable_unchecked<4>();
+            auto dimensions_checked = false;
+            auto current = 0U;
+            while (current < max_bs()) {
+              const auto indices = pm.pop_games_upto(max_bs() - current);
+              for (const auto i : indices) {
+                const auto& canonical = pm.game_data(i).canonical;
+                if (!dimensions_checked) {
+                  if (batch.ndim() != 4 ||
+                      batch.shape(1) != canonical.dimension(0) ||
+                      batch.shape(2) != canonical.dimension(1) ||
+                      batch.shape(3) != canonical.dimension(2)) {
+                    throw std::runtime_error{"Improper batch size"};
+                  } else {
+                    dimensions_checked = true;
+                  }
+                }
+                for (auto j = 0L; j < canonical.dimension(0); ++j) {
+                  for (auto k = 0L; k < canonical.dimension(1); ++k) {
+                    for (auto l = 0L; l < canonical.dimension(2); ++l) {
+                      raw(current, j, k, l) = canonical(j, k, l);
+                    }
+                  }
+                }
+                out.push_back(i);
+                ++current;
+              }
+            }
+            return out;
+          },
+          py::call_guard<py::gil_scoped_release>());
 
   py::class_<Connect4GS, GameState>(m, "Connect4GS")
       .def(py::init<>())

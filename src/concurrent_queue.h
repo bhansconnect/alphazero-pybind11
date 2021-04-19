@@ -18,6 +18,8 @@ class ConcurrentQueue {
     cv_.notify_one();
   }
 
+  [[nodiscard]] size_t size() const noexcept { return queue_.size(); }
+
   [[nodiscard]] bool empty() const noexcept {
     std::unique_lock lock(m_);
     return queue_.empty();
@@ -26,6 +28,21 @@ class ConcurrentQueue {
   [[nodiscard]] std::optional<T> try_pop() noexcept {
     std::unique_lock lock(m_);
     return try_pop_();
+  }
+
+  template <class Rep, class Period>
+  [[nodiscard]] std::vector<T> pop_upto(
+      size_t n, const std::chrono::duration<Rep, Period>& max_wait) noexcept {
+    std::unique_lock lock(m_);
+    cv_.wait_for(lock, max_wait, [this] { return !queue_.empty(); });
+    auto out = std::vector<T>{};
+    n = std::min(queue_.size(), n);
+    out.reserve(n);
+    for (auto i = 0ul; i < n; ++i) {
+      out.push_back(queue_.front());
+      queue_.pop();
+    }
+    return out;
   }
 
   template <class Rep, class Period>

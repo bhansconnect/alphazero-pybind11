@@ -85,4 +85,15 @@ void PlayManager::dumb_inference() {
   }
 }
 
+void PlayManager::update_inferences(const std::vector<uint32_t>& game_indices,
+                                    const Eigen::Ref<const Matrix<float>>& v,
+                                    const Eigen::Ref<const Matrix<float>>& pi) {
+  for (auto i = 0UL; i < game_indices.size(); ++i) {
+    auto& game = games_[game_indices[i]];
+    game.v = v.row(i);
+    game.pi = pi.row(i);
+    awaiting_mcts_.push(game_indices[i]);
+  }
+}
+
 }  // namespace alphazero

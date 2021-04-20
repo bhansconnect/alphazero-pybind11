@@ -75,27 +75,29 @@ class GameRunner:
     def monitor(self):
         last_completed = 0
         total_batch_time = 0
-        batch_count = 0
         sample_count = 0
-        last_batch = time.time()
+        start = time.time()
         last_update = time.time()
-        pbar = tqdm.tqdm(total=self.pm.params().games_to_play,
+        num_players = self.args.game.NUM_PLAYERS()
+        pbar = tqdm.tqdm(total=n,
                          unit='games', desc='Playing Games')
         while(self.pm.remaining_games() > 0):
             try:
                 batch_size = self.monitor_queue.get(timeout=1)
             except queue.Empty:
                 continue
-            batch_count += 1
             sample_count += batch_size
-            total_batch_time += time.time() - last_batch
-            last_batch = time.time()
             if time.time() - last_update > 1:
                 hits = self.pm.cache_hits()
                 total = hits + self.pm.cache_misses() + 1
-                pbar.set_postfix({'hit rate': hits/total,
-                                  'batches/s': batch_count/total_batch_time,
-                                  'samples/s': sample_count/total_batch_time})
+                completed = self.pm.games_completed()
+                p1_score = 0
+                if completed > 0:
+                    p1_score = self.pm.scores()[0]/completed
+                pbar.set_postfix({
+                    'samples/s': sample_count/(time.time()-start),
+                    'p1 score': p1_score,
+                    'cache hit': hits/total})
                 completed = self.pm.games_completed()
                 pbar.update(completed-last_completed)
                 last_completed = completed
@@ -154,12 +156,12 @@ if __name__ == '__main__':
     params.games_to_play = n
     params.concurrent_games = bs * (cb+1)
     params.max_batch_size = bs
-    params.mcts_depth = 50
+    params.mcts_depth = 100
     params.max_cache_size = 100000
 
     pm = alphazero.PlayManager(Game(), params)
 
-    grargs = GRArgs(game=Game, nnargs=neural_net.NNArgs(num_channels=64, depth=5), max_batch_size=bs,
+    grargs = GRArgs(game=Game, nnargs=neural_net.NNArgs(num_channels=32, depth=5), max_batch_size=bs,
                     concurrent_batches=cb)
     gr = GameRunner(pm, grargs)
     gr.run()

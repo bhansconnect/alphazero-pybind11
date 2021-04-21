@@ -89,8 +89,8 @@ class GameRunner:
     def monitor(self):
         last_completed = 0
         last_update = time.time()
-        total = self.pm.params().games_to_play
-        pbar = tqdm.tqdm(total=total,
+        n = self.pm.params().games_to_play
+        pbar = tqdm.tqdm(total=n,
                          unit='games', desc='Playing Games')
         while(self.pm.remaining_games() > 0):
             try:
@@ -114,7 +114,7 @@ class GameRunner:
         hits = self.pm.cache_hits()
         total = hits + self.pm.cache_misses() + 1
         pbar.set_postfix({
-            'p1 score': self.pm.scores()[0]/total,
+            'p1 score': self.pm.scores()[0]/n,
             'cache hit': hits/total})
         pbar.update(self.pm.params().games_to_play - last_completed)
         pbar.close()

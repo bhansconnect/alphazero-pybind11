@@ -74,11 +74,9 @@ class GameRunner:
 
     def monitor(self):
         last_completed = 0
-        total_batch_time = 0
         sample_count = 0
         start = time.time()
         last_update = time.time()
-        num_players = self.args.game.NUM_PLAYERS()
         pbar = tqdm.tqdm(total=n,
                          unit='games', desc='Playing Games')
         while(self.pm.remaining_games() > 0):
@@ -102,6 +100,12 @@ class GameRunner:
                 pbar.update(completed-last_completed)
                 last_completed = completed
                 last_update = time.time()
+        hits = self.pm.cache_hits()
+        total = hits + self.pm.cache_misses() + 1
+        pbar.set_postfix({
+            'samples/s': sample_count/(time.time()-start),
+            'p1 score': self.pm.scores()[0]/n,
+            'cache hit': hits/total})
         pbar.update(self.pm.params().games_to_play - last_completed)
         pbar.close()
 
@@ -157,6 +161,7 @@ if __name__ == '__main__':
     params.concurrent_games = bs * (cb+1)
     params.max_batch_size = bs
     params.mcts_depth = 100
+    params.history_enabled = False
     params.max_cache_size = 100000
 
     pm = alphazero.PlayManager(Game(), params)

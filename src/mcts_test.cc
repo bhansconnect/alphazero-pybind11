@@ -43,7 +43,21 @@ TEST(MCTS, Basic) {
     auto [value, pi] = dumb_eval(*leaf);
     mcts.process_result(value, pi);
   }
-  EXPECT_EQ(mcts.pick_move(0, gs.num_moves()), 2);
+  EXPECT_EQ(MCTS::pick_move(mcts.probs(0)), 2);
+
+  gs = connect4_gs::Connect4GS{};
+  gs.play_move(1);
+  gs.play_move(6);
+  gs.play_move(3);
+  gs.play_move(6);
+  gs.play_move(4);
+  mcts = MCTS{2, gs.num_moves()};
+  while (mcts.depth() < 800) {
+    auto leaf = mcts.find_leaf(gs);
+    auto [value, pi] = dumb_eval(*leaf);
+    mcts.process_result(value, pi);
+  }
+  EXPECT_EQ(MCTS::pick_move(mcts.probs(0)), 2);
 }
 
 }  // namespace

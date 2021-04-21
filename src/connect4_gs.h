@@ -22,10 +22,10 @@ using CanonicalTensor =
 class Connect4GS : public GameState {
  public:
   Connect4GS() { board_.setZero(); }
-  Connect4GS(BoardTensor board, int8_t player)
-      : board_(board), player_(player) {}
-  Connect4GS(BoardTensor&& board, int8_t player)
-      : board_(std::move(board)), player_(player) {}
+  Connect4GS(BoardTensor board, int8_t player, int32_t turn)
+      : board_(board), player_(player), turn_(turn) {}
+  Connect4GS(BoardTensor&& board, int8_t player, int32_t turn)
+      : board_(std::move(board)), player_(player), turn_(turn) {}
 
   [[nodiscard]] std::unique_ptr<GameState> copy() const noexcept override;
   [[nodiscard]] bool operator==(const GameState& other) const noexcept override;
@@ -34,6 +34,11 @@ class Connect4GS : public GameState {
   [[nodiscard]] uint8_t current_player() const noexcept override {
     return player_;
   };
+
+  // Returns the current turn.
+  [[nodiscard]] uint32_t current_turn() const noexcept override {
+    return turn_;
+  }
 
   // Returns the number of possible moves.
   [[nodiscard]] int32_t num_moves() const noexcept override { return WIDTH; }
@@ -64,6 +69,7 @@ class Connect4GS : public GameState {
   // A 0 means no piece, a 1 means a piece for that player.
   BoardTensor board_{};
   int8_t player_{0};
+  int32_t turn_{0};
 };
 
 }  // namespace alphazero::connect4_gs

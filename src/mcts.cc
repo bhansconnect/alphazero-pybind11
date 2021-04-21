@@ -99,6 +99,7 @@ Vector<uint32_t> MCTS::counts() const noexcept {
 Vector<float> MCTS::probs(const float temp) const noexcept {
   auto counts = this->counts();
   auto probs = Vector<float>{num_moves_};
+
   if (temp == 0) {
     auto best_m = 0;
     auto best_count = counts(0);
@@ -108,36 +109,23 @@ Vector<float> MCTS::probs(const float temp) const noexcept {
         best_m = m;
       }
     }
+    probs.setZero();
     probs(best_m) = 1;
     return probs;
   }
 
-  auto sum = counts.sum();
-  if (sum == 0) {
-    auto best_m = 0;
-    auto best_count = counts(0);
-    for (auto m = 1; m < num_moves_; ++m) {
-      if (counts(m) > best_count) {
-        best_count = counts(m);
-        best_m = m;
-      }
-    }
-    probs(best_m) = 1;
-    return probs;
-  }
   probs = counts.cast<float>();
   probs.array().pow(1 / temp);
-  probs /= sum;
+  probs /= probs.sum();
   return probs;
 }
 
-uint32_t MCTS::pick_move(const float temp, const uint32_t num_moves) const {
+uint32_t MCTS::pick_move(const Vector<float>& p) {
   thread_local std::default_random_engine re{std::random_device{}()};
   thread_local std::uniform_real_distribution<float> dist{0.0F, 1.0F};
   auto choice = dist(re);
-  auto p = probs(temp);
   auto sum = 0.0F;
-  for (auto m = 0U; m < num_moves; ++m) {
+  for (auto m = 0U; m < p.size(); ++m) {
     sum += p(m);
     if (sum > choice) {
       return m;
@@ -145,7 +133,7 @@ uint32_t MCTS::pick_move(const float temp, const uint32_t num_moves) const {
   }
   // Due to floating point error we didn't pick a move.
   // Pick the last valid move.
-  for (auto m = static_cast<int64_t>(num_moves); m >= 0; --m) {
+  for (auto m = static_cast<int64_t>(p.size()); m >= 0; --m) {
     if (p(m) > 0) {
       return m;
     }

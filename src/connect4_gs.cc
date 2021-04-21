@@ -3,11 +3,11 @@
 namespace alphazero::connect4_gs {
 
 [[nodiscard]] std::unique_ptr<GameState> Connect4GS::copy() const noexcept {
-  return std::make_unique<Connect4GS>(board_, player_);
+  return std::make_unique<Connect4GS>(board_, player_, turn_);
 }
 
-[[nodiscard]] bool Connect4GS::operator==(const GameState& other) const
-    noexcept {
+[[nodiscard]] bool Connect4GS::operator==(
+    const GameState& other) const noexcept {
   const auto* other_cs = dynamic_cast<const Connect4GS*>(&other);
   if (other_cs == nullptr) {
     return false;
@@ -21,7 +21,7 @@ namespace alphazero::connect4_gs {
       }
     }
   }
-  return (other_cs->player_ == player_);
+  return (other_cs->player_ == player_ && other_cs->turn_ == turn_);
 }
 
 [[nodiscard]] Vector<uint8_t> Connect4GS::valid_moves() const noexcept {
@@ -38,6 +38,7 @@ void Connect4GS::play_move(uint32_t move) {
     if (board_(0, h, move) == 0 && board_(1, h, move) == 0) {
       board_(player_, h, move) = 1;
       player_ = (player_ + 1) % 2;
+      ++turn_;
       return;
     }
   }

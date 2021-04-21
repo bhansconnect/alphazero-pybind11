@@ -37,8 +37,9 @@ class MCTS {
   void process_result(Vector<float>& value, const Vector<float>& pi);
   [[nodiscard]] Vector<uint32_t> counts() const noexcept;
   [[nodiscard]] Vector<float> probs(float temp) const noexcept;
-  [[nodiscard]] uint32_t pick_move(float temp, uint32_t num_moves) const;
   [[nodiscard]] uint32_t depth() const noexcept { return depth_; };
+
+  [[nodiscard]] static uint32_t pick_move(const Vector<float>& p);
 
  private:
   float cpuct_;

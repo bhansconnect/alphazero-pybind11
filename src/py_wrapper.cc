@@ -74,6 +74,9 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("max_cache_size", &PlayParams::max_cache_size)
       .def_readwrite("mcts_depth", &PlayParams::mcts_depth)
       .def_readwrite("cpuct", &PlayParams::cpuct)
+      .def_readwrite("temp", &PlayParams::temp)
+      .def_readwrite("temp_minimization_turn",
+                     &PlayParams::temp_minimization_turn)
       .def_readwrite("history_enabled", &PlayParams::history_enabled);
 
   py::class_<PlayManager>(m, "PlayManager")
@@ -151,24 +154,25 @@ PYBIND11_MODULE(alphazero, m) {
 
   py::class_<Connect4GS, GameState>(m, "Connect4GS")
       .def(py::init<>())
-      .def(py::init([](const py::array_t<int8_t>& board, int8_t player) {
-        if (board.ndim() != connect4_gs::BOARD_SHAPE.size() ||
-            board.shape(0) != connect4_gs::BOARD_SHAPE[0] ||
-            board.shape(1) != connect4_gs::BOARD_SHAPE[1] ||
-            board.shape(2) != connect4_gs::BOARD_SHAPE[2]) {
-          throw std::runtime_error{"Improper connect 4 board shape"};
-        }
-        auto np_unchecked = board.unchecked<3>();
-        auto tensor_board = connect4_gs::BoardTensor{};
-        for (auto i = 0; i < connect4_gs::BOARD_SHAPE[0]; ++i) {
-          for (auto j = 0; j < connect4_gs::BOARD_SHAPE[1]; ++j) {
-            for (auto k = 0; k < connect4_gs::BOARD_SHAPE[2]; ++k) {
-              tensor_board(i, j, k) = np_unchecked(i, j, k);
+      .def(py::init(
+          [](const py::array_t<int8_t>& board, int8_t player, int32_t turn) {
+            if (board.ndim() != connect4_gs::BOARD_SHAPE.size() ||
+                board.shape(0) != connect4_gs::BOARD_SHAPE[0] ||
+                board.shape(1) != connect4_gs::BOARD_SHAPE[1] ||
+                board.shape(2) != connect4_gs::BOARD_SHAPE[2]) {
+              throw std::runtime_error{"Improper connect 4 board shape"};
             }
-          }
-        }
-        return Connect4GS(tensor_board, player);
-      }))
+            auto np_unchecked = board.unchecked<3>();
+            auto tensor_board = connect4_gs::BoardTensor{};
+            for (auto i = 0; i < connect4_gs::BOARD_SHAPE[0]; ++i) {
+              for (auto j = 0; j < connect4_gs::BOARD_SHAPE[1]; ++j) {
+                for (auto k = 0; k < connect4_gs::BOARD_SHAPE[2]; ++k) {
+                  tensor_board(i, j, k) = np_unchecked(i, j, k);
+                }
+              }
+            }
+            return Connect4GS(tensor_board, player, turn);
+          }))
       .def_static("NUM_PLAYERS", [] { return connect4_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return connect4_gs::NUM_MOVES; })
       .def_static("CANONICAL_SHAPE",

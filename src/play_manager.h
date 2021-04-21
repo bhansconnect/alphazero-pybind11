@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <deque>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -46,13 +47,20 @@ using namespace std::chrono_literals;
 
 constexpr const auto MAX_WAIT = 10ms;
 
+struct PlayHistory {
+  Tensor<float, 3> canonical;
+  Vector<float> v;
+  Vector<float> pi;
+};
+
 struct GameData {
   std::unique_ptr<GameState> gs;
   bool initialized;
   std::vector<MCTS> mcts;
+  Tensor<float, 3> canonical;
   Vector<float> v;
   Vector<float> pi;
-  Tensor<float, 3> canonical;
+  std::vector<PlayHistory> partial_history;
 };
 
 struct PlayParams {
@@ -62,7 +70,9 @@ struct PlayParams {
   uint32_t max_cache_size = 0;
   uint32_t mcts_depth = 10;
   float cpuct = 2.0;
-  bool history_enabled = true;
+  float temp = 1.0;
+  uint32_t temp_minimization_turn = std::numeric_limits<uint32_t>::max();
+  bool history_enabled = false;
 };
 
 // This is a multithread safe game play manager.
@@ -112,14 +122,14 @@ class PlayManager {
   const PlayParams params_;
   std::vector<GameData> games_;
 
-  std::atomic<uint32_t> games_completed_ = 0;
-
   std::mutex game_end_mutex_;
   Vector<float> scores_;
   uint32_t games_started_;
+  std::atomic<uint32_t> games_completed_ = 0;
 
   ConcurrentQueue<uint32_t> awaiting_mcts_;
   ConcurrentQueue<uint32_t> awaiting_inference_;
+  ConcurrentQueue<PlayHistory> history_;
 
   Cache cache_;
   // Eventaully contain history, maybe store it in GameData.

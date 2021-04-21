@@ -38,18 +38,38 @@ void PlayManager::play() {
       mcts.process_result(game.v, game.pi);
       if (mcts.depth() >= params_.mcts_depth) {
         // Actually play a move.
-        const auto chosen_m = mcts.pick_move(1, game.gs->num_moves());
+        auto temp = params_.temp;
+        if (game.gs->current_turn() >= params_.temp_minimization_turn) {
+          temp = 0;
+        }
+        const auto pi = mcts.probs(temp);
+        const auto chosen_m = MCTS::pick_move(pi);
+        if (params_.history_enabled) {
+          PlayHistory ph;
+          ph.canonical = game.canonical;
+          ph.pi = pi;
+          game.partial_history.push_back(ph);
+        }
         for (auto& m : game.mcts) {
           m.update_root(*game.gs, chosen_m);
         }
         game.gs->play_move(chosen_m);
         const auto scores = game.gs->scores();
         if (scores.has_value()) {
+          // Dump history.
+          if (params_.history_enabled) {
+            while (!game.partial_history.empty()) {
+              auto ph = game.partial_history.back();
+              ph.v = scores.value();
+              history_.push(ph);
+              game.partial_history.pop_back();
+            }
+          }
           // Game ended, reset.
-          ++games_completed_;
           {
             std::unique_lock<std::mutex>{game_end_mutex_};
             scores_ += scores.value();
+            ++games_completed_;
             // If we have started enough games just loop and complete games.
             if (games_started_ >= params_.games_to_play) {
               continue;

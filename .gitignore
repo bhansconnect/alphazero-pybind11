@@ -1,6 +1,9 @@
 .vscode
 
+mprofile_*
+
 build
+data
 subprojects/*
 !subprojects/*.wrap
 

@@ -93,6 +93,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def("remaining_games", &PlayManager::remaining_games)
       .def("awaiting_inference_count", &PlayManager::awaiting_inference_count)
       .def("awaiting_mcts_count", &PlayManager::awaiting_mcts_count)
+      .def("hist_count", &PlayManager::hist_count)
       .def("cache_hits", &PlayManager::cache_hits)
       .def("cache_misses", &PlayManager::cache_misses)
       .def("cache_size", &PlayManager::cache_size)
@@ -107,6 +108,38 @@ PYBIND11_MODULE(alphazero, m) {
            py::call_guard<py::gil_scoped_release>())
       .def("dumb_inference", &PlayManager::dumb_inference,
            py::call_guard<py::gil_scoped_release>())
+      .def(
+          "build_history_batch",
+          [](PlayManager& pm, py::array_t<float>& canonical,
+             py::array_t<float>& v, py::array_t<float>& pi) {
+            auto current = 0U;
+            auto rc = canonical.mutable_unchecked<4>();
+            auto rv = v.mutable_unchecked<2>();
+            auto rpi = pi.mutable_unchecked<2>();
+            while (current < canonical.shape(0) &&
+                   (pm.remaining_games() > 0 || pm.hist_count() > 0)) {
+              auto hist = pm.pop_hist();
+              if (!hist.has_value()) {
+                continue;
+              }
+              for (auto i = 0L; i < canonical.shape(1); ++i) {
+                for (auto j = 0L; j < canonical.shape(2); ++j) {
+                  for (auto k = 0L; k < canonical.shape(3); ++k) {
+                    rc(current, i, j, k) = hist->canonical(i, j, k);
+                  }
+                }
+              }
+              for (auto i = 0L; i < v.shape(1); ++i) {
+                rv(current, i) = hist->v(i);
+              }
+              for (auto i = 0L; i < pi.shape(1); ++i) {
+                rpi(current, i) = hist->pi(i);
+              }
+              ++current;
+            }
+            return current;
+          },
+          py::call_guard<py::gil_scoped_release>())
       .def(
           "build_batch",
           [](PlayManager& pm, py::array_t<float>& batch,

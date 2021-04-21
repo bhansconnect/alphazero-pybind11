@@ -1,4 +1,5 @@
 from collections import namedtuple
+import os
 import torch
 from torch import optim, nn
 from torch.autograd import profiler
@@ -178,17 +179,16 @@ class NNWrapper:
     def loss_v(self, targets, outputs):
         return torch.sum((targets - outputs) ** 2) / targets.size()[0]
 
-    def save_checkpoint(self, folder='checkpoint', filename='checkpoint.pt'):
+    def save_checkpoint(self, folder='data/checkpoint', filename='checkpoint.pt'):
         filepath = os.path.join(folder, filename)
-        if not os.path.exists(folder):
-            os.mkdir(folder)
+        os.makedirs(folder, exist_ok=True)
         torch.save({
             'state_dict': self.nnet.state_dict(),
             'opt_state': self.optimizer.state_dict(),
             'sch_state': self.scheduler.state_dict()
         }, filepath)
 
-    def load_checkpoint(self, folder='checkpoint', filename='checkpoint.pt'):
+    def load_checkpoint(self, folder='data/checkpoint', filename='checkpoint.pt'):
         filepath = os.path.join(folder, filename)
         if not os.path.exists(filepath):
             raise ("No model in path {}".format(filepath))

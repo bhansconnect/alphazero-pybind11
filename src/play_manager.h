@@ -106,6 +106,12 @@ class PlayManager {
   [[nodiscard]] std::vector<uint32_t> pop_games_upto(size_t n) noexcept {
     return awaiting_inference_.pop_upto(n, MAX_WAIT);
   }
+  [[nodiscard]] std::optional<PlayHistory> pop_hist() noexcept {
+    return history_.pop(MAX_WAIT);
+  }
+  [[nodiscard]] std::vector<PlayHistory> pop_hist_upto(size_t n) noexcept {
+    return history_.pop_upto(n, MAX_WAIT);
+  }
   void push_inference(const uint32_t i) noexcept { awaiting_mcts_.push(i); }
   [[nodiscard]] GameData& game_data(uint32_t i) noexcept { return games_[i]; }
   [[nodiscard]] const PlayParams& params() const noexcept { return params_; }
@@ -113,6 +119,7 @@ class PlayManager {
   size_t awaiting_inference_count() noexcept {
     return awaiting_inference_.size();
   }
+  size_t hist_count() noexcept { return history_.size(); }
   [[nodiscard]] size_t cache_hits() { return cache_.hits(); };
   [[nodiscard]] size_t cache_misses() { return cache_.misses(); };
   [[nodiscard]] size_t cache_size() { return cache_.size(); };

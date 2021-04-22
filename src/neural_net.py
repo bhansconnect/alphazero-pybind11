@@ -127,7 +127,8 @@ class NNWrapper:
         v_loss = 0
         pi_loss = 0
         current_step = 0
-        pbar = tqdm(total=train_steps, unit='batches', desc='Training NN')
+        pbar = tqdm(total=train_steps, unit='batches',
+                    desc='Training NN', leave=False)
         while current_step < train_steps:
             for batch in batches:
                 if current_step == train_steps:
@@ -154,7 +155,7 @@ class NNWrapper:
                 v_loss += l_v.item()
                 current_step += 1
                 pbar.set_postfix(
-                    {'v loss': v_loss/current_step, 'pi loss': pi_loss/current_step})
+                    {'v loss': v_loss/current_step, 'pi loss': pi_loss/current_step, 'total': (v_loss+pi_loss)/current_step})
                 pbar.update()
 
         self.scheduler.step()

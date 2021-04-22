@@ -11,6 +11,7 @@ import threading
 import tqdm
 import queue
 import numpy as np
+import gc
 
 src_path = os.path.dirname(os.path.realpath(__file__))
 build_path = os.path.join(os.path.dirname(src_path), 'build/src')
@@ -84,14 +85,13 @@ class GameRunner:
             nw.join()
         monitor.join()
         hist_saver.join()
-        print(f'Saved {self.saved_samples} samples')
 
     def monitor(self):
         last_completed = 0
         last_update = time.time()
         n = self.pm.params().games_to_play
         pbar = tqdm.tqdm(total=n,
-                         unit='games', desc='Playing Games')
+                         unit='games', desc='Playing Games', leave=False)
         while(self.pm.remaining_games() > 0):
             try:
                 self.monitor_queue.get(timeout=1)
@@ -107,7 +107,6 @@ class GameRunner:
                 pbar.set_postfix({
                     'p1 score': p1_score,
                     'cache hit': hits/total})
-                completed = self.pm.games_completed()
                 pbar.update(completed-last_completed)
                 last_completed = completed
                 last_update = time.time()
@@ -200,7 +199,7 @@ if __name__ == '__main__':
         dataloader = DataLoader(dataset, batch_size=512, shuffle=True,
                                 num_workers=11, pin_memory=True)
 
-        nn.train(dataloader, 100)
+        nn.train(dataloader, 200)
         nn.save_checkpoint('data/checkpoint', f'{iteration+1:04d}.pt')
 
     def play(iteration):
@@ -213,7 +212,7 @@ if __name__ == '__main__':
         params.max_batch_size = bs
         params.mcts_depth = 100
         params.history_enabled = True
-        params.max_cache_size = 100000
+        params.max_cache_size = 1000000
         params.temp_minimization_turn = 10
         params.temp = 2
         pm = alphazero.PlayManager(Game(), params)
@@ -225,6 +224,8 @@ if __name__ == '__main__':
 
     create_init_net()
 
-    for i in range(10):
+    for i in tqdm.trange(20, desc='Build Amazing Network'):
         play(i)
+        gc.collect()
         train(i)
+        gc.collect()

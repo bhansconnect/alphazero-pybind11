@@ -4,6 +4,7 @@ mprofile_*
 
 build
 data
+runs
 subprojects/*
 !subprojects/*.wrap
 

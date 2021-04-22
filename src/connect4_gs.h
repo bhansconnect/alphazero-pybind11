@@ -41,10 +41,10 @@ class Connect4GS : public GameState {
   }
 
   // Returns the number of possible moves.
-  [[nodiscard]] int32_t num_moves() const noexcept override { return WIDTH; }
+  [[nodiscard]] uint32_t num_moves() const noexcept override { return WIDTH; }
 
   // Returns the number of players.
-  [[nodiscard]] int8_t num_players() const noexcept override { return 2; };
+  [[nodiscard]] uint8_t num_players() const noexcept override { return 2; };
 
   // Returns a bool for all moves. The value is true if the move is playable
   // from this GameState.

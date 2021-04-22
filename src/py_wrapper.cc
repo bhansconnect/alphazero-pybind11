@@ -77,7 +77,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("temp", &PlayParams::temp)
       .def_readwrite("temp_minimization_turn",
                      &PlayParams::temp_minimization_turn)
-      .def_readwrite("history_enabled", &PlayParams::history_enabled);
+      .def_readwrite("history_enabled", &PlayParams::history_enabled)
+      .def_readwrite("self_play", &PlayParams::self_play);
 
   py::class_<PlayManager>(m, "PlayManager")
       .def(py::init([](const GameState* gs, PlayParams params) {
@@ -89,6 +90,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def("params", &PlayManager::params,
            py::return_value_policy::reference_internal)
       .def("scores", &PlayManager::scores)
+      .def("draws", &PlayManager::draws)
       .def("games_completed", &PlayManager::games_completed)
       .def("remaining_games", &PlayManager::remaining_games)
       .def("awaiting_inference_count", &PlayManager::awaiting_inference_count)
@@ -96,7 +98,6 @@ PYBIND11_MODULE(alphazero, m) {
       .def("hist_count", &PlayManager::hist_count)
       .def("cache_hits", &PlayManager::cache_hits)
       .def("cache_misses", &PlayManager::cache_misses)
-      .def("cache_size", &PlayManager::cache_size)
       .def("play", &PlayManager::play, py::call_guard<py::gil_scoped_release>())
       .def("pop_game", &PlayManager::pop_game,
            py::call_guard<py::gil_scoped_release>())
@@ -105,8 +106,6 @@ PYBIND11_MODULE(alphazero, m) {
       .def("push_inference", &PlayManager::push_inference,
            py::call_guard<py::gil_scoped_release>())
       .def("update_inferences", &PlayManager::update_inferences,
-           py::call_guard<py::gil_scoped_release>())
-      .def("dumb_inference", &PlayManager::dumb_inference,
            py::call_guard<py::gil_scoped_release>())
       .def(
           "build_history_batch",
@@ -142,7 +141,7 @@ PYBIND11_MODULE(alphazero, m) {
           py::call_guard<py::gil_scoped_release>())
       .def(
           "build_batch",
-          [](PlayManager& pm, py::array_t<float>& batch,
+          [](PlayManager& pm, uint32_t player, py::array_t<float>& batch,
              uint32_t concurrent_batches) {
             const auto mbs = pm.params().max_batch_size;
             const auto max_bs = [&]() {
@@ -157,7 +156,8 @@ PYBIND11_MODULE(alphazero, m) {
             auto dimensions_checked = false;
             auto current = 0U;
             while (current < max_bs()) {
-              const auto indices = pm.pop_games_upto(max_bs() - current);
+              const auto indices =
+                  pm.pop_games_upto(player, max_bs() - current);
               for (const auto i : indices) {
                 const auto& canonical = pm.game_data(i).canonical;
                 if (!dimensions_checked) {

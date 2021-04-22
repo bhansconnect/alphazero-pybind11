@@ -22,15 +22,23 @@ TEST(PlayManager, Basic) {
       FAIL() << "Got an exception: " << e.what() << std::endl;
     }
   });
-  auto infer = std::async(std::launch::async, [&] {
+  auto infer_p0 = std::async(std::launch::async, [&] {
     try {
-      pm.dumb_inference();
+      pm.dumb_inference(0);
+    } catch (const std::exception& e) {
+      FAIL() << "Got an exception: " << e.what() << std::endl;
+    }
+  });
+  auto infer_p1 = std::async(std::launch::async, [&] {
+    try {
+      pm.dumb_inference(1);
     } catch (const std::exception& e) {
       FAIL() << "Got an exception: " << e.what() << std::endl;
     }
   });
   play.wait();
-  infer.wait();
+  infer_p0.wait();
+  infer_p1.wait();
 }
 
 TEST(PlayManager, MultiThreaded) {
@@ -52,9 +60,16 @@ TEST(PlayManager, MultiThreaded) {
       }
     });
   }
-  auto infer = std::async(std::launch::async, [&] {
+  auto infer_p0 = std::async(std::launch::async, [&] {
     try {
-      pm.dumb_inference();
+      pm.dumb_inference(0);
+    } catch (const std::exception& e) {
+      FAIL() << "Got an exception: " << e.what() << std::endl;
+    }
+  });
+  auto infer_p1 = std::async(std::launch::async, [&] {
+    try {
+      pm.dumb_inference(1);
     } catch (const std::exception& e) {
       FAIL() << "Got an exception: " << e.what() << std::endl;
     }
@@ -62,7 +77,8 @@ TEST(PlayManager, MultiThreaded) {
   for (auto& pw : play_workers) {
     pw.wait();
   }
-  infer.wait();
+  infer_p0.wait();
+  infer_p1.wait();
   std::cout << "Scores: " << pm.scores() << std::endl;
 }
 

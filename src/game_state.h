@@ -33,10 +33,10 @@ class GameState {
   [[nodiscard]] virtual uint32_t current_turn() const noexcept = 0;
 
   // Returns the number of possible moves.
-  [[nodiscard]] virtual int32_t num_moves() const noexcept = 0;
+  [[nodiscard]] virtual uint32_t num_moves() const noexcept = 0;
 
   // Returns the number of players.
-  [[nodiscard]] virtual int8_t num_players() const noexcept = 0;
+  [[nodiscard]] virtual uint8_t num_players() const noexcept = 0;
 
   // Returns a bool for all moves. The value is true if the move is playable
   // from this GameState. All values should be 0 or 1.

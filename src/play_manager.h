@@ -73,6 +73,7 @@ struct PlayParams {
   float temp = 1.0;
   uint32_t temp_minimization_turn = std::numeric_limits<uint32_t>::max();
   bool history_enabled = false;
+  bool self_play = false;
 };
 
 // This is a multithread safe game play manager.
@@ -85,26 +86,28 @@ class PlayManager {
   // play will keep playing games until all games are completed.
   void play();
 
-  // dumb_inference is a random inference function for testing.
-  void dumb_inference();
-
-  void update_inferences(const std::vector<u_int32_t>& game_indices,
+  void update_inferences(uint8_t player,
+                         const std::vector<u_int32_t>& game_indices,
                          const Eigen::Ref<const Matrix<float>>& v,
                          const Eigen::Ref<const Matrix<float>>& pi);
 
   [[nodiscard]] const Vector<float> scores() const noexcept { return scores_; }
+  [[nodiscard]] uint32_t draws() const noexcept { return draws_; }
   [[nodiscard]] uint32_t remaining_games() const noexcept {
     return params_.games_to_play - games_completed_;
   }
   [[nodiscard]] uint32_t games_completed() const noexcept {
     return games_completed_;
   }
+  void dumb_inference(const uint8_t player);
 
-  [[nodiscard]] std::optional<uint32_t> pop_game() noexcept {
-    return awaiting_inference_.pop(MAX_WAIT);
+  [[nodiscard]] std::optional<uint32_t> pop_game(uint32_t player) noexcept {
+    return awaiting_inference_[params_.self_play ? 0 : player]->pop(MAX_WAIT);
   }
-  [[nodiscard]] std::vector<uint32_t> pop_games_upto(size_t n) noexcept {
-    return awaiting_inference_.pop_upto(n, MAX_WAIT);
+  [[nodiscard]] std::vector<uint32_t> pop_games_upto(uint32_t player,
+                                                     size_t n) noexcept {
+    return awaiting_inference_[params_.self_play ? 0 : player]->pop_upto(
+        n, MAX_WAIT);
   }
   [[nodiscard]] std::optional<PlayHistory> pop_hist() noexcept {
     return history_.pop(MAX_WAIT);
@@ -120,9 +123,20 @@ class PlayManager {
     return awaiting_inference_.size();
   }
   size_t hist_count() noexcept { return history_.size(); }
-  [[nodiscard]] size_t cache_hits() { return cache_.hits(); };
-  [[nodiscard]] size_t cache_misses() { return cache_.misses(); };
-  [[nodiscard]] size_t cache_size() { return cache_.size(); };
+  [[nodiscard]] size_t cache_hits() {
+    size_t out = 0;
+    for (auto& cache : caches_) {
+      out += cache->hits();
+    }
+    return out;
+  };
+  [[nodiscard]] size_t cache_misses() {
+    size_t out = 0;
+    for (auto& cache : caches_) {
+      out += cache->misses();
+    }
+    return out;
+  };
 
  private:
   std::unique_ptr<GameState> base_gs_;
@@ -132,13 +146,14 @@ class PlayManager {
   std::mutex game_end_mutex_;
   Vector<float> scores_;
   uint32_t games_started_;
+  uint32_t draws_ = 0;
   std::atomic<uint32_t> games_completed_ = 0;
 
   ConcurrentQueue<uint32_t> awaiting_mcts_;
-  ConcurrentQueue<uint32_t> awaiting_inference_;
+  std::vector<std::unique_ptr<ConcurrentQueue<uint32_t>>> awaiting_inference_;
   ConcurrentQueue<PlayHistory> history_;
 
-  Cache cache_;
+  std::vector<std::unique_ptr<Cache>> caches_;
   // Eventaully contain history, maybe store it in GameData.
 };
 

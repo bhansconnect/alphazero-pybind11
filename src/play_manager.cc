@@ -5,8 +5,7 @@ namespace alphazero {
 PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     : base_gs_(std::move(gs)),
       params_(p),
-      games_started_(params_.concurrent_games),
-      cache_(Cache{params_.max_cache_size}) {
+      games_started_(params_.concurrent_games) {
   games_.reserve(params_.concurrent_games);
   for (auto i = 0U; i < params_.concurrent_games; ++i) {
     auto gd = GameData{};
@@ -20,6 +19,14 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     gd.pi.setZero();
     games_.push_back(std::move(gd));
     awaiting_mcts_.push(i);
+  }
+  for (auto i = 0U; i < base_gs_->num_players(); ++i) {
+    caches_.push_back(std::make_unique<Cache>(params_.max_cache_size));
+    awaiting_inference_.push_back(
+        std::make_unique<ConcurrentQueue<uint32_t>>());
+    if (params_.self_play) {
+      break;
+    }
   }
   scores_ = Vector<float>{base_gs_->num_players()};
   scores_.setZero();
@@ -69,6 +76,9 @@ void PlayManager::play() {
           {
             std::unique_lock<std::mutex>{game_end_mutex_};
             scores_ += scores.value();
+            if (scores_(0) == 0) {
+              ++draws_;
+            }
             ++games_completed_;
             // If we have started enough games just loop and complete games.
             if (games_started_ >= params_.games_to_play) {
@@ -91,30 +101,22 @@ void PlayManager::play() {
     auto leaf = mcts.find_leaf(*game.gs);
     game.canonical = leaf->canonicalized();
     if (params_.max_cache_size > 0) {
-      auto opt = cache_.find(game.canonical);
+      auto opt =
+          caches_[params_.self_play ? 0 : game.gs->current_player()]->find(
+              game.canonical);
       if (opt.has_value()) {
         std::tie(game.v, game.pi) = opt.value();
         awaiting_mcts_.push(i.value());
         continue;
       }
     }
-    awaiting_inference_.push(i.value());
+    awaiting_inference_[params_.self_play ? 0 : game.gs->current_player()]
+        ->push(i.value());
   }
 }
 
-void PlayManager::dumb_inference() {
-  while (games_completed_ < params_.games_to_play) {
-    auto i = awaiting_inference_.pop(MAX_WAIT);
-    if (!i.has_value()) {
-      continue;
-    }
-    auto& game = games_[i.value()];
-    std::tie(game.v, game.pi) = dumb_eval(*game.gs);
-    awaiting_mcts_.push(i.value());
-  }
-}
-
-void PlayManager::update_inferences(const std::vector<uint32_t>& game_indices,
+void PlayManager::update_inferences(const uint8_t player,
+                                    const std::vector<uint32_t>& game_indices,
                                     const Eigen::Ref<const Matrix<float>>& v,
                                     const Eigen::Ref<const Matrix<float>>& pi) {
   for (auto i = 0UL; i < game_indices.size(); ++i) {
@@ -122,9 +124,22 @@ void PlayManager::update_inferences(const std::vector<uint32_t>& game_indices,
     game.v = v.row(i);
     game.pi = pi.row(i);
     if (params_.max_cache_size > 0) {
-      cache_.insert(game.canonical, {game.v, game.pi});
+      caches_[params_.self_play ? 0 : player]->insert(game.canonical,
+                                                      {game.v, game.pi});
     }
     awaiting_mcts_.push(game_indices[i]);
+  }
+}
+
+void PlayManager::dumb_inference(const uint8_t player) {
+  while (games_completed_ < params_.games_to_play) {
+    auto i = awaiting_inference_[params_.self_play ? 0 : player]->pop(MAX_WAIT);
+    if (!i.has_value()) {
+      continue;
+    }
+    auto& game = games_[i.value()];
+    std::tie(game.v, game.pi) = dumb_eval(*game.gs);
+    awaiting_mcts_.push(i.value());
   }
 }
 

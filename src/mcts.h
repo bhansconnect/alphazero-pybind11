@@ -30,7 +30,7 @@ struct Node {
 
 class MCTS {
  public:
-  MCTS(float cpuct, int32_t num_moves)
+  MCTS(float cpuct, uint32_t num_moves)
       : cpuct_(cpuct), num_moves_(num_moves), current_(&root_) {}
   void update_root(const GameState& gs, uint32_t move);
   [[nodiscard]] std::unique_ptr<GameState> find_leaf(const GameState& gs);

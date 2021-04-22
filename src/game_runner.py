@@ -327,8 +327,8 @@ if __name__ == '__main__':
 
     create_init_net(Game, nnargs,)
 
-    postfix = {'nn vs rand': 0, 'p1 rate': 0,
-               'v loss': 0, 'pi loss': 0, 'draw rate': 0}
+    postfix = {'nn vs rand': 0, 'p1 rate': 0, 'draw rate': 0,
+               'v loss': 0, 'pi loss': 0}
     writer = SummaryWriter(f'runs/{run_name}')
     with tqdm.trange(50, desc='Build Amazing Network') as pbar:
         for i in pbar:
@@ -351,8 +351,8 @@ if __name__ == '__main__':
             writer.add_scalar('Loss/V', v_loss, i)
             writer.add_scalar('Loss/Pi', pi_loss, i)
             writer.add_scalar('Loss/Total', v_loss+pi_loss, i)
-            postfix['v loss'] = v_loss/(i+1)
-            postfix['pi loss'] = pi_loss/(i+1)
+            postfix['v loss'] = v_loss
+            postfix['pi loss'] = pi_loss
             pbar.set_postfix(postfix)
             gc.collect()
     writer.close()

@@ -3,6 +3,7 @@
 mprofile_*
 
 build
+builddir
 data
 runs
 subprojects/*

@@ -1,1 +1,0 @@
-[{"name": "python3", "version": "3.8", "compile_args": ["-I/usr/include/python3.8", "-I/usr/include/x86_64-linux-gnu/python3.8"], "link_args": []}, {"name": "threads", "version": "unknown", "compile_args": ["-pthread"], "link_args": ["-pthread"]}]

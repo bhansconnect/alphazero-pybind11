@@ -74,6 +74,9 @@ struct PlayParams {
   uint32_t temp_minimization_turn = std::numeric_limits<uint32_t>::max();
   bool history_enabled = false;
   bool self_play = false;
+  bool add_noise = false;
+  float epsilon = 0.25;
+  float alpha = 1.0;
 };
 
 // This is a multithread safe game play manager.

@@ -1,0 +1,770 @@
+[
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_cycleclock.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_cycleclock.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_cycleclock.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/cycleclock.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/cycleclock.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_cycleclock.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_exponential_biased.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_exponential_biased.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_exponential_biased.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/exponential_biased.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/exponential_biased.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_exponential_biased.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_low_level_alloc.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_low_level_alloc.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_low_level_alloc.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/low_level_alloc.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/low_level_alloc.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_low_level_alloc.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_periodic_sampler.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_periodic_sampler.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_periodic_sampler.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/periodic_sampler.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/periodic_sampler.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_periodic_sampler.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_raw_logging.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_raw_logging.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_raw_logging.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/raw_logging.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/raw_logging.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_raw_logging.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_scoped_set_env.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_scoped_set_env.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_scoped_set_env.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/scoped_set_env.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/scoped_set_env.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_scoped_set_env.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_spinlock_wait.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_spinlock_wait.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_spinlock_wait.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/spinlock_wait.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/spinlock_wait.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_spinlock_wait.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_spinlock.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_spinlock.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_spinlock.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/spinlock.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/spinlock.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_spinlock.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_sysinfo.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_sysinfo.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_sysinfo.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/sysinfo.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/sysinfo.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_sysinfo.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_strerror.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_strerror.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_strerror.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/strerror.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/strerror.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_strerror.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_thread_identity.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_thread_identity.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_thread_identity.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/thread_identity.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/thread_identity.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_thread_identity.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_throw_delegate.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_throw_delegate.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_throw_delegate.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/throw_delegate.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/throw_delegate.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_throw_delegate.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_unscaledcycleclock.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_unscaledcycleclock.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_unscaledcycleclock.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/internal/unscaledcycleclock.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/internal/unscaledcycleclock.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_internal_unscaledcycleclock.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -pthread -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_log_severity.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_log_severity.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_log_severity.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/base/log_severity.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/base/log_severity.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_base_lib@sha/absl_base_log_severity.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_hash_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_hash_lib@sha/absl_hash_internal_city.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_hash_lib@sha/absl_hash_internal_city.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_hash_lib@sha/absl_hash_internal_city.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/hash/internal/city.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/hash/internal/city.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_hash_lib@sha/absl_hash_internal_city.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_hash_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_hash_lib@sha/absl_hash_internal_hash.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_hash_lib@sha/absl_hash_internal_hash.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_hash_lib@sha/absl_hash_internal_hash.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/hash/internal/hash.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/hash/internal/hash.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_hash_lib@sha/absl_hash_internal_hash.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_numeric_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_numeric_lib@sha/absl_numeric_int128.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_numeric_lib@sha/absl_numeric_int128.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_numeric_lib@sha/absl_numeric_int128.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/numeric/int128.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/numeric/int128.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_numeric_lib@sha/absl_numeric_int128.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_ascii.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_ascii.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_ascii.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/ascii.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/ascii.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_ascii.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_charconv.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_charconv.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_charconv.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/charconv.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/charconv.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_charconv.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_cord.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_cord.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_cord.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/cord.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/cord.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_cord.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_escaping.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_escaping.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_escaping.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/escaping.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/escaping.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_escaping.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_charconv_bigint.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_charconv_bigint.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_charconv_bigint.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/charconv_bigint.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/charconv_bigint.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_charconv_bigint.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_charconv_parse.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_charconv_parse.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_charconv_parse.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/charconv_parse.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/charconv_parse.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_charconv_parse.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_escaping.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_escaping.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_escaping.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/escaping.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/escaping.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_escaping.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_memutil.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_memutil.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_memutil.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/memutil.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/memutil.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_memutil.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_ostringstream.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_ostringstream.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_ostringstream.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/ostringstream.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/ostringstream.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_ostringstream.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_pow10_helper.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_pow10_helper.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_pow10_helper.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/pow10_helper.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/pow10_helper.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_pow10_helper.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_arg.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_arg.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_arg.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/str_format/arg.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/str_format/arg.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_arg.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_bind.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_bind.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_bind.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/str_format/bind.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/str_format/bind.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_bind.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_extension.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_extension.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_extension.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/str_format/extension.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/str_format/extension.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_extension.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_float_conversion.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_float_conversion.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_float_conversion.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/str_format/float_conversion.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/str_format/float_conversion.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_float_conversion.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_output.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_output.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_output.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/str_format/output.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/str_format/output.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_output.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_parser.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_parser.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_parser.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/str_format/parser.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/str_format/parser.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_str_format_parser.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_utf8.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_utf8.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_utf8.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/internal/utf8.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/internal/utf8.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_internal_utf8.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_match.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_match.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_match.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/match.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/match.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_match.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_numbers.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_numbers.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_numbers.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/numbers.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/numbers.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_numbers.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_str_cat.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_str_cat.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_str_cat.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/str_cat.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/str_cat.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_str_cat.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_str_replace.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_str_replace.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_str_replace.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/str_replace.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/str_replace.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_str_replace.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_str_split.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_str_split.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_str_split.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/str_split.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/str_split.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_str_split.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_string_view.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_string_view.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_string_view.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/string_view.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/string_view.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_string_view.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_substitute.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_substitute.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_substitute.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/strings/substitute.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/strings/substitute.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_strings_lib@sha/absl_strings_substitute.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_failure_signal_handler.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_failure_signal_handler.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_failure_signal_handler.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/debugging/failure_signal_handler.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/debugging/failure_signal_handler.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_failure_signal_handler.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_address_is_readable.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_address_is_readable.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_address_is_readable.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/debugging/internal/address_is_readable.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/debugging/internal/address_is_readable.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_address_is_readable.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_demangle.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_demangle.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_demangle.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/debugging/internal/demangle.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/debugging/internal/demangle.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_demangle.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_elf_mem_image.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_elf_mem_image.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_elf_mem_image.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/debugging/internal/elf_mem_image.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/debugging/internal/elf_mem_image.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_elf_mem_image.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_examine_stack.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_examine_stack.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_examine_stack.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/debugging/internal/examine_stack.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/debugging/internal/examine_stack.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_examine_stack.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_stack_consumption.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_stack_consumption.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_stack_consumption.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/debugging/internal/stack_consumption.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/debugging/internal/stack_consumption.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_stack_consumption.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_vdso_support.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_vdso_support.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_vdso_support.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/debugging/internal/vdso_support.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/debugging/internal/vdso_support.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_internal_vdso_support.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_leak_check_disable.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_leak_check_disable.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_leak_check_disable.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/debugging/leak_check_disable.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/debugging/leak_check_disable.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_leak_check_disable.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_leak_check.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_leak_check.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_leak_check.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/debugging/leak_check.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/debugging/leak_check.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_leak_check.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_stacktrace.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_stacktrace.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_stacktrace.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/debugging/stacktrace.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/debugging/stacktrace.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_stacktrace.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_symbolize.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_symbolize.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_symbolize.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/debugging/symbolize.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/debugging/symbolize.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_debugging_lib@sha/absl_debugging_symbolize.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_discrete_distribution.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_discrete_distribution.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_discrete_distribution.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/discrete_distribution.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/discrete_distribution.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_discrete_distribution.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_gaussian_distribution.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_gaussian_distribution.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_gaussian_distribution.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/gaussian_distribution.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/gaussian_distribution.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_gaussian_distribution.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_chi_square.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_chi_square.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_chi_square.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/internal/chi_square.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/internal/chi_square.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_chi_square.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_distribution_test_util.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_distribution_test_util.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_distribution_test_util.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/internal/distribution_test_util.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/internal/distribution_test_util.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_distribution_test_util.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_pool_urbg.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_pool_urbg.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_pool_urbg.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/internal/pool_urbg.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/internal/pool_urbg.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_pool_urbg.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_detect.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_detect.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_detect.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/internal/randen_detect.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/internal/randen_detect.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_detect.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_hwaes.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_hwaes.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_hwaes.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/internal/randen_hwaes.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/internal/randen_hwaes.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_hwaes.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_slow.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_slow.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_slow.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/internal/randen_slow.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/internal/randen_slow.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_slow.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_round_keys.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_round_keys.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_round_keys.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/internal/randen_round_keys.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/internal/randen_round_keys.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen_round_keys.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/internal/randen.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/internal/randen.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_randen.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_seed_material.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_seed_material.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_seed_material.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/internal/seed_material.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/internal/seed_material.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_internal_seed_material.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_seed_gen_exception.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_seed_gen_exception.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_seed_gen_exception.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/seed_gen_exception.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/seed_gen_exception.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_seed_gen_exception.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_seed_sequences.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_seed_sequences.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_seed_sequences.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/random/seed_sequences.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/random/seed_sequences.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_random_lib@sha/absl_random_seed_sequences.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_civil_time.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_civil_time.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_civil_time.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/civil_time.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/civil_time.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_civil_time.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_clock.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_clock.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_clock.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/clock.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/clock.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_clock.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_duration.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_duration.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_duration.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/duration.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/duration.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_duration.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_format.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_format.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_format.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/format.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/format.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_format.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_civil_time_detail.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_civil_time_detail.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_civil_time_detail.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/civil_time_detail.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/civil_time_detail.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_civil_time_detail.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_fixed.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_fixed.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_fixed.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_fixed.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_fixed.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_fixed.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_format.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_format.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_format.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_format.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_format.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_format.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_if.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_if.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_if.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_if.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_if.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_if.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_impl.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_impl.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_impl.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_impl.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_impl.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_impl.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_info.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_info.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_info.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_info.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_info.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_info.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_libc.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_libc.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_libc.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_libc.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_libc.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_libc.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_lookup.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_lookup.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_lookup.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_lookup.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_lookup.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_lookup.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_posix.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_posix.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_posix.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_posix.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/time_zone_posix.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_time_zone_posix.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_zone_info_source.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_zone_info_source.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_zone_info_source.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/zone_info_source.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/internal/cctz/src/zone_info_source.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_internal_cctz_src_zone_info_source.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_time.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_time.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_time.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/time/time.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/time/time.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_time_lib@sha/absl_time_time.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha/absl_types_bad_any_cast.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha/absl_types_bad_any_cast.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha/absl_types_bad_any_cast.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/types/bad_any_cast.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/types/bad_any_cast.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha/absl_types_bad_any_cast.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha/absl_types_bad_optional_access.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha/absl_types_bad_optional_access.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha/absl_types_bad_optional_access.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/types/bad_optional_access.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/types/bad_optional_access.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha/absl_types_bad_optional_access.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha/absl_types_bad_variant_access.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha/absl_types_bad_variant_access.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha/absl_types_bad_variant_access.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/types/bad_variant_access.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/types/bad_variant_access.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_types_lib@sha/absl_types_bad_variant_access.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_barrier.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_barrier.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_barrier.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/synchronization/barrier.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/synchronization/barrier.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_barrier.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_blocking_counter.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_blocking_counter.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_blocking_counter.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/synchronization/blocking_counter.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/synchronization/blocking_counter.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_blocking_counter.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_create_thread_identity.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_create_thread_identity.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_create_thread_identity.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/synchronization/internal/create_thread_identity.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/synchronization/internal/create_thread_identity.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_create_thread_identity.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_graphcycles.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_graphcycles.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_graphcycles.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/synchronization/internal/graphcycles.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/synchronization/internal/graphcycles.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_graphcycles.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_per_thread_sem.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_per_thread_sem.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_per_thread_sem.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/synchronization/internal/per_thread_sem.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/synchronization/internal/per_thread_sem.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_per_thread_sem.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_waiter.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_waiter.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_waiter.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/synchronization/internal/waiter.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/synchronization/internal/waiter.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_internal_waiter.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_mutex.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_mutex.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_mutex.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/synchronization/mutex.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/synchronization/mutex.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_mutex.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_notification.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_notification.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_notification.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/synchronization/notification.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/synchronization/notification.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_synchronization_lib@sha/absl_synchronization_notification.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha/absl_container_internal_hashtablez_sampler_force_weak_definition.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha/absl_container_internal_hashtablez_sampler_force_weak_definition.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha/absl_container_internal_hashtablez_sampler_force_weak_definition.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/container/internal/hashtablez_sampler_force_weak_definition.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/container/internal/hashtablez_sampler_force_weak_definition.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha/absl_container_internal_hashtablez_sampler_force_weak_definition.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha/absl_container_internal_hashtablez_sampler.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha/absl_container_internal_hashtablez_sampler.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha/absl_container_internal_hashtablez_sampler.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/container/internal/hashtablez_sampler.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/container/internal/hashtablez_sampler.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha/absl_container_internal_hashtablez_sampler.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha/absl_container_internal_raw_hash_set.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha/absl_container_internal_raw_hash_set.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha/absl_container_internal_raw_hash_set.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/container/internal/raw_hash_set.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/container/internal/raw_hash_set.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_container_lib@sha/absl_container_internal_raw_hash_set.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_commandlineflag.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_commandlineflag.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_commandlineflag.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/flags/commandlineflag.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/flags/commandlineflag.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_commandlineflag.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_flag.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_flag.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_flag.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/flags/flag.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/flags/flag.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_flag.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_commandlineflag.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_commandlineflag.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_commandlineflag.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/flags/internal/commandlineflag.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/flags/internal/commandlineflag.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_commandlineflag.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_flag.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_flag.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_flag.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/flags/internal/flag.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/flags/internal/flag.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_flag.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_program_name.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_program_name.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_program_name.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/flags/internal/program_name.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/flags/internal/program_name.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_program_name.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_private_handle_accessor.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_private_handle_accessor.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_private_handle_accessor.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/flags/internal/private_handle_accessor.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/flags/internal/private_handle_accessor.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_private_handle_accessor.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_usage.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_usage.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_usage.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/flags/internal/usage.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/flags/internal/usage.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_internal_usage.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_marshalling.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_marshalling.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_marshalling.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/flags/marshalling.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/flags/marshalling.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_marshalling.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_parse.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_parse.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_parse.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/flags/parse.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/flags/parse.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_parse.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_reflection.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_reflection.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_reflection.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/flags/reflection.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/flags/reflection.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_reflection.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_usage_config.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_usage_config.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_usage_config.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/flags/usage_config.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/flags/usage_config.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_usage_config.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_usage.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_usage.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_usage.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/flags/usage.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/flags/usage.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_flags_lib@sha/absl_flags_usage.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha/absl_status_status_payload_printer.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha/absl_status_status_payload_printer.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha/absl_status_status_payload_printer.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/status/status_payload_printer.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/status/status_payload_printer.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha/absl_status_status_payload_printer.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha/absl_status_status.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha/absl_status_status.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha/absl_status_status.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/status/status.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/status/status.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha/absl_status_status.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isubprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -Wno-sign-compare -fPIC -MD -MQ 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha/absl_status_statusor.cc.o' -MF 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha/absl_status_statusor.cc.o.d' -o 'subprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha/absl_status_statusor.cc.o' -c ../subprojects/abseil-cpp-20200923.2/absl/status/statusor.cc",
+    "file": "../subprojects/abseil-cpp-20200923.2/absl/status/statusor.cc",
+    "output": "subprojects/abseil-cpp-20200923.2/39076d4@@absl_status_lib@sha/absl_status_statusor.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@connect4_gs@sha -Isrc -I../src -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -fPIC -MD -MQ 'src/25a6634@@connect4_gs@sha/connect4_gs.cc.o' -MF 'src/25a6634@@connect4_gs@sha/connect4_gs.cc.o.d' -o 'src/25a6634@@connect4_gs@sha/connect4_gs.cc.o' -c ../src/connect4_gs.cc",
+    "file": "../src/connect4_gs.cc",
+    "output": "src/25a6634@@connect4_gs@sha/connect4_gs.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@connect4_gs_test@exe -Isrc -I../src -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@connect4_gs_test@exe/connect4_gs_test.cc.o' -MF 'src/25a6634@@connect4_gs_test@exe/connect4_gs_test.cc.o.d' -o 'src/25a6634@@connect4_gs_test@exe/connect4_gs_test.cc.o' -c ../src/connect4_gs_test.cc",
+    "file": "../src/connect4_gs_test.cc",
+    "output": "src/25a6634@@connect4_gs_test@exe/connect4_gs_test.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@connect4_gs_test@exe -Isrc -I../src -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@connect4_gs_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o' -MF 'src/25a6634@@connect4_gs_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o.d' -o 'src/25a6634@@connect4_gs_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o' -c ../subprojects/googletest-release-1.10.0/googletest/src/gtest-all.cc",
+    "file": "../subprojects/googletest-release-1.10.0/googletest/src/gtest-all.cc",
+    "output": "src/25a6634@@connect4_gs_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@connect4_gs_test@exe -Isrc -I../src -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@connect4_gs_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o' -MF 'src/25a6634@@connect4_gs_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o.d' -o 'src/25a6634@@connect4_gs_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o' -c ../subprojects/googletest-release-1.10.0/googletest/src/gtest_main.cc",
+    "file": "../subprojects/googletest-release-1.10.0/googletest/src/gtest_main.cc",
+    "output": "src/25a6634@@connect4_gs_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@mcts@sha -Isrc -I../src -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -fPIC -MD -MQ 'src/25a6634@@mcts@sha/mcts.cc.o' -MF 'src/25a6634@@mcts@sha/mcts.cc.o.d' -o 'src/25a6634@@mcts@sha/mcts.cc.o' -c ../src/mcts.cc",
+    "file": "../src/mcts.cc",
+    "output": "src/25a6634@@mcts@sha/mcts.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@mcts_test@exe -Isrc -I../src -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@mcts_test@exe/mcts_test.cc.o' -MF 'src/25a6634@@mcts_test@exe/mcts_test.cc.o.d' -o 'src/25a6634@@mcts_test@exe/mcts_test.cc.o' -c ../src/mcts_test.cc",
+    "file": "../src/mcts_test.cc",
+    "output": "src/25a6634@@mcts_test@exe/mcts_test.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@mcts_test@exe -Isrc -I../src -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@mcts_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o' -MF 'src/25a6634@@mcts_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o.d' -o 'src/25a6634@@mcts_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o' -c ../subprojects/googletest-release-1.10.0/googletest/src/gtest-all.cc",
+    "file": "../subprojects/googletest-release-1.10.0/googletest/src/gtest-all.cc",
+    "output": "src/25a6634@@mcts_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@mcts_test@exe -Isrc -I../src -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@mcts_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o' -MF 'src/25a6634@@mcts_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o.d' -o 'src/25a6634@@mcts_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o' -c ../subprojects/googletest-release-1.10.0/googletest/src/gtest_main.cc",
+    "file": "../subprojects/googletest-release-1.10.0/googletest/src/gtest_main.cc",
+    "output": "src/25a6634@@mcts_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@concurrent_queue_test@exe -Isrc -I../src -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@concurrent_queue_test@exe/concurrent_queue_test.cc.o' -MF 'src/25a6634@@concurrent_queue_test@exe/concurrent_queue_test.cc.o.d' -o 'src/25a6634@@concurrent_queue_test@exe/concurrent_queue_test.cc.o' -c ../src/concurrent_queue_test.cc",
+    "file": "../src/concurrent_queue_test.cc",
+    "output": "src/25a6634@@concurrent_queue_test@exe/concurrent_queue_test.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@concurrent_queue_test@exe -Isrc -I../src -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@concurrent_queue_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o' -MF 'src/25a6634@@concurrent_queue_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o.d' -o 'src/25a6634@@concurrent_queue_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o' -c ../subprojects/googletest-release-1.10.0/googletest/src/gtest-all.cc",
+    "file": "../subprojects/googletest-release-1.10.0/googletest/src/gtest-all.cc",
+    "output": "src/25a6634@@concurrent_queue_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@concurrent_queue_test@exe -Isrc -I../src -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@concurrent_queue_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o' -MF 'src/25a6634@@concurrent_queue_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o.d' -o 'src/25a6634@@concurrent_queue_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o' -c ../subprojects/googletest-release-1.10.0/googletest/src/gtest_main.cc",
+    "file": "../subprojects/googletest-release-1.10.0/googletest/src/gtest_main.cc",
+    "output": "src/25a6634@@concurrent_queue_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@lru_cache_test@exe -Isrc -I../src -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@lru_cache_test@exe/lru_cache_test.cc.o' -MF 'src/25a6634@@lru_cache_test@exe/lru_cache_test.cc.o.d' -o 'src/25a6634@@lru_cache_test@exe/lru_cache_test.cc.o' -c ../src/lru_cache_test.cc",
+    "file": "../src/lru_cache_test.cc",
+    "output": "src/25a6634@@lru_cache_test@exe/lru_cache_test.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@lru_cache_test@exe -Isrc -I../src -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@lru_cache_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o' -MF 'src/25a6634@@lru_cache_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o.d' -o 'src/25a6634@@lru_cache_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o' -c ../subprojects/googletest-release-1.10.0/googletest/src/gtest-all.cc",
+    "file": "../subprojects/googletest-release-1.10.0/googletest/src/gtest-all.cc",
+    "output": "src/25a6634@@lru_cache_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@lru_cache_test@exe -Isrc -I../src -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@lru_cache_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o' -MF 'src/25a6634@@lru_cache_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o.d' -o 'src/25a6634@@lru_cache_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o' -c ../subprojects/googletest-release-1.10.0/googletest/src/gtest_main.cc",
+    "file": "../subprojects/googletest-release-1.10.0/googletest/src/gtest_main.cc",
+    "output": "src/25a6634@@lru_cache_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@play_manager@sha -Isrc -I../src -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -fPIC -MD -MQ 'src/25a6634@@play_manager@sha/play_manager.cc.o' -MF 'src/25a6634@@play_manager@sha/play_manager.cc.o.d' -o 'src/25a6634@@play_manager@sha/play_manager.cc.o' -c ../src/play_manager.cc",
+    "file": "../src/play_manager.cc",
+    "output": "src/25a6634@@play_manager@sha/play_manager.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@play_manager_test@exe -Isrc -I../src -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@play_manager_test@exe/play_manager_test.cc.o' -MF 'src/25a6634@@play_manager_test@exe/play_manager_test.cc.o.d' -o 'src/25a6634@@play_manager_test@exe/play_manager_test.cc.o' -c ../src/play_manager_test.cc",
+    "file": "../src/play_manager_test.cc",
+    "output": "src/25a6634@@play_manager_test@exe/play_manager_test.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@play_manager_test@exe -Isrc -I../src -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@play_manager_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o' -MF 'src/25a6634@@play_manager_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o.d' -o 'src/25a6634@@play_manager_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o' -c ../subprojects/googletest-release-1.10.0/googletest/src/gtest-all.cc",
+    "file": "../subprojects/googletest-release-1.10.0/googletest/src/gtest-all.cc",
+    "output": "src/25a6634@@play_manager_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest-all.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@play_manager_test@exe -Isrc -I../src -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -pthread -isystem../subprojects/googletest-release-1.10.0/googletest -isystemsubprojects/googletest-release-1.10.0/googletest -isystem../subprojects/googletest-release-1.10.0/googletest/include -MD -MQ 'src/25a6634@@play_manager_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o' -MF 'src/25a6634@@play_manager_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o.d' -o 'src/25a6634@@play_manager_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o' -c ../subprojects/googletest-release-1.10.0/googletest/src/gtest_main.cc",
+    "file": "../subprojects/googletest-release-1.10.0/googletest/src/gtest_main.cc",
+    "output": "src/25a6634@@play_manager_test@exe/.._subprojects_googletest-release-1.10.0_googletest_src_gtest_main.cc.o"
+  },
+  {
+    "directory": "/home/brendan/Projects/alphazero-pybind11/builddir",
+    "command": "c++ -Isrc/25a6634@@alphazero.cpython-38-x86_64-linux-gnu@sha -Isrc -I../src -I../subprojects/pybind11-2.6.1/include -Isubprojects/eigen-3.3.9 -I../subprojects/eigen-3.3.9 -Isubprojects/abseil-cpp-20200923.2 -I../subprojects/abseil-cpp-20200923.2 -I/usr/include/python3.8 -I/usr/include/x86_64-linux-gnu/python3.8 -fdiagnostics-color=always -pipe -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -Wextra -std=c++17 -g -fPIC -MD -MQ 'src/25a6634@@alphazero.cpython-38-x86_64-linux-gnu@sha/py_wrapper.cc.o' -MF 'src/25a6634@@alphazero.cpython-38-x86_64-linux-gnu@sha/py_wrapper.cc.o.d' -o 'src/25a6634@@alphazero.cpython-38-x86_64-linux-gnu@sha/py_wrapper.cc.o' -c ../src/py_wrapper.cc",
+    "file": "../src/py_wrapper.cc",
+    "output": "src/25a6634@@alphazero.cpython-38-x86_64-linux-gnu@sha/py_wrapper.cc.o"
+  }
+]

@@ -6,7 +6,7 @@ from torch.autograd import profiler
 from tqdm import tqdm
 
 NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'lr_milestones',
-                               'lr', 'cuda'], defaults=([40], 0.001, torch.cuda.is_available()))
+                               'lr', 'cuda'], defaults=([40], 0.01, torch.cuda.is_available()))
 
 
 def conv1x1(in_channels, out_channels, stride=1):

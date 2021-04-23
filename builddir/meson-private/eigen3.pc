@@ -1,0 +1,8 @@
+prefix=/usr/local
+libdir=${prefix}/lib/x86_64-linux-gnu
+includedir=${prefix}/include
+
+Name: eigen3
+Description: A C++ template library for linear algebra: vectors, matrices, and related algorithms
+Version: 3.3.9
+Cflags: -I${includedir}

@@ -11,7 +11,12 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     auto gd = GameData{};
     gd.gs = base_gs_->copy();
     for (auto j = 0; j < base_gs_->num_players(); ++j) {
-      gd.mcts.emplace_back(params_.cpuct, base_gs_->num_moves());
+      if (params_.add_noise) {
+        gd.mcts.emplace_back(params_.cpuct, base_gs_->num_moves(),
+                             params_.epsilon, params_.alpha);
+      } else {
+        gd.mcts.emplace_back(params_.cpuct, base_gs_->num_moves());
+      }
     }
     gd.v = Vector<float>{base_gs_->num_players()};
     gd.pi = Vector<float>{base_gs_->num_moves()};

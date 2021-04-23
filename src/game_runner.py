@@ -223,6 +223,7 @@ class RandPlayer:
 
 
 if __name__ == '__main__':
+    import shutil
     import neural_net
 
     def create_init_net(Game, nnargs):
@@ -246,7 +247,7 @@ if __name__ == '__main__':
         dataloader = DataLoader(dataset, batch_size=512, shuffle=True,
                                 num_workers=11, pin_memory=True)
 
-        v_loss, pi_loss = nn.train(dataloader, 200)
+        v_loss, pi_loss = nn.train(dataloader, 400)
         nn.save_checkpoint('data/checkpoint', f'{iteration+1:04d}.pt')
         return v_loss, pi_loss
 
@@ -263,7 +264,10 @@ if __name__ == '__main__':
         params.self_play = True
         params.max_cache_size = 1000000
         params.temp_minimization_turn = 10
-        params.temp = 2
+        params.temp = 1
+        params.cpuct = 1
+        params.add_noise = True
+        params.alpha = 1
         pm = alphazero.PlayManager(Game(), params)
 
         grargs = GRArgs(title='Self Play', game=Game, iteration=iteration,
@@ -281,16 +285,20 @@ if __name__ == '__main__':
         p1_adj_wins = p1_wins + draws/Game.NUM_PLAYERS()
         p1_rate = p1_adj_wins/n
         draw_rate = draws/n
-        return p1_rate, draw_rate
+        hits = pm.cache_hits()
+        total = hits + pm.cache_misses()
+        hr = hits/total
+        return p1_rate, draw_rate, hr
 
     def play_rand(Game, nnargs, iteration):
         nn_rate = 0
         draw_rate = 0
+        hr = 0
         nn = neural_net.NNWrapper(Game, nnargs)
         nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
         for i in range(Game.NUM_PLAYERS()):
             params = alphazero.PlayParams()
-            bs = 128
+            bs = 64
             n = bs*4
             cb = 4
             params.games_to_play = n
@@ -301,7 +309,8 @@ if __name__ == '__main__':
             params.self_play = False
             params.max_cache_size = 1000000
             params.temp_minimization_turn = 10
-            params.temp = 2
+            params.temp = 1
+            params.cpuct = 1
             pm = alphazero.PlayManager(Game(), params)
 
             grargs = GRArgs(title=f'Bench Rand({i+1}/{Game.NUM_PLAYERS()})', game=Game, iteration=iteration,
@@ -319,10 +328,20 @@ if __name__ == '__main__':
             nn_adj_wins = nn_wins + draws/Game.NUM_PLAYERS()
             nn_rate += nn_adj_wins/n
             draw_rate += draws/n
-        return nn_rate / Game.NUM_PLAYERS(), draw_rate / Game.NUM_PLAYERS()
+            hits = pm.cache_hits()
+            total = hits + pm.cache_misses()
+            hr += hits/total
+        return nn_rate / Game.NUM_PLAYERS(), draw_rate / Game.NUM_PLAYERS(), hr / Game.NUM_PLAYERS()
 
-    run_name = 'c_32_d_5'
-    nnargs = neural_net.NNArgs(num_channels=32, depth=5, lr_milestones=[30])
+    # for channels in [4, 8, 16, 32, 64, 128, 256]:
+    channels = 64
+    depth = 20
+    if os.path.exists("data"):
+        shutil.rmtree('data')
+
+    run_name = f'c_{channels}_d_{depth}'
+    nnargs = neural_net.NNArgs(
+        num_channels=channels, depth=depth, lr_milestones=[30])
     Game = alphazero.Connect4GS
 
     create_init_net(Game, nnargs,)
@@ -332,16 +351,18 @@ if __name__ == '__main__':
     writer = SummaryWriter(f'runs/{run_name}')
     with tqdm.trange(50, desc='Build Amazing Network') as pbar:
         for i in pbar:
-            nn_rate, draw_rate = play_rand(Game, nnargs, i)
+            nn_rate, draw_rate, hit_rate = play_rand(Game, nnargs, i)
             writer.add_scalar('NN vs Rand/NN Win Rate', nn_rate, i)
             writer.add_scalar('NN vs Rand/Draw Rate', draw_rate, i)
+            writer.add_scalar('NN vs Rand/Cache Hit Rate', hit_rate, i)
             postfix['nn vs rand'] = nn_rate
             pbar.set_postfix(postfix)
             gc.collect()
 
-            p1_rate, draw_rate = self_play(Game, nnargs, i)
+            p1_rate, draw_rate, hit_rate = self_play(Game, nnargs, i)
             writer.add_scalar('Self Play/P1 Win Rate', p1_rate, i)
             writer.add_scalar('Self Play/Draw Rate', draw_rate, i)
+            writer.add_scalar('Self Play/Cache Hit Rate', hit_rate, i)
             postfix['p1 rate'] = p1_rate
             postfix['draw rate'] = draw_rate
             pbar.set_postfix(postfix)

@@ -78,7 +78,10 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("temp_minimization_turn",
                      &PlayParams::temp_minimization_turn)
       .def_readwrite("history_enabled", &PlayParams::history_enabled)
-      .def_readwrite("self_play", &PlayParams::self_play);
+      .def_readwrite("self_play", &PlayParams::self_play)
+      .def_readwrite("add_noise", &PlayParams::add_noise)
+      .def_readwrite("epsilon", &PlayParams::epsilon)
+      .def_readwrite("alpha", &PlayParams::alpha);
 
   py::class_<PlayManager>(m, "PlayManager")
       .def(py::init([](const GameState* gs, PlayParams params) {

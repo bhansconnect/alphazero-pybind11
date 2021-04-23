@@ -68,10 +68,23 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
   return leaf;
 }
 
-void MCTS::process_result(Vector<float>& value, const Vector<float>& pi) {
+void MCTS::process_result(Vector<float>& value, Vector<float>& pi) {
+  thread_local std::default_random_engine re{std::random_device{}()};
   if (current_->scores.has_value()) {
     value = current_->scores.value();
   } else {
+    if (dist_.has_value()) {
+      auto noise = Vector<float>{pi.size()};
+      auto sum = 0.0;
+      for (auto i = 0U; i < pi.size(); ++i) {
+        noise(i) = (*dist_)(re);
+        sum += noise(i);
+      }
+      for (auto i = 0U; i < pi.size(); ++i) {
+        pi(i) *= 1 - *epsilon_;
+        pi(i) += *epsilon_ * noise(i) / sum;
+      }
+    }
     current_->update_policy(pi);
   }
   while (!path_.empty()) {

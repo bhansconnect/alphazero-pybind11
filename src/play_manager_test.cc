@@ -14,6 +14,7 @@ TEST(PlayManager, Basic) {
   auto params = PlayParams{};
   params.games_to_play = 32;
   params.concurrent_games = 8;
+  params.mcts_depth = {10, 10};
   auto pm = PlayManager{std::make_unique<connect4_gs::Connect4GS>(), params};
   auto play = std::async(std::launch::async, [&] {
     try {
@@ -48,6 +49,7 @@ TEST(PlayManager, MultiThreaded) {
   auto params = PlayParams{};
   params.games_to_play = 32 * workers;
   params.concurrent_games = 8 * workers;
+  params.mcts_depth = {10, 10};
 
   auto pm = PlayManager{std::make_unique<connect4_gs::Connect4GS>(), params};
   auto play_workers = std::vector<std::future<void>>{workers};

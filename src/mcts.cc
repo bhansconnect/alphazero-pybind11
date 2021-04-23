@@ -114,16 +114,21 @@ Vector<float> MCTS::probs(const float temp) const noexcept {
   auto probs = Vector<float>{num_moves_};
 
   if (temp == 0) {
-    auto best_m = 0;
+    auto best_moves = std::vector<int>{0};
     auto best_count = counts(0);
     for (auto m = 1; m < num_moves_; ++m) {
       if (counts(m) > best_count) {
         best_count = counts(m);
-        best_m = m;
+        best_moves.clear();
+        best_moves.push_back(m);
+      } else if (counts(m) == best_count) {
+        best_moves.push_back(m);
       }
     }
     probs.setZero();
-    probs(best_m) = 1;
+    for (auto m : best_moves) {
+      probs(m) = 1.0 / best_moves.size();
+    }
     return probs;
   }
 

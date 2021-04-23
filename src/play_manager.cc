@@ -7,6 +7,9 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
       params_(p),
       games_started_(params_.concurrent_games) {
   games_.reserve(params_.concurrent_games);
+  if (params_.mcts_depth.size() != base_gs_->num_players()) {
+    throw std::runtime_error{"You must specify an MCTS depth for each player"};
+  }
   for (auto i = 0U; i < params_.concurrent_games; ++i) {
     auto gd = GameData{};
     gd.gs = base_gs_->copy();
@@ -46,9 +49,10 @@ void PlayManager::play() {
     auto& game = games_[i.value()];
     if (game.initialized) {
       // Process previous results.
-      auto& mcts = game.mcts[game.gs->current_player()];
+      auto cp = game.gs->current_player();
+      auto& mcts = game.mcts[cp];
       mcts.process_result(game.v, game.pi);
-      if (mcts.depth() >= params_.mcts_depth) {
+      if (mcts.depth() >= params_.mcts_depth[cp]) {
         // Actually play a move.
         auto temp = params_.temp;
         if (game.gs->current_turn() >= params_.temp_minimization_turn) {

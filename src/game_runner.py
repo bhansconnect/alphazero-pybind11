@@ -251,7 +251,7 @@ if __name__ == '__main__':
         nn.save_checkpoint('data/checkpoint', f'{iteration+1:04d}.pt')
         return v_loss, pi_loss
 
-    def self_play(Game, nnargs, iteration):
+    def self_play(Game, nnargs, iteration, depth):
         params = alphazero.PlayParams()
         bs = 512
         n = bs*12
@@ -259,7 +259,7 @@ if __name__ == '__main__':
         params.games_to_play = n
         params.concurrent_games = bs * cb
         params.max_batch_size = bs
-        params.mcts_depth = 100
+        params.mcts_depth = [depth] * Game.NUM_PLAYERS()
         params.history_enabled = True
         params.self_play = True
         params.max_cache_size = 1000000
@@ -290,7 +290,7 @@ if __name__ == '__main__':
         hr = hits/total
         return p1_rate, draw_rate, hr
 
-    def play_rand(Game, nnargs, iteration):
+    def play_rand(Game, nnargs, iteration, nn_depth, rand_depth):
         nn_rate = 0
         draw_rate = 0
         hr = 0
@@ -304,7 +304,9 @@ if __name__ == '__main__':
             params.games_to_play = n
             params.concurrent_games = bs * cb
             params.max_batch_size = bs
-            params.mcts_depth = 100
+            mcts_depth = [rand_depth] * Game.NUM_PLAYERS()
+            mcts_depth[i] = nn_depth
+            params.mcts_depth = mcts_depth
             params.history_enabled = False
             params.self_play = False
             params.max_cache_size = 1000000
@@ -333,15 +335,16 @@ if __name__ == '__main__':
             hr += hits/total
         return nn_rate / Game.NUM_PLAYERS(), draw_rate / Game.NUM_PLAYERS(), hr / Game.NUM_PLAYERS()
 
-    # for channels in [4, 8, 16, 32, 64, 128, 256]:
+    depth = 10
     channels = 64
-    depth = 20
+    nn_mcts_depth = 100
+    rand_mcts_depth = 1600
     if os.path.exists("data"):
         shutil.rmtree('data')
 
     run_name = f'c_{channels}_d_{depth}'
     nnargs = neural_net.NNArgs(
-        num_channels=channels, depth=depth, lr_milestones=[30])
+        num_channels=channels, depth=depth, lr_milestones=[70])
     Game = alphazero.Connect4GS
 
     create_init_net(Game, nnargs,)
@@ -349,17 +352,22 @@ if __name__ == '__main__':
     postfix = {'nn vs rand': 0, 'p1 rate': 0, 'draw rate': 0,
                'v loss': 0, 'pi loss': 0}
     writer = SummaryWriter(f'runs/{run_name}')
-    with tqdm.trange(50, desc='Build Amazing Network') as pbar:
+    with tqdm.trange(100, desc='Build Amazing Network') as pbar:
         for i in pbar:
-            nn_rate, draw_rate, hit_rate = play_rand(Game, nnargs, i)
-            writer.add_scalar('NN vs Rand/NN Win Rate', nn_rate, i)
-            writer.add_scalar('NN vs Rand/Draw Rate', draw_rate, i)
-            writer.add_scalar('NN vs Rand/Cache Hit Rate', hit_rate, i)
-            postfix['nn vs rand'] = nn_rate
+            nn_rate, draw_rate, hit_rate = play_rand(
+                Game, nnargs, i, nn_mcts_depth, rand_mcts_depth)
+            writer.add_scalar(
+                f'NN vs MCTS-{rand_mcts_depth}/NN Win Rate', nn_rate, i)
+            writer.add_scalar(
+                f'NN vs MCTS-{rand_mcts_depth}/Draw Rate', draw_rate, i)
+            writer.add_scalar(
+                f'NN vs MCTS-{rand_mcts_depth}/Cache Hit Rate', hit_rate, i)
+            postfix['nn vs mcts'] = nn_rate
             pbar.set_postfix(postfix)
             gc.collect()
 
-            p1_rate, draw_rate, hit_rate = self_play(Game, nnargs, i)
+            p1_rate, draw_rate, hit_rate = self_play(
+                Game, nnargs, i, nn_mcts_depth)
             writer.add_scalar('Self Play/P1 Win Rate', p1_rate, i)
             writer.add_scalar('Self Play/Draw Rate', draw_rate, i)
             writer.add_scalar('Self Play/Cache Hit Rate', hit_rate, i)

@@ -68,7 +68,7 @@ struct PlayParams {
   uint32_t concurrent_games;
   uint32_t max_batch_size = 1;
   uint32_t max_cache_size = 0;
-  uint32_t mcts_depth = 10;
+  std::vector<uint32_t> mcts_depth{};
   float cpuct = 2.0;
   float temp = 1.0;
   uint32_t temp_minimization_turn = std::numeric_limits<uint32_t>::max();

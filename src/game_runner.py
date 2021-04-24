@@ -265,7 +265,7 @@ if __name__ == '__main__':
         params.max_cache_size = 1000000
         params.temp_minimization_turn = 10
         params.temp = 1
-        params.cpuct = 1
+        params.cpuct = 2
         params.add_noise = True
         params.alpha = 1
         pm = alphazero.PlayManager(Game(), params)
@@ -311,8 +311,8 @@ if __name__ == '__main__':
             params.self_play = False
             params.max_cache_size = 1000000
             params.temp_minimization_turn = 10
-            params.temp = 1
-            params.cpuct = 1
+            params.temp = 0.1
+            params.cpuct = 2
             pm = alphazero.PlayManager(Game(), params)
 
             grargs = GRArgs(title=f'Bench Rand({i+1}/{Game.NUM_PLAYERS()})', game=Game, iteration=iteration,
@@ -336,7 +336,7 @@ if __name__ == '__main__':
         return nn_rate / Game.NUM_PLAYERS(), draw_rate / Game.NUM_PLAYERS(), hr / Game.NUM_PLAYERS()
 
     depth = 10
-    channels = 64
+    channels = 32
     nn_mcts_depth = 100
     rand_mcts_depth = 1600
     if os.path.exists("data"):
@@ -349,7 +349,7 @@ if __name__ == '__main__':
 
     create_init_net(Game, nnargs,)
 
-    postfix = {'nn vs rand': 0, 'p1 rate': 0, 'draw rate': 0,
+    postfix = {'nn vs mcts': 0, 'p1 rate': 0, 'draw rate': 0,
                'v loss': 0, 'pi loss': 0}
     writer = SummaryWriter(f'runs/{run_name}')
     with tqdm.trange(100, desc='Build Amazing Network') as pbar:

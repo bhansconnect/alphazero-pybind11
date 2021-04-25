@@ -44,7 +44,20 @@ PYBIND11_MODULE(alphazero, m) {
           },
           py::call_guard<py::gil_scoped_release>());
 
+  py::class_<MCTS>(m, "MCTS")
+      .def(py::init<float, uint32_t>())
+      .def("update_root", &MCTS::update_root)
+      .def("find_leaf", &MCTS::find_leaf)
+      .def("process_result", &MCTS::process_result)
+      .def("counts", &MCTS::counts)
+      .def("probs", &MCTS::probs)
+      .def("depth", &MCTS::depth)
+      .def_static("pick_move", &MCTS::pick_move);
+
   py::class_<GameData>(m, "GameData")
+      .def(
+          "gs", [](const GameData& gd) { return gd.gs->copy(); },
+          py::call_guard<py::gil_scoped_release>())
       .def(
           "valid_moves",
           [](const GameData& gd) { return gd.gs->valid_moves(); },

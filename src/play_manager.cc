@@ -111,17 +111,6 @@ void PlayManager::play() {
             }
           }
         }
-        // During self-play, always use a clean MCTS.
-        if (params_.self_play) {
-          for (auto& m : game.mcts) {
-            if (params_.add_noise) {
-              m = MCTS{params_.cpuct, base_gs_->num_moves(), params_.epsilon,
-                       params_.alpha};
-            } else {
-              m = MCTS{params_.cpuct, base_gs_->num_moves()};
-            }
-          }
-        }
         // A move has been played, update playout cap and noise.
         game.capped = params_.playout_cap_randomization &&
                       (dist(re) < params_.playout_cap_percent);

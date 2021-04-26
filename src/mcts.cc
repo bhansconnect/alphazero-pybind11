@@ -52,6 +52,24 @@ void MCTS::update_root(const GameState& gs, uint32_t move) {
   root_ = std::move(*x);
 }
 
+void MCTS::add_root_noise(const GameState& gs, bool capped) {
+  thread_local std::default_random_engine re{std::random_device{}()};
+  if (dist_.has_value() && !capped) {
+    if (root_.children.empty()) {
+      root_.add_children(gs.valid_moves());
+    }
+    auto noise = Vector<float>{gs.num_moves()};
+    auto sum = 0.0;
+    for (auto& c : root_.children) {
+      noise(c.move) = (*dist_)(re);
+      sum += noise(c.move);
+    }
+    for (auto& c : root_.children) {
+      c.policy = c.policy * (1 - *epsilon_) + *epsilon_ * noise(c.move) / sum;
+    }
+  }
+}
+
 std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
   current_ = &root_;
   auto leaf = gs.copy();
@@ -69,22 +87,9 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
 }
 
 void MCTS::process_result(Vector<float>& value, Vector<float>& pi) {
-  thread_local std::default_random_engine re{std::random_device{}()};
   if (current_->scores.has_value()) {
     value = current_->scores.value();
   } else {
-    if (dist_.has_value()) {
-      auto noise = Vector<float>{pi.size()};
-      auto sum = 0.0;
-      for (auto i = 0U; i < pi.size(); ++i) {
-        noise(i) = (*dist_)(re);
-        sum += noise(i);
-      }
-      for (auto i = 0U; i < pi.size(); ++i) {
-        pi(i) *= 1 - *epsilon_;
-        pi(i) += *epsilon_ * noise(i) / sum;
-      }
-    }
     current_->update_policy(pi);
   }
   while (!path_.empty()) {

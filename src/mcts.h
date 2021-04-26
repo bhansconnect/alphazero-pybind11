@@ -46,6 +46,7 @@ class MCTS {
   void update_root(const GameState& gs, uint32_t move);
   [[nodiscard]] std::unique_ptr<GameState> find_leaf(const GameState& gs);
   void process_result(Vector<float>& value, Vector<float>& pi);
+  void add_root_noise(const GameState& gs, bool capped = false);
   [[nodiscard]] Vector<uint32_t> counts() const noexcept;
   [[nodiscard]] Vector<float> probs(float temp) const noexcept;
   [[nodiscard]] uint32_t depth() const noexcept { return depth_; };

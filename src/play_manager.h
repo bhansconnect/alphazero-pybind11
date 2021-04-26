@@ -55,7 +55,8 @@ struct PlayHistory {
 
 struct GameData {
   std::unique_ptr<GameState> gs;
-  bool initialized;
+  bool initialized = false;
+  bool capped = false;
   std::vector<MCTS> mcts;
   Tensor<float, 3> canonical;
   Vector<float> v;
@@ -77,6 +78,9 @@ struct PlayParams {
   bool add_noise = false;
   float epsilon = 0.25;
   float alpha = 1.0;
+  bool playout_cap_randomization = false;
+  uint32_t playout_cap_depth = 25;
+  float playout_cap_percent = 0.75;
 };
 
 // This is a multithread safe game play manager.
@@ -121,19 +125,22 @@ class PlayManager {
   void push_inference(const uint32_t i) noexcept { awaiting_mcts_.push(i); }
   [[nodiscard]] GameData& game_data(uint32_t i) noexcept { return games_[i]; }
   [[nodiscard]] const PlayParams& params() const noexcept { return params_; }
-  size_t awaiting_mcts_count() noexcept { return awaiting_mcts_.size(); }
-  size_t awaiting_inference_count() noexcept {
+  uint64_t avg_game_length() const noexcept {
+    return static_cast<float>(game_length_) / games_completed_;
+  }
+  size_t awaiting_mcts_count() const noexcept { return awaiting_mcts_.size(); }
+  size_t awaiting_inference_count() const noexcept {
     return awaiting_inference_.size();
   }
-  size_t hist_count() noexcept { return history_.size(); }
-  [[nodiscard]] size_t cache_hits() {
+  size_t hist_count() const noexcept { return history_.size(); }
+  [[nodiscard]] size_t cache_hits() const {
     size_t out = 0;
     for (auto& cache : caches_) {
       out += cache->hits();
     }
     return out;
   };
-  [[nodiscard]] size_t cache_misses() {
+  [[nodiscard]] size_t cache_misses() const {
     size_t out = 0;
     for (auto& cache : caches_) {
       out += cache->misses();
@@ -149,6 +156,7 @@ class PlayManager {
   std::mutex game_end_mutex_;
   Vector<float> scores_;
   uint32_t games_started_;
+  uint64_t game_length_ = 0;
   uint32_t draws_ = 0;
   std::atomic<uint32_t> games_completed_ = 0;
 

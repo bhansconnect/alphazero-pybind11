@@ -87,6 +87,10 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("max_cache_size", &PlayParams::max_cache_size)
       .def_readwrite("mcts_depth", &PlayParams::mcts_depth)
       .def_readwrite("cpuct", &PlayParams::cpuct)
+      .def_readwrite("playout_cap_randomization",
+                     &PlayParams::playout_cap_randomization)
+      .def_readwrite("playout_cap_depth", &PlayParams::playout_cap_depth)
+      .def_readwrite("playout_cap_percent", &PlayParams::playout_cap_percent)
       .def_readwrite("temp", &PlayParams::temp)
       .def_readwrite("temp_minimization_turn",
                      &PlayParams::temp_minimization_turn)
@@ -114,6 +118,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def("hist_count", &PlayManager::hist_count)
       .def("cache_hits", &PlayManager::cache_hits)
       .def("cache_misses", &PlayManager::cache_misses)
+      .def("avg_game_length", &PlayManager::avg_game_length)
       .def("play", &PlayManager::play, py::call_guard<py::gil_scoped_release>())
       .def("pop_game", &PlayManager::pop_game,
            py::call_guard<py::gil_scoped_release>())

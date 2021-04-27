@@ -408,7 +408,6 @@ if __name__ == '__main__':
     depth = 10
     channels = 32
     nn_mcts_depth = 250
-    nn_compare_mcts_depth = 100
     rand_mcts_depth = 400
     past_compares = [20]
     current_best = 0
@@ -437,7 +436,7 @@ if __name__ == '__main__':
                 for past_compare in past_compares:
                     past_iter = max(0, i - past_compare)
                     nn_rate, draw_rate, hit_rate, game_length = play_past(
-                        Game, nnargs, nn_compare_mcts_depth,  i, past_iter)
+                        Game, nnargs, nn_mcts_depth,  i, past_iter)
                     writer.add_scalar(
                         f'Win Rate/NN vs -{past_compare}', nn_rate, i)
                     writer.add_scalar(
@@ -460,7 +459,7 @@ if __name__ == '__main__':
                     gc.collect()
 
             nn_rate, draw_rate, hit_rate, game_length = play_rand(
-                Game, nnargs, i, nn_compare_mcts_depth, rand_mcts_depth)
+                Game, nnargs, i, nn_mcts_depth, rand_mcts_depth)
             wr[i, mcts_agent] = nn_rate
             wr[mcts_agent, i] = 1-nn_rate
             elos = get_elo(elos, wr, i)

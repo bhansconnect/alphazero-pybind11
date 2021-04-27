@@ -251,7 +251,7 @@ if __name__ == '__main__':
         nn.save_checkpoint('data/checkpoint', f'{iteration+1:04d}.pt')
         return v_loss, pi_loss
 
-    def self_play(Game, nnargs, iteration, depth):
+    def self_play(Game, nnargs, best, iteration, depth):
         params = alphazero.PlayParams()
         bs = 512
         n = bs*12*4
@@ -276,7 +276,7 @@ if __name__ == '__main__':
         grargs = GRArgs(title='Self Play', game=Game, iteration=iteration,
                         max_batch_size=bs, concurrent_batches=cb, result_workers=2)
         nn = neural_net.NNWrapper(Game, nnargs)
-        nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
+        nn.load_checkpoint('data/checkpoint', f'{best:04d}.pt')
         players = []
         for _ in range(Game.NUM_PLAYERS()):
             players.append(nn)
@@ -404,31 +404,37 @@ if __name__ == '__main__':
             past_elo[new_agent] += mean_update*32
         return past_elo
 
+    start = 0
     iters = 200
-    depth = 10
+    depth = 5
     channels = 32
     nn_mcts_depth = 250
     rand_mcts_depth = 400
     past_compares = [20]
-    current_best = 0
     gating_percent = 0.55
     total_agents = iters+2  # + base and mcts
-    wr = np.empty((total_agents, total_agents))
-    wr[:] = np.NAN
     mcts_agent = total_agents - 1
-    elos = np.zeros(total_agents)
 
-    run_name = f'c_{channels}_d_{depth}_pcr_cpuct_4_gating_2'
+    run_name = f'c_{channels}_d_{depth}_pcr_cpuct_4_gating_3'
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth, lr_milestones=[150])
     Game = alphazero.Connect4GS
 
-    create_init_net(Game, nnargs,)
+    if start == 0:
+        create_init_net(Game, nnargs,)
+        wr = np.empty((total_agents, total_agents))
+        wr[:] = np.NAN
+        elos = np.zeros(total_agents)
+        current_best = 0
+    else:
+        wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
+        elos = np.genfromtxt('data/melo.csv', delimiter=',')
+        current_best = np.argmax(elos[:mcts_agent])
 
-    postfix = {'nn vs best': 0, 'best vs mcts': 0, 'elo': 0, 'p1 rate': 0, 'draw rate': 0,
+    postfix = {'current best': 0, 'nn vs best': 0, 'best vs mcts': 0, 'elo': 0, 'p1 rate': 0, 'draw rate': 0,
                'v loss': 0, 'pi loss': 0}
     writer = SummaryWriter(f'runs/{run_name}')
-    with tqdm.trange(iters, desc='Build Amazing Network') as pbar:
+    with tqdm.trange(start, iters, desc='Build Amazing Network') as pbar:
         for i in pbar:
             writer.add_scalar(
                 f'Elo/Current Best', current_best, i)
@@ -495,7 +501,7 @@ if __name__ == '__main__':
             gc.collect()
 
             p1_rate, draw_rate, hit_rate, game_length = self_play(
-                Game, nnargs, current_best, nn_mcts_depth)
+                Game, nnargs, current_best, i, nn_mcts_depth)
             writer.add_scalar('Win Rate/Self Play P1', p1_rate, i)
             writer.add_scalar('Draw Rate/Self Play', draw_rate, i)
             writer.add_scalar('Cache Hit Rate/Self Play', hit_rate, i)
@@ -532,7 +538,9 @@ if __name__ == '__main__':
             pbar.set_postfix(postfix)
             if nn_rate > gating_percent:
                 current_best = next_net
+                postfix['current best'] = current_best
             gc.collect()
             np.savetxt("data/win_rate.csv", wr, delimiter=",")
+            np.savetxt("data/elo.csv", elos, delimiter=",")
 
     writer.close()

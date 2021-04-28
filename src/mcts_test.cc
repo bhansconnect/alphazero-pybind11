@@ -43,7 +43,7 @@ TEST(MCTS, Basic) {
   while (mcts.depth() < 800) {
     auto leaf = mcts.find_leaf(gs);
     auto [value, pi] = dumb_eval(*leaf);
-    mcts.process_result(value, pi);
+    mcts.process_result(gs, value, pi);
   }
   auto counts = mcts.counts();
   std::cout << counts << std::endl;
@@ -59,7 +59,7 @@ TEST(MCTS, Basic) {
   while (mcts.depth() < 800) {
     auto leaf = mcts.find_leaf(gs);
     auto [value, pi] = dumb_eval(*leaf);
-    mcts.process_result(value, pi);
+    mcts.process_result(gs, value, pi);
   }
   counts = mcts.counts();
   std::cout << counts << std::endl;

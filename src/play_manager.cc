@@ -51,7 +51,8 @@ void PlayManager::play() {
       // Process previous results.
       auto cp = game.gs->current_player();
       auto& mcts = game.mcts[cp];
-      mcts.process_result(game.v, game.pi, params_.add_noise && !game.capped);
+      mcts.process_result(*game.gs, game.v, game.pi,
+                          params_.add_noise && !game.capped);
       auto goal_depth =
           game.capped ? params_.playout_cap_depth : params_.mcts_depth[cp];
       if (mcts.depth() >= goal_depth) {

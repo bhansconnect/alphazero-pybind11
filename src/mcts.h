@@ -37,8 +37,8 @@ class MCTS {
         epsilon_(epsilon) {}
   void update_root(const GameState& gs, uint32_t move);
   [[nodiscard]] std::unique_ptr<GameState> find_leaf(const GameState& gs);
-  void process_result(Vector<float>& value, Vector<float>& pi,
-                      bool root_noise_enabled = false);
+  void process_result(const GameState& gs, Vector<float>& value,
+                      Vector<float>& pi, bool root_noise_enabled = false);
   void add_root_noise();
   [[nodiscard]] Vector<uint32_t> counts() const noexcept;
   [[nodiscard]] Vector<float> probs(float temp) const noexcept;

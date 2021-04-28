@@ -228,6 +228,10 @@ class RandPlayer:
         # for a new network and leads to good results. Zero or 1 performs quite poorly.
         self.pi = torch.exp(-2*torch.ones((max_batch_size, game.NUM_MOVES())))
 
+    def predict(self, canonical):
+        v, pi = self.process(canonical.unsqueeze(0))
+        return v[0], pi[0]
+
     def process(self, batch):
         return self.v[:batch.shape[0]], self.pi[:batch.shape[0]]
 

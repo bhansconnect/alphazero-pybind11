@@ -87,8 +87,11 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
   return leaf;
 }
 
-void MCTS::process_result(Vector<float>& value, Vector<float>& pi,
-                          bool root_noise_enabled) {
+void MCTS::process_result(const GameState& gs, Vector<float>& value,
+                          Vector<float>& pi, bool root_noise_enabled) {
+  // Rescale pi based on valid moves.
+  pi.array() *= gs.valid_moves().cast<float>().array();
+  pi /= pi.sum();
   if (current_->scores.has_value()) {
     value = current_->scores.value();
   } else if (root_noise_enabled && current_ == &root_) {

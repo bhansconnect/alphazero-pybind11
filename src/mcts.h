@@ -30,23 +30,16 @@ struct Node {
 
 class MCTS {
  public:
-  MCTS(float cpuct, uint32_t num_moves,
-       std::optional<float> epsilon = std::nullopt,
-       std::optional<float> alpha = std::nullopt)
+  MCTS(float cpuct, uint32_t num_moves, float epsilon = 0)
       : cpuct_(cpuct),
         num_moves_(num_moves),
         current_(&root_),
-        epsilon_(epsilon) {
-    if (alpha.has_value() && epsilon.has_value()) {
-      dist_ = std::gamma_distribution<float>{*alpha, 1.0};
-    } else if (alpha.has_value() || epsilon.has_value()) {
-      throw std::runtime_error{"Both epsilon and alpha must be set"};
-    }
-  }
+        epsilon_(epsilon) {}
   void update_root(const GameState& gs, uint32_t move);
   [[nodiscard]] std::unique_ptr<GameState> find_leaf(const GameState& gs);
-  void process_result(Vector<float>& value, Vector<float>& pi);
-  void add_root_noise(const GameState& gs, bool capped = false);
+  void process_result(Vector<float>& value, Vector<float>& pi,
+                      bool root_noise_enabled = false);
+  void add_root_noise();
   [[nodiscard]] Vector<uint32_t> counts() const noexcept;
   [[nodiscard]] Vector<float> probs(float temp) const noexcept;
   [[nodiscard]] uint32_t depth() const noexcept { return depth_; };
@@ -61,8 +54,7 @@ class MCTS {
   Node root_ = Node{};
   Node* current_;
   std::vector<Node*> path_{};
-  std::optional<float> epsilon_;
-  std::optional<std::gamma_distribution<float>> dist_;
+  float epsilon_;
 };
 
 }  // namespace alphazero

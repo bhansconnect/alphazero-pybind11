@@ -91,14 +91,13 @@ PYBIND11_MODULE(alphazero, m) {
                      &PlayParams::playout_cap_randomization)
       .def_readwrite("playout_cap_depth", &PlayParams::playout_cap_depth)
       .def_readwrite("playout_cap_percent", &PlayParams::playout_cap_percent)
-      .def_readwrite("temp", &PlayParams::temp)
-      .def_readwrite("temp_minimization_turn",
-                     &PlayParams::temp_minimization_turn)
+      .def_readwrite("start_temp", &PlayParams::start_temp)
+      .def_readwrite("final_temp", &PlayParams::final_temp)
+      .def_readwrite("temp_decay_half_life", &PlayParams::temp_decay_half_life)
       .def_readwrite("history_enabled", &PlayParams::history_enabled)
       .def_readwrite("self_play", &PlayParams::self_play)
       .def_readwrite("add_noise", &PlayParams::add_noise)
-      .def_readwrite("epsilon", &PlayParams::epsilon)
-      .def_readwrite("alpha", &PlayParams::alpha);
+      .def_readwrite("epsilon", &PlayParams::epsilon);
 
   py::class_<PlayManager>(m, "PlayManager")
       .def(py::init([](const GameState* gs, PlayParams params) {

@@ -71,13 +71,13 @@ struct PlayParams {
   uint32_t max_cache_size = 0;
   std::vector<uint32_t> mcts_depth{};
   float cpuct = 2.0;
-  float temp = 1.0;
-  uint32_t temp_minimization_turn = std::numeric_limits<uint32_t>::max();
+  float start_temp = 1.0;
+  float final_temp = 1.0;
+  float temp_decay_half_life = 0;
   bool history_enabled = false;
   bool self_play = false;
   bool add_noise = false;
   float epsilon = 0.25;
-  float alpha = 1.0;
   bool playout_cap_randomization = false;
   uint32_t playout_cap_depth = 25;
   float playout_cap_percent = 0.75;
@@ -126,7 +126,8 @@ class PlayManager {
   [[nodiscard]] GameData& game_data(uint32_t i) noexcept { return games_[i]; }
   [[nodiscard]] const PlayParams& params() const noexcept { return params_; }
   uint64_t avg_game_length() const noexcept {
-    return static_cast<float>(game_length_) / games_completed_;
+    return static_cast<float>(game_length_) /
+           static_cast<float>(games_completed_);
   }
   size_t awaiting_mcts_count() const noexcept { return awaiting_mcts_.size(); }
   size_t awaiting_inference_count() const noexcept {

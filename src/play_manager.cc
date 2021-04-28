@@ -1,5 +1,7 @@
 #include "play_manager.h"
 
+#include <cmath>
+
 namespace alphazero {
 
 PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
@@ -14,12 +16,8 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     auto gd = GameData{};
     gd.gs = base_gs_->copy();
     for (auto j = 0; j < base_gs_->num_players(); ++j) {
-      if (params_.add_noise) {
-        gd.mcts.emplace_back(params_.cpuct, base_gs_->num_moves(),
-                             params_.epsilon, params_.alpha);
-      } else {
-        gd.mcts.emplace_back(params_.cpuct, base_gs_->num_moves());
-      }
+      gd.mcts.emplace_back(params_.cpuct, base_gs_->num_moves(),
+                           params_.epsilon);
     }
     gd.v = Vector<float>{base_gs_->num_players()};
     gd.pi = Vector<float>{base_gs_->num_moves()};
@@ -53,14 +51,19 @@ void PlayManager::play() {
       // Process previous results.
       auto cp = game.gs->current_player();
       auto& mcts = game.mcts[cp];
-      mcts.process_result(game.v, game.pi);
+      mcts.process_result(game.v, game.pi, params_.add_noise && !game.capped);
       auto goal_depth =
           game.capped ? params_.playout_cap_depth : params_.mcts_depth[cp];
       if (mcts.depth() >= goal_depth) {
         // Actually play a move.
-        auto temp = params_.temp;
-        if (game.gs->current_turn() >= params_.temp_minimization_turn) {
-          temp = 0;
+        auto temp = params_.start_temp;
+        if (params_.temp_decay_half_life != 0) {
+          const auto t = game.gs->current_turn();
+          constexpr float ln2 = 0.693;
+          const auto lambda = ln2 / params_.temp_decay_half_life;
+          temp -= params_.final_temp;
+          temp *= std::exp(-lambda * t);
+          temp += params_.final_temp;
         }
         const auto pi = mcts.probs(temp);
         const auto chosen_m = MCTS::pick_move(pi);
@@ -103,28 +106,23 @@ void PlayManager::play() {
           // Setup next game.
           game.gs = base_gs_->copy();
           for (auto& m : game.mcts) {
-            if (params_.add_noise) {
-              m = MCTS{params_.cpuct, base_gs_->num_moves(), params_.epsilon,
-                       params_.alpha};
-            } else {
-              m = MCTS{params_.cpuct, base_gs_->num_moves()};
-            }
+            m = MCTS{params_.cpuct, base_gs_->num_moves(), params_.epsilon};
           }
         }
-        // A move has been played, update playout cap and noise.
+        // A move has been played, update playout cap.
         game.capped = params_.playout_cap_randomization &&
                       (dist(re) < params_.playout_cap_percent);
-        for (auto& m : game.mcts) {
-          m.add_root_noise(*game.gs, game.capped);
+        // If Self playing, reset mcts.
+        if (params_.self_play) {
+          for (auto& m : game.mcts) {
+            m = MCTS{params_.cpuct, base_gs_->num_moves(), params_.epsilon};
+          }
         }
       }
     } else {
       game.initialized = true;
       game.capped = params_.playout_cap_randomization &&
                     (dist(re) < params_.playout_cap_percent);
-      for (auto& m : game.mcts) {
-        m.add_root_noise(*game.gs, game.capped);
-      }
     }
     // Find the next leaf to process and put it in the inference queue.
     auto& mcts = game.mcts[game.gs->current_player()];

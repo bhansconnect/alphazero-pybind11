@@ -5,6 +5,9 @@
 
 namespace alphazero {
 
+constexpr const float NOISE_POLICY_TEMP = 1.0 / 1.03;
+constexpr const float NOISE_ALPHA_RATIO = 10.83;
+
 void Node::add_children(const Vector<uint8_t>& valids) noexcept {
   thread_local std::default_random_engine re{std::random_device{}()};
   for (auto w = 0; w < valids.size(); ++w) {
@@ -52,21 +55,19 @@ void MCTS::update_root(const GameState& gs, uint32_t move) {
   root_ = std::move(*x);
 }
 
-void MCTS::add_root_noise(const GameState& gs, bool capped) {
+void MCTS::add_root_noise() {
   thread_local std::default_random_engine re{std::random_device{}()};
-  if (dist_.has_value() && !capped) {
-    if (root_.children.empty()) {
-      root_.add_children(gs.valid_moves());
-    }
-    auto noise = Vector<float>{gs.num_moves()};
-    auto sum = 0.0;
-    for (auto& c : root_.children) {
-      noise(c.move) = (*dist_)(re);
-      sum += noise(c.move);
-    }
-    for (auto& c : root_.children) {
-      c.policy = c.policy * (1 - *epsilon_) + *epsilon_ * noise(c.move) / sum;
-    }
+  const auto legal_move_count = root_.children.size();
+  auto dist =
+      std::gamma_distribution<float>{NOISE_ALPHA_RATIO / legal_move_count, 1.0};
+  auto noise = Vector<float>{num_moves_};
+  auto sum = 0.0;
+  for (auto& c : root_.children) {
+    noise(c.move) = dist(re);
+    sum += noise(c.move);
+  }
+  for (auto& c : root_.children) {
+    c.policy = c.policy * (1 - epsilon_) + epsilon_ * noise(c.move) / sum;
   }
 }
 
@@ -86,12 +87,22 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
   return leaf;
 }
 
-void MCTS::process_result(Vector<float>& value, Vector<float>& pi) {
+void MCTS::process_result(Vector<float>& value, Vector<float>& pi,
+                          bool root_noise_enabled) {
   if (current_->scores.has_value()) {
     value = current_->scores.value();
+  } else if (root_noise_enabled && current_ == &root_) {
+    pi.array().pow(NOISE_POLICY_TEMP);
+    pi /= pi.sum();
+    current_->update_policy(pi);
+    add_root_noise();
   } else {
     current_->update_policy(pi);
   }
+  // Scale value to 0, 1 for mcts.
+  value.array() += 1;
+  value.array() /= 2;
+
   while (!path_.empty()) {
     auto* parent = path_.back();
     path_.pop_back();

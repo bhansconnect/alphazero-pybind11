@@ -15,7 +15,7 @@ if __name__ == '__main__':
     agents = set()
     matchups = set()
     for i in range(wr.shape[0]):
-        for j in range(wr.shape[0]):
+        for j in range(i+1,wr.shape[0]):
             if not math.isnan(wr[i, j]):
                 agents.add(i)
                 matchups.add((i, j))

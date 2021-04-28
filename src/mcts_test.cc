@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <iostream>
+
 #include "connect4_gs.h"
 
 namespace alphazero {
@@ -43,6 +45,8 @@ TEST(MCTS, Basic) {
     auto [value, pi] = dumb_eval(*leaf);
     mcts.process_result(value, pi);
   }
+  auto counts = mcts.counts();
+  std::cout << counts << std::endl;
   EXPECT_EQ(MCTS::pick_move(mcts.probs(0)), 2);
 
   gs = connect4_gs::Connect4GS{};
@@ -57,6 +61,8 @@ TEST(MCTS, Basic) {
     auto [value, pi] = dumb_eval(*leaf);
     mcts.process_result(value, pi);
   }
+  counts = mcts.counts();
+  std::cout << counts << std::endl;
   EXPECT_EQ(MCTS::pick_move(mcts.probs(0)), 2);
 }
 

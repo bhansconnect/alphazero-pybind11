@@ -117,9 +117,9 @@ class GameRunner:
             self.result_queue.get()
         while not self.monitor_queue.empty():
             self.monitor_queue.get()
-        for ready_queue in ready_queues:
-            while not self.ready_queue.empty():
-                self.ready_queue.get()
+        for ready_queue in self.ready_queues:
+            while not ready_queue.empty():
+                ready_queue.get()
 
     def monitor(self):
         last_completed = 0
@@ -286,7 +286,7 @@ if __name__ == '__main__':
         dataloader = DataLoader(dataset, batch_size=512, shuffle=True,
                                 num_workers=11, pin_memory=True)
 
-        v_loss, pi_loss = nn.train(dataloader, 250)
+        v_loss, pi_loss = nn.train(dataloader, min(250*5, len(dataloader)))
         nn.save_checkpoint('data/checkpoint', f'{iteration+1:04d}.pt')
         del nn
         del dataset
@@ -432,7 +432,7 @@ if __name__ == '__main__':
     total_agents = iters+2  # + base and mcts
     mcts_agent = total_agents - 1
 
-    run_name = f'c_{channels}_d_{depth}_kata'
+    run_name = f'c_{channels}_d_{depth}_kata_5x'
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth, lr_milestones=[150])
     Game = alphazero.Connect4GS

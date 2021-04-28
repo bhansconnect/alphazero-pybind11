@@ -117,6 +117,9 @@ class GameRunner:
             self.result_queue.get()
         while not self.monitor_queue.empty():
             self.monitor_queue.get()
+        for ready_queue in ready_queues:
+            while not self.ready_queue.empty():
+                self.ready_queue.get()
 
     def monitor(self):
         last_completed = 0

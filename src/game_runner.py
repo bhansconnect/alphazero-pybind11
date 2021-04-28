@@ -290,7 +290,7 @@ if __name__ == '__main__':
         dataloader = DataLoader(dataset, batch_size=512, shuffle=True,
                                 num_workers=11, pin_memory=True)
 
-        v_loss, pi_loss = nn.train(dataloader, min(250*5, len(dataloader)))
+        v_loss, pi_loss = nn.train(dataloader, 250)
         nn.save_checkpoint('data/checkpoint', f'{iteration+1:04d}.pt')
         del nn
         del dataset
@@ -436,7 +436,7 @@ if __name__ == '__main__':
     total_agents = iters+2  # + base and mcts
     mcts_agent = total_agents - 1
 
-    run_name = f'c_{channels}_d_{depth}_kata_5x'
+    run_name = f'c_{channels}_d_{depth}_kata_fix_pi'
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth, lr_milestones=[150])
     Game = alphazero.Connect4GS

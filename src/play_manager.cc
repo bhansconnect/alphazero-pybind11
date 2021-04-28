@@ -71,7 +71,7 @@ void PlayManager::play() {
         if (params_.history_enabled && !game.capped) {
           PlayHistory ph;
           ph.canonical = game.canonical;
-          ph.pi = pi;
+          ph.pi = mcts.probs(1.0);
           game.partial_history.push_back(ph);
         }
         for (auto& m : game.mcts) {

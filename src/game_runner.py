@@ -110,6 +110,13 @@ class GameRunner:
             pw.join()
         monitor.join()
         hist_saver.join()
+        # clear queues before returning.
+        while not self.batch_queue.empty():
+            self.batch_queue.get()
+        while not self.result_queue.empty():
+            self.result_queue.get()
+        while not self.monitor_queue.empty():
+            self.monitor_queue.get()
 
     def monitor(self):
         last_completed = 0
@@ -240,7 +247,7 @@ if __name__ == '__main__':
     WINDOW_SIZE_SCALAR = 6  # This ends up being approximately first time history doesn't grow
 
     CONCURRENT_BATCHES = 4
-    RESULT_WORKERS = 3
+    RESULT_WORKERS = 2
 
     def base_params(Game, start_temp, bs):
         params = alphazero.PlayParams()
@@ -278,6 +285,9 @@ if __name__ == '__main__':
 
         v_loss, pi_loss = nn.train(dataloader, 250)
         nn.save_checkpoint('data/checkpoint', f'{iteration+1:04d}.pt')
+        del nn
+        del dataset
+        del dataloader
         return v_loss, pi_loss
 
     def self_play(Game, nnargs, best, iteration, depth):
@@ -304,11 +314,14 @@ if __name__ == '__main__':
         gr = GameRunner(players, pm, grargs)
         gr.run()
         p1_rate, draw_rate = calculate_win_draw_rates(
-            n, pm.scores()[i], pm.draws())
+            n, pm.scores()[0], pm.draws())
         hits = pm.cache_hits()
         total = hits + pm.cache_misses()
         hr = hits/total
-        return p1_rate, draw_rate, hr, pm.avg_game_length()
+        agl = pm.avg_game_length()
+        del pm
+        del nn
+        return p1_rate, draw_rate, hr, agl
 
     def play_past(Game, nnargs, depth, iteration, past_iter):
         nn_rate = 0
@@ -343,6 +356,9 @@ if __name__ == '__main__':
             total = hits + pm.cache_misses()
             hr += hits/total
             agl += pm.avg_game_length()
+        del pm
+        del nn
+        del nn_past
         return nn_rate / Game.NUM_PLAYERS(), draw_rate / Game.NUM_PLAYERS(), hr / Game.NUM_PLAYERS(), agl / Game.NUM_PLAYERS()
 
     def play_rand(Game, nnargs, iteration, nn_depth, rand_depth):
@@ -363,7 +379,7 @@ if __name__ == '__main__':
             params.mcts_depth = mcts_depth
             pm = alphazero.PlayManager(Game(), params)
 
-            grargs = GRArgs(title=f'Bench Rand({i+1}/{Game.NUM_PLAYERS()})', game=Game, iteration=iteration,
+            grargs = GRArgs(title=f'Bench Rand MCTS-{rand_depth}({i+1}/{Game.NUM_PLAYERS()})', game=Game, iteration=iteration,
                             max_batch_size=bs, concurrent_batches=CONCURRENT_BATCHES, result_workers=RESULT_WORKERS)
             rand = RandPlayer(Game, bs)
             players = []
@@ -379,6 +395,8 @@ if __name__ == '__main__':
             total = hits + pm.cache_misses()
             hr += hits/total
             agl += pm.avg_game_length()
+        del pm
+        del nn
         return nn_rate / Game.NUM_PLAYERS(), draw_rate / Game.NUM_PLAYERS(), hr / Game.NUM_PLAYERS(), agl / Game.NUM_PLAYERS()
 
     def elo_prob(r1, r2):
@@ -420,12 +438,12 @@ if __name__ == '__main__':
         create_init_net(Game, nnargs,)
         wr = np.empty((total_agents, total_agents))
         wr[:] = np.NAN
-        elos = np.zeros(total_agents)
+        elo = np.zeros(total_agents)
         current_best = 0
     else:
         wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
-        elos = np.genfromtxt('data/melo.csv', delimiter=',')
-        current_best = np.argmax(elos[:mcts_agent])
+        elo = np.genfromtxt('data/melo.csv', delimiter=',')
+        current_best = np.argmax(elo[:mcts_agent])
 
     postfix = {'current best': 0, 'nn vs best': 0, 'best vs mcts': 0, 'elo': 0, 'p1 rate': 0, 'draw rate': 0,
                'v loss': 0, 'pi loss': 0}
@@ -464,12 +482,12 @@ if __name__ == '__main__':
                 Game, nnargs, i, nn_compare_mcts_depth, rand_mcts_depth)
             wr[i, mcts_agent] = nn_rate
             wr[mcts_agent, i] = 1-nn_rate
-            elos = get_elo(elos, wr, i)
+            elo = get_elo(elo, wr, i)
             if i == 0:
                 # Anchor first net to zero.
-                elos[mcts_agent] -= elos[0]
-                elos[0] -= elos[0]
-            postfix['elo'] = elos[i]
+                elo[mcts_agent] -= elo[0]
+                elo[0] -= elo[0]
+            postfix['elo'] = elo[i]
             pbar.set_postfix(postfix)
             writer.add_scalar(
                 f'Win Rate/NN vs MCTS-{rand_mcts_depth}', nn_rate, i)
@@ -480,10 +498,10 @@ if __name__ == '__main__':
             writer.add_scalar(
                 f'Average Game Length/NN vs MCTS-{rand_mcts_depth}', game_length, i)
             writer.add_scalar(
-                f'Elo/NN', elos[i], i)
+                f'Elo/NN', elo[i], i)
             if i == current_best:
                 writer.add_scalar(
-                    f'Elo/Best', elos[i], i)
+                    f'Elo/Best', elo[i], i)
                 writer.add_scalar(
                     f'Win Rate/Best vs MCTS-{rand_mcts_depth}', nn_rate, i)
                 writer.add_scalar(
@@ -539,6 +557,6 @@ if __name__ == '__main__':
                 postfix['current best'] = current_best
             gc.collect()
             np.savetxt("data/win_rate.csv", wr, delimiter=",")
-            np.savetxt("data/elo.csv", elos, delimiter=",")
+            np.savetxt("data/elo.csv", elo, delimiter=",")
 
     writer.close()

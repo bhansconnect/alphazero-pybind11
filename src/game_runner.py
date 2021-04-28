@@ -555,6 +555,7 @@ if __name__ == '__main__':
             if nn_rate > gating_percent:
                 current_best = next_net
                 postfix['current best'] = current_best
+                pbar.set_postfix(postfix)
             gc.collect()
             np.savetxt("data/win_rate.csv", wr, delimiter=",")
             np.savetxt("data/elo.csv", elo, delimiter=",")

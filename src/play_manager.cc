@@ -19,6 +19,7 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
       gd.mcts.emplace_back(params_.cpuct, base_gs_->num_moves(),
                            params_.epsilon);
     }
+    gd.canonical = Tensor<float, 3>{base_gs_->canonicalized()};
     gd.v = Vector<float>{base_gs_->num_players()};
     gd.pi = Vector<float>{base_gs_->num_moves()};
     gd.v.setZero();
@@ -69,9 +70,12 @@ void PlayManager::play() {
         const auto pi = mcts.probs(temp);
         const auto chosen_m = MCTS::pick_move(pi);
         if (params_.history_enabled && !game.capped) {
-          PlayHistory ph;
-          ph.canonical = game.canonical;
-          ph.pi = mcts.probs(1.0);
+          PlayHistory ph{
+              .canonical = Tensor<float, 3>{game.gs->canonicalized()},
+              .v = Vector<float>{game.v.size()},
+              .pi = Vector<float>{mcts.probs(1.0)},
+          };
+          ph.v.setZero();
           game.partial_history.push_back(ph);
         }
         for (auto& m : game.mcts) {

@@ -40,6 +40,15 @@ class MCTS {
   void process_result(const GameState& gs, Vector<float>& value,
                       Vector<float>& pi, bool root_noise_enabled = false);
   void add_root_noise();
+  [[nodiscard]] float root_value() const {
+    float q = 0;
+    for (const auto& c : root_.children) {
+      if (c.q > q) {
+        q = c.q;
+      }
+    }
+    return q;
+  }
   [[nodiscard]] Vector<uint32_t> counts() const noexcept;
   [[nodiscard]] Vector<float> probs(float temp) const noexcept;
   [[nodiscard]] uint32_t depth() const noexcept { return depth_; };

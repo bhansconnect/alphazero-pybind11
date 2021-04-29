@@ -66,21 +66,21 @@ class NNArch(nn.Module):
                 args.num_channels, args.num_channels))
         self.resnet = nn.Sequential(*self.res_layers)
 
-        self.v_conv = conv1x1(args.num_channels, 1)
-        self.v_bn = nn.BatchNorm2d(1)
+        self.v_conv = conv1x1(args.num_channels, 32)
+        self.v_bn = nn.BatchNorm2d(32)
         self.v_relu = nn.ReLU(inplace=True)
         self.v_flatten = nn.Flatten()
-        self.v_fc1 = nn.Linear(in_x*in_y,
-                               in_x*in_y//2)
+        self.v_fc1 = nn.Linear(32*in_x*in_y,
+                               256)
         self.v_fc1_relu = nn.ReLU(inplace=True)
-        self.v_fc2 = nn.Linear(in_x*in_y//2, game.NUM_PLAYERS())
+        self.v_fc2 = nn.Linear(256, game.NUM_PLAYERS())
         self.v_tanh = nn.Tanh()
 
-        self.pi_conv = conv1x1(args.num_channels, 2)
-        self.pi_bn = nn.BatchNorm2d(2)
+        self.pi_conv = conv1x1(args.num_channels, 32)
+        self.pi_bn = nn.BatchNorm2d(32)
         self.pi_relu = nn.ReLU(inplace=True)
         self.pi_flatten = nn.Flatten()
-        self.pi_fc1 = nn.Linear(in_x*in_y*2, game.NUM_MOVES())
+        self.pi_fc1 = nn.Linear(in_x*in_y*32, game.NUM_MOVES())
         self.pi_softmax = nn.LogSoftmax(1)
 
     def forward(self, s):

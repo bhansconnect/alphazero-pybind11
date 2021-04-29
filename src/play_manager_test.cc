@@ -15,6 +15,8 @@ TEST(PlayManager, Basic) {
   params.games_to_play = 32;
   params.concurrent_games = 8;
   params.mcts_depth = {10, 10};
+  params.history_enabled = true;
+  params.playout_cap_randomization = true;
   auto pm = PlayManager{std::make_unique<connect4_gs::Connect4GS>(), params};
   auto play = std::async(std::launch::async, [&] {
     try {

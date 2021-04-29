@@ -424,6 +424,7 @@ if __name__ == '__main__':
             past_elo[new_agent] += mean_update*32
         return past_elo
 
+    bootstrap_iters = 0
     start = 0
     iters = 200
     depth = 5
@@ -436,7 +437,8 @@ if __name__ == '__main__':
     total_agents = iters+2  # + base and mcts
     mcts_agent = total_agents - 1
 
-    run_name = f'c_{channels}_d_{depth}_kata_fix_pi'
+    run_name = f'c_{channels}_d_{depth}_kata_large_head_fix_hist'
+    writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth, lr_milestones=[150])
     Game = alphazero.Connect4GS
@@ -449,12 +451,29 @@ if __name__ == '__main__':
         current_best = 0
     else:
         wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
-        elo = np.genfromtxt('data/melo.csv', delimiter=',')
+        elo = np.genfromtxt('data/elo.csv', delimiter=',')
         current_best = np.argmax(elo[:mcts_agent])
 
-    postfix = {'current best': 0, 'nn vs best': 0, 'best vs mcts': 0, 'elo': 0, 'p1 rate': 0, 'draw rate': 0,
-               'v loss': 0, 'pi loss': 0}
-    writer = SummaryWriter(f'runs/{run_name}')
+    postfix = {}
+    if bootstrap_iters > 0 and bootstrap_iters > start:
+        # We are just going to assume the new nets have similar elo to the past instead of running many comparisons matches.
+        prev_elo = np.genfromtxt('data/elo.csv', delimiter=',')
+        elo[mcts_agent] = prev_elo[-1]
+        start = bootstrap_iters
+        with tqdm.trange(bootstrap_iters, desc='Bootstraping Network') as pbar:
+            for i in pbar:
+                elo[i] = prev_elo[i]
+                hist_size = calc_hist_size(i)
+                v_loss, pi_loss = train(Game, nnargs, i, hist_size)
+                writer.add_scalar('Loss/V', v_loss, i)
+                writer.add_scalar('Loss/Pi', pi_loss, i)
+                writer.add_scalar('Loss/Total', v_loss+pi_loss, i)
+                postfix['v loss'] = v_loss
+                postfix['pi loss'] = pi_loss
+                pbar.set_postfix(postfix)
+                gc.collect()
+        current_best = bootstrap_iters
+
     with tqdm.trange(start, iters, desc='Build Amazing Network') as pbar:
         for i in pbar:
             writer.add_scalar(
@@ -526,7 +545,8 @@ if __name__ == '__main__':
             writer.add_scalar('Win Rate/Self Play P1', p1_rate, i)
             writer.add_scalar('Draw Rate/Self Play', draw_rate, i)
             writer.add_scalar('Cache Hit Rate/Self Play', hit_rate, i)
-            writer.add_scalar('Average Game Length/Self Play', game_length, i)
+            writer.add_scalar(
+                'Average Game Length/Self Play', game_length, i)
             postfix['p1 rate'] = p1_rate
             postfix['draw rate'] = draw_rate
             pbar.set_postfix(postfix)

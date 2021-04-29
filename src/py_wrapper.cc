@@ -1,3 +1,8 @@
+#define eigen_assert(X)                     \
+  do {                                      \
+    if (!(X)) throw std::runtime_error(#X); \
+  } while (false);
+
 #include <pybind11/eigen.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -49,6 +54,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def("update_root", &MCTS::update_root)
       .def("find_leaf", &MCTS::find_leaf)
       .def("process_result", &MCTS::process_result)
+      .def("root_value", &MCTS::root_value)
       .def("counts", &MCTS::counts)
       .def("probs", &MCTS::probs)
       .def("depth", &MCTS::depth)

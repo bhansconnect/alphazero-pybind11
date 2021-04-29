@@ -20,14 +20,13 @@ TEMP = 0.5
 def eval_posistion(gs, agent, depth):
     mcts = alphazero.MCTS(CPUCT, gs.num_moves())
     v, pi = agent.predict(torch.from_numpy(gs.canonicalized()))
-    pi = np.multiply(pi.cpu().numpy(), gs.valid_moves())
-    pi /= np.sum(pi)
     print(f'\tRaw Score: {v.cpu().numpy()}')
-    print(f'\tRaw Probs: {pi}')
+    print(f'\tRaw Probs: {pi.cpu().numpy()}')
     for _ in range(depth):
         leaf = mcts.find_leaf(gs)
         v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
         mcts.process_result(gs, v.cpu().numpy(), pi.cpu().numpy(), False)
+    print(f'\tMCTS Value: {mcts.root_value()}')
     print(f'\tMCTS Counts: {mcts.counts()}')
     print(f'\tMCTS Probs: {mcts.probs(TEMP)}')
 
@@ -39,7 +38,9 @@ if __name__ == '__main__':
     np.set_printoptions(precision=3, suppress=True)
     Game = alphazero.Connect4GS
     nn_folder = 'data/checkpoint'
-    nn_file = os.path.basename(sorted(glob.glob(os.path.join(nn_folder,'*.pt')))[-1])
+    nn_file = os.path.basename(
+        sorted(glob.glob(os.path.join(nn_folder, '*.pt')))[-1])
+
     print(f'Using network: {nn_file}')
     depth = 5
     channels = 32

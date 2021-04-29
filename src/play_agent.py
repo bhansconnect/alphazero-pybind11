@@ -38,8 +38,9 @@ if __name__ == '__main__':
 
     np.set_printoptions(precision=3, suppress=True)
     Game = alphazero.Connect4GS
-    nn_folder = 'data/checkpoint_kata_v1'
-    nn_file = '0121.pt'
+    nn_folder = 'data/checkpoint'
+    nn_file = os.path.basename(sorted(glob.glob(os.path.join(nn_folder,'*.pt')))[-1])
+    print(f'Using network: {nn_file}')
     depth = 5
     channels = 32
     nnargs = neural_net.NNArgs(num_channels=channels, depth=depth)

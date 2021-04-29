@@ -95,7 +95,7 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
   if (current_->scores.has_value()) {
     value = current_->scores.value();
   } else if (root_noise_enabled && current_ == &root_) {
-    pi.array().pow(NOISE_POLICY_TEMP);
+    pi = pi.array().pow(NOISE_POLICY_TEMP);
     pi /= pi.sum();
     current_->update_policy(pi);
     add_root_noise();
@@ -152,7 +152,8 @@ Vector<float> MCTS::probs(const float temp) const noexcept {
   }
 
   probs = counts.cast<float>();
-  probs.array().pow(1 / temp);
+  probs /= probs.sum();
+  probs = probs.array().pow(1 / temp);
   probs /= probs.sum();
   return probs;
 }

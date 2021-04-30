@@ -106,7 +106,7 @@ TEST(Connect4GS, WinState) {
   EXPECT_EQ(x.scores(), std::nullopt);
 
   auto board = SizedTensor<int8_t, Eigen::Sizes<2, HEIGHT, WIDTH>>{};
-  auto expected = std::optional<SizedVector<float, 2>>{};
+  auto expected = std::optional<SizedVector<float, 3>>{};
 
   board.setZero();
   board(0, 3, 0) = 1;
@@ -114,7 +114,7 @@ TEST(Connect4GS, WinState) {
   board(0, 3, 2) = 1;
   board(0, 3, 3) = 1;
   x = Connect4GS{board, 0, 0};
-  expected = {1, -1};
+  expected = {1, 0, 0};
   EXPECT_EQ(x.scores(), expected);
 
   board(0, 3, 2) = 0;
@@ -127,7 +127,7 @@ TEST(Connect4GS, WinState) {
   board(1, 3, 2) = 1;
   board(1, 4, 2) = 1;
   x = Connect4GS{board, 0, 0};
-  expected = {-1, 1};
+  expected = {0, 1, 0};
   EXPECT_EQ(x.scores(), expected);
 
   board(1, 2, 2) = 0;
@@ -140,7 +140,7 @@ TEST(Connect4GS, WinState) {
   board(0, 3, 3) = 1;
   board(0, 4, 4) = 1;
   x = Connect4GS{board, 0, 0};
-  expected = {1, -1};
+  expected = {1, 0, 0};
   EXPECT_EQ(x.scores(), expected);
 
   board(0, 2, 2) = 0;
@@ -153,7 +153,7 @@ TEST(Connect4GS, WinState) {
   board(1, 3, 1) = 1;
   board(1, 4, 0) = 1;
   x = Connect4GS{board, 0, 0};
-  expected = {-1, 1};
+  expected = {0, 1, 0};
   EXPECT_EQ(x.scores(), expected);
 
   board(1, 2, 2) = 0;
@@ -166,7 +166,7 @@ TEST(Connect4GS, WinState) {
     board(w % 2, 0, w) = 1;
   }
   x = Connect4GS{board, 0, 0};
-  expected = {0, 0};
+  expected = {0, 0, 1};
   EXPECT_EQ(x.scores(), expected);
 }
 

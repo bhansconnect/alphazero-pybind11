@@ -27,14 +27,6 @@ GRArgs = namedtuple(
     'GRArgs', ['title', 'game', 'max_batch_size', 'iteration',  'data_save_size', 'data_folder', 'concurrent_batches', 'batch_workers', 'nn_workers', 'result_workers', 'mcts_workers', 'cuda'], defaults=(0, 30000, 'data/history', 0, 0, 1, 1, os.cpu_count() - 1, torch.cuda.is_available()))
 
 
-def calculate_win_draw_rates(n, p1_score, draws):
-    p1_wins = (n+p1_score-draws)/2
-    p1_adj_wins = p1_wins + draws/Game.NUM_PLAYERS()
-    p1_rate = p1_adj_wins/n
-    draw_rate = draws/n
-    return p1_rate, draw_rate
-
-
 class GameRunner:
     def __init__(self, players, pm, args):
         self.players = players
@@ -66,7 +58,7 @@ class GameRunner:
         self.hist_canonical = torch.zeros(
             self.args.data_save_size, cs[0], cs[1], cs[2])
         self.hist_v = torch.zeros(
-            self.args.data_save_size, self.num_players)
+            self.args.data_save_size, self.num_players+1)
         self.hist_pi = torch.zeros(
             self.args.data_save_size, self.args.game.NUM_MOVES())
         shape = (self.args.max_batch_size, cs[0], cs[1], cs[2])
@@ -138,12 +130,13 @@ class GameRunner:
                 total = hits + self.pm.cache_misses()
                 if total > 0:
                     hr = hits/total
-                draw_rate = 0
-                p1_rate = 0
                 completed = self.pm.games_completed()
+                p1_rate = 0
+                draw_rate = 0
                 if completed > 0:
-                    p1_rate, draw_rate = calculate_win_draw_rates(
-                        completed, self.pm.scores()[0], self.pm.draws())
+                    scores = self.pm.scores()
+                    p1_rate = scores[0]/completed
+                    draw_rate = scores[-1]/completed
                 pbar.set_postfix({
                     'p1 rate': p1_rate,
                     'draw rate': draw_rate,
@@ -156,8 +149,9 @@ class GameRunner:
         total = hits + self.pm.cache_misses()
         if total > 0:
             hr = hits/total
-        p1_rate, draw_rate = calculate_win_draw_rates(
-            n, self.pm.scores()[0], self.pm.draws())
+        scores = self.pm.scores()
+        p1_rate = scores[0]/n
+        draw_rate = scores[-1]/n
         pbar.set_postfix({
             'p1 rate': p1_rate,
             'draw rate': draw_rate,
@@ -223,7 +217,8 @@ class GameRunner:
 
 class RandPlayer:
     def __init__(self, game, max_batch_size):
-        self.v = torch.zeros((max_batch_size, game.NUM_PLAYERS()))
+        self.v = torch.zeros((max_batch_size, game.NUM_PLAYERS()+1))
+        self.v[:, game.NUM_PLAYERS()] = torch.ones((max_batch_size,))
         # I'm not really sure why, but e^-2 seems to be the average value here
         # for a new network and leads to good results. Zero or 1 performs quite poorly.
         self.pi = torch.exp(-2*torch.ones((max_batch_size, game.NUM_MOVES())))
@@ -320,8 +315,9 @@ if __name__ == '__main__':
             players.append(nn)
         gr = GameRunner(players, pm, grargs)
         gr.run()
-        p1_rate, draw_rate = calculate_win_draw_rates(
-            n, pm.scores()[0], pm.draws())
+        scores = pm.scores()
+        p1_rate = scores[0]/n
+        draw_rate = scores[-1]/n
         hits = pm.cache_hits()
         total = hits + pm.cache_misses()
         hr = hits/total
@@ -356,9 +352,9 @@ if __name__ == '__main__':
             players[i] = nn
             gr = GameRunner(players, pm, grargs)
             gr.run()
-            wr, dr = calculate_win_draw_rates(n, pm.scores()[i], pm.draws())
-            nn_rate += wr
-            draw_rate += dr
+            scores = pm.scores()
+            nn_rate += scores[i]/n
+            draw_rate += scores[-1]/n
             hits = pm.cache_hits()
             total = hits + pm.cache_misses()
             hr += hits/total
@@ -395,9 +391,9 @@ if __name__ == '__main__':
             players[i] = nn
             gr = GameRunner(players, pm, grargs)
             gr.run()
-            wr, dr = calculate_win_draw_rates(n, pm.scores()[i], pm.draws())
-            nn_rate += wr
-            draw_rate += dr
+            scores = pm.scores()
+            nn_rate += scores[i]/n
+            draw_rate += scores[-1]/n
             hits = pm.cache_hits()
             total = hits + pm.cache_misses()
             hr += hits/total
@@ -437,7 +433,7 @@ if __name__ == '__main__':
     total_agents = iters+2  # + base and mcts
     mcts_agent = total_agents - 1
 
-    run_name = f'c_{channels}_d_{depth}_kata_large_head_fix_hist'
+    run_name = f'c_{channels}_d_{depth}_kata_log_v'
     writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth, lr_milestones=[150])
@@ -454,7 +450,8 @@ if __name__ == '__main__':
         elo = np.genfromtxt('data/elo.csv', delimiter=',')
         current_best = np.argmax(elo[:mcts_agent])
 
-    postfix = {}
+    postfix = {'best': current_best, 'elo': 0, 'vs best': 0,
+               'vs mcts': 0, 'p1rate': 0, 'drawrate': 0, 'vloss': 0, 'ploss': 0}
     if bootstrap_iters > 0 and bootstrap_iters > start:
         # We are just going to assume the new nets have similar elo to the past instead of running many comparisons matches.
         prev_elo = np.genfromtxt('data/elo.csv', delimiter=',')
@@ -468,11 +465,12 @@ if __name__ == '__main__':
                 writer.add_scalar('Loss/V', v_loss, i)
                 writer.add_scalar('Loss/Pi', pi_loss, i)
                 writer.add_scalar('Loss/Total', v_loss+pi_loss, i)
-                postfix['v loss'] = v_loss
-                postfix['pi loss'] = pi_loss
+                postfix['vloss'] = v_loss
+                postfix['ploss'] = pi_loss
                 pbar.set_postfix(postfix)
                 gc.collect()
         current_best = bootstrap_iters
+        postfix['best'] = current_best
 
     with tqdm.trange(start, iters, desc='Build Amazing Network') as pbar:
         for i in pbar:
@@ -513,7 +511,7 @@ if __name__ == '__main__':
                 # Anchor first net to zero.
                 elo[mcts_agent] -= elo[0]
                 elo[0] -= elo[0]
-            postfix['elo'] = elo[i]
+            postfix['elo'] = int(elo[i])
             pbar.set_postfix(postfix)
             writer.add_scalar(
                 f'Win Rate/NN vs MCTS-{rand_mcts_depth}', nn_rate, i)
@@ -525,6 +523,8 @@ if __name__ == '__main__':
                 f'Average Game Length/NN vs MCTS-{rand_mcts_depth}', game_length, i)
             writer.add_scalar(
                 f'Elo/NN', elo[i], i)
+            postfix['vs mcts'] = nn_rate
+            pbar.set_postfix(postfix)
             if i == current_best:
                 writer.add_scalar(
                     f'Elo/Best', elo[i], i)
@@ -536,8 +536,6 @@ if __name__ == '__main__':
                     f'Cache Hit Rate/Best vs MCTS-{rand_mcts_depth}', hit_rate, i)
                 writer.add_scalar(
                     f'Average Game Length/Best vs MCTS-{rand_mcts_depth}', game_length, i)
-                postfix['best vs mcts'] = nn_rate
-                pbar.set_postfix(postfix)
             gc.collect()
 
             p1_rate, draw_rate, hit_rate, game_length = self_play(
@@ -547,8 +545,8 @@ if __name__ == '__main__':
             writer.add_scalar('Cache Hit Rate/Self Play', hit_rate, i)
             writer.add_scalar(
                 'Average Game Length/Self Play', game_length, i)
-            postfix['p1 rate'] = p1_rate
-            postfix['draw rate'] = draw_rate
+            postfix['p1rate'] = p1_rate
+            postfix['drawrate'] = draw_rate
             pbar.set_postfix(postfix)
             gc.collect()
 
@@ -558,8 +556,8 @@ if __name__ == '__main__':
             writer.add_scalar('Loss/V', v_loss, i)
             writer.add_scalar('Loss/Pi', pi_loss, i)
             writer.add_scalar('Loss/Total', v_loss+pi_loss, i)
-            postfix['v loss'] = v_loss
-            postfix['pi loss'] = pi_loss
+            postfix['vloss'] = v_loss
+            postfix['ploss'] = pi_loss
             pbar.set_postfix(postfix)
             gc.collect()
 
@@ -577,11 +575,11 @@ if __name__ == '__main__':
                 f'Cache Hit Rate/NN vs Best', hit_rate, next_net)
             writer.add_scalar(
                 f'Average Game Length/NN vs Best', game_length, next_net)
-            postfix['nn vs best'] = nn_rate
+            postfix['vs best'] = nn_rate
             pbar.set_postfix(postfix)
             if nn_rate > gating_percent:
                 current_best = next_net
-                postfix['current best'] = current_best
+                postfix['best'] = current_best
                 pbar.set_postfix(postfix)
             gc.collect()
             np.savetxt("data/win_rate.csv", wr, delimiter=",")

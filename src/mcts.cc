@@ -102,14 +102,13 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
   } else {
     current_->update_policy(pi);
   }
-  // Scale value to 0, 1 for mcts.
-  value.array() += 1;
-  value.array() /= 2;
 
   while (!path_.empty()) {
     auto* parent = path_.back();
     path_.pop_back();
     auto v = value(parent->player);
+    // Add draws.
+    v += value(num_players_) / num_players_;
     current_->q = (current_->q * static_cast<float>(current_->n) + v) /
                   static_cast<float>(current_->n + 1);
     ++current_->n;

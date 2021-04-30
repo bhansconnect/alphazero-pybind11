@@ -6,7 +6,7 @@ from torch.autograd import profiler
 from tqdm import tqdm
 
 NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'lr_milestones',
-                               'lr', 'cuda'], defaults=([40], 0.01, torch.cuda.is_available()))
+                               'lr', 'cv', 'cuda'], defaults=([40], 0.01, 1.5, torch.cuda.is_available()))
 
 
 def conv1x1(in_channels, out_channels, stride=1):
@@ -73,8 +73,8 @@ class NNArch(nn.Module):
         self.v_fc1 = nn.Linear(32*in_x*in_y,
                                256)
         self.v_fc1_relu = nn.ReLU(inplace=True)
-        self.v_fc2 = nn.Linear(256, game.NUM_PLAYERS())
-        self.v_tanh = nn.Tanh()
+        self.v_fc2 = nn.Linear(256, game.NUM_PLAYERS()+1)
+        self.v_softmax = nn.LogSoftmax(1)
 
         self.pi_conv = conv1x1(args.num_channels, 32)
         self.pi_bn = nn.BatchNorm2d(32)
@@ -97,7 +97,7 @@ class NNArch(nn.Module):
             v = self.v_fc1(v)
             v = self.v_fc1_relu(v)
             v = self.v_fc2(v)
-            v = self.v_tanh(v)
+            v = self.v_softmax(v)
 
         with profiler.record_function("pi-head"):
             pi = self.pi_conv(s)
@@ -118,6 +118,7 @@ class NNWrapper:
         self.scheduler = optim.lr_scheduler.MultiStepLR(
             self.optimizer, milestones=args.lr_milestones, gamma=0.1)
         self.cuda = args.cuda
+        self.cv = args.cv
         if self.cuda:
             self.nnet.cuda()
 
@@ -172,13 +173,14 @@ class NNWrapper:
         self.nnet.eval()
         with torch.no_grad():
             v, pi = self.nnet(batch)
-            return v, torch.exp(pi)
+            return torch.exp(v), torch.exp(pi)
 
     def loss_pi(self, targets, outputs):
         return -torch.sum(targets * outputs) / targets.size()[0]
 
     def loss_v(self, targets, outputs):
-        return torch.sum((targets - outputs) ** 2) / targets.size()[0]
+        # return torch.sum((targets - outputs) ** 2) / targets.size()[0]
+        return -self.cv * torch.sum(targets * outputs) / targets.size()[0]
 
     def save_checkpoint(self, folder='data/checkpoint', filename='checkpoint.pt'):
         filepath = os.path.join(folder, filename)

@@ -99,7 +99,6 @@ class PlayManager {
                          const Eigen::Ref<const Matrix<float>>& pi);
 
   [[nodiscard]] const Vector<float> scores() const noexcept { return scores_; }
-  [[nodiscard]] uint32_t draws() const noexcept { return draws_; }
   [[nodiscard]] uint32_t remaining_games() const noexcept {
     return params_.games_to_play - games_completed_;
   }
@@ -158,7 +157,6 @@ class PlayManager {
   Vector<float> scores_;
   uint32_t games_started_;
   uint64_t game_length_ = 0;
-  uint32_t draws_ = 0;
   std::atomic<uint32_t> games_completed_ = 0;
 
   ConcurrentQueue<uint32_t> awaiting_mcts_;

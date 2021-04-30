@@ -20,8 +20,8 @@ class GameState {
   virtual ~GameState() = default;
 
   [[nodiscard]] virtual std::unique_ptr<GameState> copy() const noexcept = 0;
-  [[nodiscard]] virtual bool operator==(
-      const GameState& other) const noexcept = 0;
+  [[nodiscard]] virtual bool operator==(const GameState& other) const
+      noexcept = 0;
   [[nodiscard]] bool operator!=(const GameState& other) const noexcept {
     return !(*this == other);
   }
@@ -46,10 +46,12 @@ class GameState {
   virtual void play_move(uint32_t move) = 0;
 
   // Returns nullopt if the game isn't over.
-  // Returns the score for each player if the game is over.
-  // Normally this is: 1 for win, -1 for loss, 0 for draw.
-  [[nodiscard]] virtual std::optional<Vector<float>> scores()
-      const noexcept = 0;
+  // Returns a one hot encode result of the game.
+  // The first num player positions are set to 1 if that player won and 0
+  // otherwise. The last position is set to 1 if the game was a draw and 0
+  // otherwise.
+  [[nodiscard]] virtual std::optional<Vector<float>> scores() const
+      noexcept = 0;
 
   // Returns the canonicalized form of the board, ready for feeding to a NN.
   [[nodiscard]] virtual Tensor<float, 3> canonicalized() const noexcept = 0;
@@ -63,8 +65,9 @@ class GameState {
 [[nodiscard]] std::tuple<Vector<float>, Vector<float>> dumb_eval(
     const GameState& gs) {
   auto valids = gs.valid_moves();
-  auto values = Vector<float>{gs.num_players()};
+  auto values = Vector<float>{gs.num_players() + 1};
   values.setZero();
+  values(gs.num_players()) = 1;
   auto policy = Vector<float>{gs.num_moves()};
   policy.setZero();
   float sum = valids.sum();

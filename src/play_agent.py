@@ -18,7 +18,7 @@ TEMP = 0.5
 
 
 def eval_posistion(gs, agent, depth):
-    mcts = alphazero.MCTS(CPUCT, gs.num_moves())
+    mcts = alphazero.MCTS(CPUCT, gs.num_players(), gs.num_moves())
     v, pi = agent.predict(torch.from_numpy(gs.canonicalized()))
     print(f'\tRaw Score: {v.cpu().numpy()}')
     print(f'\tRaw Probs: {pi.cpu().numpy()}')
@@ -26,7 +26,7 @@ def eval_posistion(gs, agent, depth):
         leaf = mcts.find_leaf(gs)
         v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
         mcts.process_result(gs, v.cpu().numpy(), pi.cpu().numpy(), False)
-    print(f'\tMCTS Value: {mcts.root_value()}')
+    print(f'\tMCTS Value Current Player: {mcts.root_value()}')
     print(f'\tMCTS Counts: {mcts.counts()}')
     print(f'\tMCTS Probs: {mcts.probs(TEMP)}')
 

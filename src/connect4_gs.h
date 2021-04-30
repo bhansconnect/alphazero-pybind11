@@ -54,8 +54,10 @@ class Connect4GS : public GameState {
   void play_move(uint32_t move) override;
 
   // Returns nullopt if the game isn't over.
-  // Returns the score for each player if the game is over.
-  // This is: 1 for win, -1 for loss, 0 for draw.
+  // Returns a one hot encode result of the game.
+  // The first num player positions are set to 1 if that player won and 0
+  // otherwise. The last position is set to 1 if the game was a draw and 0
+  // otherwise.
   [[nodiscard]] std::optional<Vector<float>> scores() const noexcept override;
 
   // Returns the canonicalized form of the board, ready for feeding to a NN.

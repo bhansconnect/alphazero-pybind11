@@ -16,11 +16,11 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     auto gd = GameData{};
     gd.gs = base_gs_->copy();
     for (auto j = 0; j < base_gs_->num_players(); ++j) {
-      gd.mcts.emplace_back(params_.cpuct, base_gs_->num_moves(),
-                           params_.epsilon);
+      gd.mcts.emplace_back(params_.cpuct, base_gs_->num_players(),
+                           base_gs_->num_moves(), params_.epsilon);
     }
     gd.canonical = Tensor<float, 3>{base_gs_->canonicalized()};
-    gd.v = Vector<float>{base_gs_->num_players()};
+    gd.v = Vector<float>{base_gs_->num_players() + 1};
     gd.pi = Vector<float>{base_gs_->num_moves()};
     gd.v.setZero();
     gd.pi.setZero();
@@ -35,7 +35,7 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
       break;
     }
   }
-  scores_ = Vector<float>{base_gs_->num_players()};
+  scores_ = Vector<float>{base_gs_->num_players() + 1};
   scores_.setZero();
 }
 
@@ -97,9 +97,6 @@ void PlayManager::play() {
           {
             std::unique_lock<std::mutex>{game_end_mutex_};
             scores_ += scores.value();
-            if (scores_(0) == 0) {
-              ++draws_;
-            }
             ++games_completed_;
             game_length_ += game.gs->current_turn();
             // If we have started enough games just loop and complete games.
@@ -111,7 +108,8 @@ void PlayManager::play() {
           // Setup next game.
           game.gs = base_gs_->copy();
           for (auto& m : game.mcts) {
-            m = MCTS{params_.cpuct, base_gs_->num_moves(), params_.epsilon};
+            m = MCTS{params_.cpuct, base_gs_->num_players(),
+                     base_gs_->num_moves(), params_.epsilon};
           }
         }
         // A move has been played, update playout cap.
@@ -120,7 +118,8 @@ void PlayManager::play() {
         // If Self playing, reset mcts.
         if (params_.self_play) {
           for (auto& m : game.mcts) {
-            m = MCTS{params_.cpuct, base_gs_->num_moves(), params_.epsilon};
+            m = MCTS{params_.cpuct, base_gs_->num_players(),
+                     base_gs_->num_moves(), params_.epsilon};
           }
         }
       }

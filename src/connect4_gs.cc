@@ -6,8 +6,8 @@ namespace alphazero::connect4_gs {
   return std::make_unique<Connect4GS>(board_, player_, turn_);
 }
 
-[[nodiscard]] bool Connect4GS::operator==(
-    const GameState& other) const noexcept {
+[[nodiscard]] bool Connect4GS::operator==(const GameState& other) const
+    noexcept {
   const auto* other_cs = dynamic_cast<const Connect4GS*>(&other);
   if (other_cs == nullptr) {
     return false;
@@ -46,7 +46,8 @@ void Connect4GS::play_move(uint32_t move) {
 }
 
 [[nodiscard]] std::optional<Vector<float>> Connect4GS::scores() const noexcept {
-  auto scores = SizedVector<float, 2>{};
+  auto scores = SizedVector<float, 3>{};
+  scores.setZero();
   for (auto p = 0; p < 2; ++p) {
     for (auto h = 0; h < HEIGHT; ++h) {
       auto total = 0;
@@ -57,8 +58,7 @@ void Connect4GS::play_move(uint32_t move) {
           total = 0;
         }
         if (total == 4) {
-          scores[p] = 1;
-          scores[(p + 1) % 2] = -1;
+          scores(p) = 1;
           return scores;
         }
       }
@@ -72,8 +72,7 @@ void Connect4GS::play_move(uint32_t move) {
           total = 0;
         }
         if (total == 4) {
-          scores[p] = 1;
-          scores[(p + 1) % 2] = -1;
+          scores(p) = 1;
           return scores;
         }
       }
@@ -88,8 +87,7 @@ void Connect4GS::play_move(uint32_t move) {
           }
         }
         if (good) {
-          scores[p] = 1;
-          scores[(p + 1) % 2] = -1;
+          scores(p) = 1;
           return scores;
         }
       }
@@ -102,8 +100,7 @@ void Connect4GS::play_move(uint32_t move) {
           }
         }
         if (good) {
-          scores[p] = 1;
-          scores[(p + 1) % 2] = -1;
+          scores(p) = 1;
           return scores;
         }
       }
@@ -115,7 +112,7 @@ void Connect4GS::play_move(uint32_t move) {
       return std::nullopt;
     }
   }
-  scores.setZero();
+  scores(2) = 1;
   return scores;
 }
 

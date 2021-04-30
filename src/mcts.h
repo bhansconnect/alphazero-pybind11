@@ -30,8 +30,9 @@ struct Node {
 
 class MCTS {
  public:
-  MCTS(float cpuct, uint32_t num_moves, float epsilon = 0)
+  MCTS(float cpuct, uint32_t num_players, uint32_t num_moves, float epsilon = 0)
       : cpuct_(cpuct),
+        num_players_(num_players),
         num_moves_(num_moves),
         current_(&root_),
         epsilon_(epsilon) {}
@@ -57,6 +58,7 @@ class MCTS {
 
  private:
   float cpuct_;
+  int32_t num_players_;
   int32_t num_moves_;
 
   uint32_t depth_ = 0;

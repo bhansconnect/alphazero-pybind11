@@ -32,6 +32,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def("__str__", &GameState::dump,
            py::call_guard<py::gil_scoped_release>())
       .def("current_player", &GameState::current_player)
+      .def("num_players", &GameState::num_players)
       .def("num_moves", &GameState::num_moves)
       .def("valid_moves", &GameState::valid_moves,
            py::call_guard<py::gil_scoped_release>())
@@ -50,7 +51,7 @@ PYBIND11_MODULE(alphazero, m) {
           py::call_guard<py::gil_scoped_release>());
 
   py::class_<MCTS>(m, "MCTS")
-      .def(py::init<float, uint32_t>())
+      .def(py::init<float, uint32_t, uint32_t>())
       .def("update_root", &MCTS::update_root)
       .def("find_leaf", &MCTS::find_leaf)
       .def("process_result", &MCTS::process_result)
@@ -115,7 +116,6 @@ PYBIND11_MODULE(alphazero, m) {
       .def("params", &PlayManager::params,
            py::return_value_policy::reference_internal)
       .def("scores", &PlayManager::scores)
-      .def("draws", &PlayManager::draws)
       .def("games_completed", &PlayManager::games_completed)
       .def("remaining_games", &PlayManager::remaining_games)
       .def("awaiting_inference_count", &PlayManager::awaiting_inference_count)

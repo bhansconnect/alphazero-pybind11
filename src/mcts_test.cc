@@ -39,7 +39,7 @@ TEST(MCTS, Basic) {
   gs.play_move(6);
   gs.play_move(3);
   gs.play_move(6);
-  auto mcts = MCTS{2, gs.num_moves()};
+  auto mcts = MCTS{2, gs.num_players(), gs.num_moves()};
   while (mcts.depth() < 800) {
     auto leaf = mcts.find_leaf(gs);
     auto [value, pi] = dumb_eval(*leaf);
@@ -55,7 +55,7 @@ TEST(MCTS, Basic) {
   gs.play_move(3);
   gs.play_move(6);
   gs.play_move(4);
-  mcts = MCTS{2, gs.num_moves()};
+  mcts = MCTS{2, gs.num_players(), gs.num_moves()};
   while (mcts.depth() < 800) {
     auto leaf = mcts.find_leaf(gs);
     auto [value, pi] = dumb_eval(*leaf);

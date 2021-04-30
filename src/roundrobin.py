@@ -1,5 +1,5 @@
 import neural_net
-from game_runner import GameRunner, GRArgs, RandPlayer
+from game_runner import GameRunner, GRArgs, RandPlayer, base_params
 import glob
 import importlib.util
 import os
@@ -29,16 +29,9 @@ def pit_agents(Game, players, mcts_depths, bs, name):
         for j in range(np):
             ordered_players[j] = players[(j+i) % np]
 
+        params = base_params(Game, 0.5, bs)
         params.games_to_play = n
-        params.concurrent_games = bs * cb
-        params.max_batch_size = bs
         params.mcts_depth = mcts_depths
-        params.history_enabled = False
-        params.self_play = False
-        params.max_cache_size = 1000000
-        params.temp_minimization_turn = 10
-        params.temp = 0.1
-        params.cpuct = 2
         pm = alphazero.PlayManager(Game(), params)
 
         grargs = GRArgs(title=f'{name}({i+1}/{np})', game=Game,
@@ -46,11 +39,9 @@ def pit_agents(Game, players, mcts_depths, bs, name):
         gr = GameRunner(ordered_players, pm, grargs)
         gr.run()
         scores = pm.scores()
-        draws = pm.draws()
         for j in range(np):
-            wins = (n+scores[j]-draws)/2
-            adj_wins = wins + draws/np
-            win_rates[(j+i) % np] += adj_wins/n
+            wins = scores[j] + scores[-1]/np
+            win_rates[(j+i) % np] += wins/n
         gc.collect()
     for i in range(np):
         win_rates[i] /= np
@@ -60,14 +51,14 @@ def pit_agents(Game, players, mcts_depths, bs, name):
 if __name__ == '__main__':
     nn_agents = [os.path.basename(x) for x in sorted(
         glob.glob('data/roundrobin/*.pt'))]
-    rand_agents = [100, 400, 1600, 6400]
+    rand_agents = [6400]
     agents = nn_agents + rand_agents
 
     Game = alphazero.Connect4GS
     bs = 32
-    depth = 10
+    depth = 5
     channels = 32
-    nn_mtcs_depth = 100
+    nn_mtcs_depth = 250
 
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth)
@@ -104,3 +95,7 @@ if __name__ == '__main__':
             print(win_matrix[i])
     print()
     print(win_matrix)
+    print()
+    print(agents)
+    np.savetxt('data/roundrobin_wr.csv', win_matrix,
+               delimiter=',', header=','.join([str(a) for a in agents]))

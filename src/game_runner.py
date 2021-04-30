@@ -217,11 +217,10 @@ class GameRunner:
 
 class RandPlayer:
     def __init__(self, game, max_batch_size):
-        self.v = torch.zeros((max_batch_size, game.NUM_PLAYERS()+1))
-        self.v[:, game.NUM_PLAYERS()] = torch.ones((max_batch_size,))
-        # I'm not really sure why, but e^-2 seems to be the average value here
-        # for a new network and leads to good results. Zero or 1 performs quite poorly.
-        self.pi = torch.exp(-2*torch.ones((max_batch_size, game.NUM_MOVES())))
+        self.v = torch.ones((max_batch_size, game.NUM_PLAYERS()+1))
+        self.v /= torch.sum(self.v)
+        self.pi = torch.ones((max_batch_size, game.NUM_MOVES()))
+        self.pi /= torch.sum(self.pi)
 
     def predict(self, canonical):
         v, pi = self.process(canonical.unsqueeze(0))
@@ -231,36 +230,38 @@ class RandPlayer:
         return self.v[:batch.shape[0]], self.pi[:batch.shape[0]]
 
 
+EXPECTED_OPENING_LENGTH = 6
+CPUCT = 2
+SELF_PLAY_TEMP = 1
+EVAL_TEMP = 0.5
+TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
+FINAL_TEMP = 0.2
+MAX_CACHE_SIZE = 1000000
+
+# To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
+WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
+WINDOW_SIZE_BETA = 0.7  # This decides the rough overall slope.
+WINDOW_SIZE_SCALAR = 6  # This ends up being approximately first time history doesn't grow
+
+CONCURRENT_BATCHES = 4
+RESULT_WORKERS = 2
+
+
+def base_params(Game, start_temp, bs):
+    params = alphazero.PlayParams()
+    params.max_cache_size = MAX_CACHE_SIZE
+    params.cpuct = CPUCT
+    params.start_temp = start_temp
+    params.temp_decay_half_life = TEMP_DECAY_HALF_LIFE
+    params.final_temp = FINAL_TEMP
+    params.max_batch_size = bs
+    params.concurrent_games = bs * CONCURRENT_BATCHES
+    return params
+
+
 if __name__ == '__main__':
     import shutil
     import neural_net
-
-    EXPECTED_OPENING_LENGTH = 6
-    CPUCT = 2
-    SELF_PLAY_TEMP = 1
-    EVAL_TEMP = 0.5
-    TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
-    FINAL_TEMP = 0.2
-    MAX_CACHE_SIZE = 1000000
-
-    # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
-    WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
-    WINDOW_SIZE_BETA = 0.7  # This decides the rough overall slope.
-    WINDOW_SIZE_SCALAR = 6  # This ends up being approximately first time history doesn't grow
-
-    CONCURRENT_BATCHES = 4
-    RESULT_WORKERS = 2
-
-    def base_params(Game, start_temp, bs):
-        params = alphazero.PlayParams()
-        params.max_cache_size = MAX_CACHE_SIZE
-        params.cpuct = CPUCT
-        params.start_temp = start_temp
-        params.temp_decay_half_life = TEMP_DECAY_HALF_LIFE
-        params.final_temp = FINAL_TEMP
-        params.max_batch_size = bs
-        params.concurrent_games = bs * CONCURRENT_BATCHES
-        return params
 
     def create_init_net(Game, nnargs):
         nn = neural_net.NNWrapper(Game, nnargs)

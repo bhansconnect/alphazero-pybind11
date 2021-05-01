@@ -1,10 +1,9 @@
 #include "mcts.h"
 
-#include <gtest/gtest.h>
-
 #include <iostream>
 
 #include "connect4_gs.h"
+#include "gtest/gtest.h"
 
 namespace alphazero {
 namespace {

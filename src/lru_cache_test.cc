@@ -1,6 +1,6 @@
 #include "lru_cache.h"
 
-#include <gtest/gtest.h>
+#include "gtest/gtest.h"
 
 namespace alphazero {
 namespace {

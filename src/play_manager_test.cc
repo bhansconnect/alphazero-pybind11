@@ -1,10 +1,9 @@
 #include "play_manager.h"
 
-#include <gtest/gtest.h>
-
 #include <future>
 
 #include "connect4_gs.h"
+#include "gtest/gtest.h"
 
 namespace alphazero {
 namespace {

@@ -1,17 +1,11 @@
-#include <stdexcept>
-#undef eigen_assert
-#define eigen_assert(x) \
-  if (!(x)) throw std::runtime_error("Eigen is angry!!!");
-
-#include <pybind11/eigen.h>
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
 #include <cmath>
 
 #include "connect4_gs.h"
 #include "play_manager.h"
+#include "pybind11/eigen.h"
+#include "pybind11/numpy.h"
+#include "pybind11/pybind11.h"
+#include "pybind11/stl.h"
 
 // This file deals with exposing C++ to Python.
 // It uses Pybind11 for this.

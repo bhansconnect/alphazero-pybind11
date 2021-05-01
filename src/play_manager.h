@@ -1,7 +1,5 @@
 #pragma once
 
-#include <absl/hash/hash.h>
-
 #include <atomic>
 #include <deque>
 #include <limits>
@@ -9,6 +7,7 @@
 #include <optional>
 #include <vector>
 
+#include "absl/hash/hash.h"
 #include "concurrent_queue.h"
 #include "game_state.h"
 #include "lru_cache.h"

@@ -1,11 +1,11 @@
 #pragma once
 
-#include <absl/container/flat_hash_map.h>
-
 #include <iterator>
 #include <list>
 #include <mutex>
 #include <optional>
+
+#include "absl/container/flat_hash_map.h"
 
 namespace alphazero {
 

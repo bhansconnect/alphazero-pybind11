@@ -5,8 +5,8 @@
 #define eigen_assert(x) \
   if (!(x)) throw std::runtime_error("Eigen is angry!!!");
 
-#include <Eigen/Dense>
-#include <unsupported/Eigen/CXX11/Tensor>
+#include "Eigen/Dense"
+#include "unsupported/Eigen/CXX11/Tensor"
 
 namespace alphazero {
 

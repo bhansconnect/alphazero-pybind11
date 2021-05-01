@@ -1,9 +1,7 @@
 #include <stdexcept>
 #undef eigen_assert
-#define eigen_assert(X)                     \
-  do {                                      \
-    if (!(X)) throw std::runtime_error(#X); \
-  } while (false);
+#define eigen_assert(x) \
+  if (!(x)) throw std::runtime_error("Eigen is angry!!!");
 
 #include <pybind11/eigen.h>
 #include <pybind11/numpy.h>

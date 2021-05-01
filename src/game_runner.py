@@ -2,7 +2,6 @@ import glob
 import importlib.util
 import os
 from collections import namedtuple
-from multiprocessing.pool import ThreadPool as Pool
 import math
 import time
 import torch
@@ -84,15 +83,16 @@ class GameRunner:
             player_workers.append(threading.Thread(
                 target=self.player_executor))
             player_workers[i].start()
+        mcts_workers = []
+        for i in range(self.args.mcts_workers):
+            mcts_workers.append(threading.Thread(
+                target=self.pm.play))
+            mcts_workers[i].start()
 
         monitor = threading.Thread(target=self.monitor)
         monitor.start()
         hist_saver = threading.Thread(target=self.hist_saver)
         hist_saver.start()
-
-        with Pool(self.args.mcts_workers) as pool:
-            pool.map(lambda _: self.pm.play(),
-                     range(self.args.mcts_workers), 1)
 
         for bw in batch_workers:
             bw.join()
@@ -100,18 +100,10 @@ class GameRunner:
             rw.join()
         for pw in player_workers:
             pw.join()
+        for mw in mcts_workers:
+            mw.join()
         monitor.join()
         hist_saver.join()
-        # clear queues before returning.
-        while not self.batch_queue.empty():
-            self.batch_queue.get()
-        while not self.result_queue.empty():
-            self.result_queue.get()
-        while not self.monitor_queue.empty():
-            self.monitor_queue.get()
-        for ready_queue in self.ready_queues:
-            while not ready_queue.empty():
-                ready_queue.get()
 
     def monitor(self):
         last_completed = 0
@@ -135,7 +127,8 @@ class GameRunner:
                 draw_rate = 0
                 if completed > 0:
                     scores = self.pm.scores()
-                    p1_rate = scores[0]/completed
+                    p1_rate = (scores[0] + scores[-1] /
+                               self.num_players)/completed
                     draw_rate = scores[-1]/completed
                 pbar.set_postfix({
                     'p1 rate': p1_rate,
@@ -150,7 +143,7 @@ class GameRunner:
         if total > 0:
             hr = hits/total
         scores = self.pm.scores()
-        p1_rate = scores[0]/n
+        p1_rate = (scores[0] + scores[-1]/self.num_players)/n
         draw_rate = scores[-1]/n
         pbar.set_postfix({
             'p1 rate': p1_rate,
@@ -317,7 +310,7 @@ if __name__ == '__main__':
         gr = GameRunner(players, pm, grargs)
         gr.run()
         scores = pm.scores()
-        p1_rate = scores[0]/n
+        p1_rate = (scores[0] + scores[-1]/Game.NUM_PLAYERS())/n
         draw_rate = scores[-1]/n
         hits = pm.cache_hits()
         total = hits + pm.cache_misses()
@@ -354,7 +347,7 @@ if __name__ == '__main__':
             gr = GameRunner(players, pm, grargs)
             gr.run()
             scores = pm.scores()
-            nn_rate += scores[i]/n
+            nn_rate += (scores[i] + scores[-1]/Game.NUM_PLAYERS())/n
             draw_rate += scores[-1]/n
             hits = pm.cache_hits()
             total = hits + pm.cache_misses()
@@ -393,7 +386,7 @@ if __name__ == '__main__':
             gr = GameRunner(players, pm, grargs)
             gr.run()
             scores = pm.scores()
-            nn_rate += scores[i]/n
+            nn_rate += (scores[i] + scores[-1]/Game.NUM_PLAYERS())/n
             draw_rate += scores[-1]/n
             hits = pm.cache_hits()
             total = hits + pm.cache_misses()
@@ -434,7 +427,7 @@ if __name__ == '__main__':
     total_agents = iters+2  # + base and mcts
     mcts_agent = total_agents - 1
 
-    run_name = f'c_{channels}_d_{depth}_kata_log_v'
+    run_name = f'c_{channels}_d_{depth}_kata_log_v_bootstrap'
     writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth, lr_milestones=[150])

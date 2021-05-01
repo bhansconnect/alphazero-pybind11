@@ -2,10 +2,8 @@
 
 #include <stdexcept>
 #undef eigen_assert
-#define eigen_assert(X)                     \
-  do {                                      \
-    if (!(X)) throw std::runtime_error(#X); \
-  } while (false);
+#define eigen_assert(x) \
+  if (!(x)) throw std::runtime_error("Eigen is angry!!!");
 
 #include <Eigen/Dense>
 #include <unsupported/Eigen/CXX11/Tensor>

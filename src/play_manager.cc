@@ -115,7 +115,7 @@ void PlayManager::play() {
         // A move has been played, update playout cap.
         game.capped = params_.playout_cap_randomization &&
                       (dist(re) < params_.playout_cap_percent);
-        // If Self playing, reset mcts.
+        // If self playing, reset mcts.
         if (params_.self_play) {
           for (auto& m : game.mcts) {
             m = MCTS{params_.cpuct, base_gs_->num_players(),

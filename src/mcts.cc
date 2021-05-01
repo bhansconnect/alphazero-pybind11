@@ -5,7 +5,6 @@
 
 namespace alphazero {
 
-constexpr const float NOISE_POLICY_TEMP = 1.0 / 1.03;
 constexpr const float NOISE_ALPHA_RATIO = 10.83;
 
 void Node::add_children(const Vector<uint8_t>& valids) noexcept {
@@ -89,16 +88,19 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
 
 void MCTS::process_result(const GameState& gs, Vector<float>& value,
                           Vector<float>& pi, bool root_noise_enabled) {
+  if (current_->scores.has_value()) {
+    value = current_->scores.value();
+  }
   // Rescale pi based on valid moves.
   pi.array() *= gs.valid_moves().cast<float>().array();
   pi /= pi.sum();
-  if (current_->scores.has_value()) {
-    value = current_->scores.value();
-  } else if (root_noise_enabled && current_ == &root_) {
-    pi = pi.array().pow(NOISE_POLICY_TEMP);
+  if (current_ == &root_) {
+    pi = pi.array().pow(1.0 / root_policy_temp_);
     pi /= pi.sum();
     current_->update_policy(pi);
-    add_root_noise();
+    if (root_noise_enabled) {
+      add_root_noise();
+    }
   } else {
     current_->update_policy(pi);
   }
@@ -170,7 +172,7 @@ uint32_t MCTS::pick_move(const Vector<float>& p) {
   }
   // Due to floating point error we didn't pick a move.
   // Pick the last valid move.
-  for (auto m = static_cast<int64_t>(p.size()); m >= 0; --m) {
+  for (auto m = static_cast<int64_t>(p.size() - 1); m >= 0; --m) {
     if (p(m) > 0) {
       return m;
     }

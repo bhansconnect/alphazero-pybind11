@@ -17,7 +17,8 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     gd.gs = base_gs_->copy();
     for (auto j = 0; j < base_gs_->num_players(); ++j) {
       gd.mcts.emplace_back(params_.cpuct, base_gs_->num_players(),
-                           base_gs_->num_moves(), params_.epsilon);
+                           base_gs_->num_moves(), params_.epsilon,
+                           params_.mcts_root_temp);
     }
     gd.canonical = Tensor<float, 3>{base_gs_->canonicalized()};
     gd.v = Vector<float>{base_gs_->num_players() + 1};
@@ -109,7 +110,8 @@ void PlayManager::play() {
           game.gs = base_gs_->copy();
           for (auto& m : game.mcts) {
             m = MCTS{params_.cpuct, base_gs_->num_players(),
-                     base_gs_->num_moves(), params_.epsilon};
+                     base_gs_->num_moves(), params_.epsilon,
+                     params_.mcts_root_temp};
           }
         }
         // A move has been played, update playout cap.
@@ -119,7 +121,8 @@ void PlayManager::play() {
         if (params_.self_play) {
           for (auto& m : game.mcts) {
             m = MCTS{params_.cpuct, base_gs_->num_players(),
-                     base_gs_->num_moves(), params_.epsilon};
+                     base_gs_->num_moves(), params_.epsilon,
+                     params_.mcts_root_temp};
           }
         }
       }
@@ -156,8 +159,9 @@ void PlayManager::update_inferences(const uint8_t player,
     game.v = v.row(i);
     game.pi = pi.row(i);
     if (params_.max_cache_size > 0) {
-      caches_[params_.self_play ? 0 : player]->insert(game.canonical,
-                                                      {game.v, game.pi});
+      caches_[params_.self_play ? 0 : player]->insert(
+          Tensor<float, 3>{game.canonical},
+          {Vector<float>{game.v}, Vector<float>{game.pi}});
     }
     awaiting_mcts_.push(game_indices[i]);
   }

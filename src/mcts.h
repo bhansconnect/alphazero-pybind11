@@ -30,12 +30,14 @@ struct Node {
 
 class MCTS {
  public:
-  MCTS(float cpuct, uint32_t num_players, uint32_t num_moves, float epsilon = 0)
+  MCTS(float cpuct, uint32_t num_players, uint32_t num_moves, float epsilon = 0,
+       float root_policy_temp = 1.4)
       : cpuct_(cpuct),
         num_players_(num_players),
         num_moves_(num_moves),
         current_(&root_),
-        epsilon_(epsilon) {}
+        epsilon_(epsilon),
+        root_policy_temp_(root_policy_temp) {}
   void update_root(const GameState& gs, uint32_t move);
   [[nodiscard]] std::unique_ptr<GameState> find_leaf(const GameState& gs);
   void process_result(const GameState& gs, Vector<float>& value,
@@ -66,6 +68,7 @@ class MCTS {
   Node* current_;
   std::vector<Node*> path_{};
   float epsilon_;
+  float root_policy_temp_;
 };
 
 }  // namespace alphazero

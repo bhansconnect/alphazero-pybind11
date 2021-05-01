@@ -78,6 +78,7 @@ struct PlayParams {
   bool self_play = false;
   bool add_noise = false;
   float epsilon = 0.25;
+  float mcts_root_temp = 1.4;
   bool playout_cap_randomization = false;
   uint32_t playout_cap_depth = 25;
   float playout_cap_percent = 0.75;

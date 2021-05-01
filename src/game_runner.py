@@ -358,44 +358,6 @@ if __name__ == '__main__':
         del nn_past
         return nn_rate / Game.NUM_PLAYERS(), draw_rate / Game.NUM_PLAYERS(), hr / Game.NUM_PLAYERS(), agl / Game.NUM_PLAYERS()
 
-    def play_rand(Game, nnargs, iteration, nn_depth, rand_depth):
-        nn_rate = 0
-        draw_rate = 0
-        hr = 0
-        agl = 0
-        nn = neural_net.NNWrapper(Game, nnargs)
-        nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
-        for i in range(Game.NUM_PLAYERS()):
-            params = alphazero.PlayParams()
-            bs = 128
-            n = bs*4
-            params = base_params(Game, EVAL_TEMP, bs)
-            params.games_to_play = n
-            mcts_depth = [rand_depth] * Game.NUM_PLAYERS()
-            mcts_depth[i] = nn_depth
-            params.mcts_depth = mcts_depth
-            pm = alphazero.PlayManager(Game(), params)
-
-            grargs = GRArgs(title=f'Bench Rand MCTS-{rand_depth}({i+1}/{Game.NUM_PLAYERS()})', game=Game, iteration=iteration,
-                            max_batch_size=bs, concurrent_batches=CONCURRENT_BATCHES, result_workers=RESULT_WORKERS)
-            rand = RandPlayer(Game, bs)
-            players = []
-            for _ in range(Game.NUM_PLAYERS()):
-                players.append(rand)
-            players[i] = nn
-            gr = GameRunner(players, pm, grargs)
-            gr.run()
-            scores = pm.scores()
-            nn_rate += (scores[i] + scores[-1]/Game.NUM_PLAYERS())/n
-            draw_rate += scores[-1]/n
-            hits = pm.cache_hits()
-            total = hits + pm.cache_misses()
-            hr += hits/total
-            agl += pm.avg_game_length()
-        del pm
-        del nn
-        return nn_rate / Game.NUM_PLAYERS(), draw_rate / Game.NUM_PLAYERS(), hr / Game.NUM_PLAYERS(), agl / Game.NUM_PLAYERS()
-
     def elo_prob(r1, r2):
         return 1.0 / (1 + 1.0 * math.pow(10, 1.0 * (r1-r2) / 400))
 
@@ -421,13 +383,11 @@ if __name__ == '__main__':
     channels = 32
     nn_selfplay_mcts_depth = 250
     nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
-    rand_mcts_depth = 400
-    past_compares = [20]
+    compare_past = 20
     gating_percent = 0.52
-    total_agents = iters+2  # + base and mcts
-    mcts_agent = total_agents - 1
+    total_agents = iters+1  # + base
 
-    run_name = f'c_{channels}_d_{depth}_kata_log_v_bootstrap'
+    run_name = f'c_{channels}_d_{depth}'
     writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth, lr_milestones=[150])
@@ -442,14 +402,13 @@ if __name__ == '__main__':
     else:
         wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
         elo = np.genfromtxt('data/elo.csv', delimiter=',')
-        current_best = np.argmax(elo[:mcts_agent])
+        current_best = np.argmax(elo)
 
     postfix = {'best': current_best, 'elo': 0, 'vs best': 0,
-               'vs mcts': 0, 'p1rate': 0, 'drawrate': 0, 'vloss': 0, 'ploss': 0}
+               f'vs -{compare_past}': 0, 'p1rate': 0, 'drawrate': 0, 'vloss': 0, 'ploss': 0}
     if bootstrap_iters > 0 and bootstrap_iters > start:
         # We are just going to assume the new nets have similar elo to the past instead of running many comparisons matches.
         prev_elo = np.genfromtxt('data/elo.csv', delimiter=',')
-        elo[mcts_agent] = prev_elo[-1]
         start = bootstrap_iters
         with tqdm.trange(bootstrap_iters, desc='Bootstraping Network') as pbar:
             for i in pbar:
@@ -471,66 +430,37 @@ if __name__ == '__main__':
             writer.add_scalar(
                 f'Elo/Current Best', current_best, i)
             if i > 0:
-                for past_compare in past_compares:
-                    past_iter = max(0, i - past_compare)
-                    nn_rate, draw_rate, hit_rate, game_length = play_past(
-                        Game, nnargs, nn_compare_mcts_depth,  i, past_iter)
+                past_iter = max(0, i - compare_past)
+                nn_rate, draw_rate, hit_rate, game_length = play_past(
+                    Game, nnargs, nn_compare_mcts_depth,  i, past_iter)
+                wr[i, past_iter] = nn_rate
+                wr[past_iter, i] = 1-nn_rate
+                elo = get_elo(elo, wr, i)
+                writer.add_scalar(
+                    f'Win Rate/NN vs -{compare_past}', nn_rate, i)
+                writer.add_scalar(
+                    f'Draw Rate/NN vs -{compare_past}', draw_rate, i)
+                writer.add_scalar(
+                    f'Cache Hit Rate/NN vs -{compare_past}', hit_rate, i)
+                writer.add_scalar(
+                    f'Average Game Length/NN vs -{compare_past}', game_length, i)
+                writer.add_scalar(
+                    f'Elo/NN', elo[i], i)
+                if i == current_best:
                     writer.add_scalar(
-                        f'Win Rate/NN vs -{past_compare}', nn_rate, i)
+                        f'Win Rate/Best vs -{compare_past}', nn_rate, i)
                     writer.add_scalar(
-                        f'Draw Rate/NN vs -{past_compare}', draw_rate, i)
+                        f'Draw Rate/Best vs -{compare_past}', draw_rate, i)
                     writer.add_scalar(
-                        f'Cache Hit Rate/NN vs -{past_compare}', hit_rate, i)
+                        f'Cache Hit Rate/Best vs -{compare_past}', hit_rate, i)
                     writer.add_scalar(
-                        f'Average Game Length/NN vs -{past_compare}', game_length, i)
-                    wr[i, past_iter] = nn_rate
-                    wr[past_iter, i] = 1-nn_rate
-                    if i == current_best:
-                        writer.add_scalar(
-                            f'Win Rate/Best vs -{past_compare}', nn_rate, i)
-                        writer.add_scalar(
-                            f'Draw Rate/Best vs -{past_compare}', draw_rate, i)
-                        writer.add_scalar(
-                            f'Cache Hit Rate/Best vs -{past_compare}', hit_rate, i)
-                        writer.add_scalar(
-                            f'Average Game Length/Best vs -{past_compare}', game_length, i)
-                    gc.collect()
-
-            nn_rate, draw_rate, hit_rate, game_length = play_rand(
-                Game, nnargs, i, nn_compare_mcts_depth, rand_mcts_depth)
-            wr[i, mcts_agent] = nn_rate
-            wr[mcts_agent, i] = 1-nn_rate
-            elo = get_elo(elo, wr, i)
-            if i == 0:
-                # Anchor first net to zero.
-                elo[mcts_agent] -= elo[0]
-                elo[0] -= elo[0]
-            postfix['elo'] = int(elo[i])
-            pbar.set_postfix(postfix)
-            writer.add_scalar(
-                f'Win Rate/NN vs MCTS-{rand_mcts_depth}', nn_rate, i)
-            writer.add_scalar(
-                f'Draw Rate/NN vs MCTS-{rand_mcts_depth}', draw_rate, i)
-            writer.add_scalar(
-                f'Cache Hit Rate/NN vs MCTS-{rand_mcts_depth}', hit_rate, i)
-            writer.add_scalar(
-                f'Average Game Length/NN vs MCTS-{rand_mcts_depth}', game_length, i)
-            writer.add_scalar(
-                f'Elo/NN', elo[i], i)
-            postfix['vs mcts'] = nn_rate
-            pbar.set_postfix(postfix)
-            if i == current_best:
-                writer.add_scalar(
-                    f'Elo/Best', elo[i], i)
-                writer.add_scalar(
-                    f'Win Rate/Best vs MCTS-{rand_mcts_depth}', nn_rate, i)
-                writer.add_scalar(
-                    f'Draw Rate/Best vs MCTS-{rand_mcts_depth}', draw_rate, i)
-                writer.add_scalar(
-                    f'Cache Hit Rate/Best vs MCTS-{rand_mcts_depth}', hit_rate, i)
-                writer.add_scalar(
-                    f'Average Game Length/Best vs MCTS-{rand_mcts_depth}', game_length, i)
-            gc.collect()
+                        f'Average Game Length/Best vs -{compare_past}', game_length, i)
+                    writer.add_scalar(
+                        f'Elo/Best', elo[i], i)
+                postfix[f'vs -{compare_past}'] = nn_rate
+                postfix['elo'] = int(elo[i])
+                pbar.set_postfix(postfix)
+                gc.collect()
 
             p1_rate, draw_rate, hit_rate, game_length = self_play(
                 Game, nnargs, current_best, i, nn_selfplay_mcts_depth)

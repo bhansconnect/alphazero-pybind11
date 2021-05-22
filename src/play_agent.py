@@ -3,6 +3,7 @@ import importlib.util
 import os
 import torch
 import numpy as np
+import time
 
 src_path = os.path.dirname(os.path.realpath(__file__))
 build_path = os.path.join(os.path.dirname(src_path), 'build/src')
@@ -13,22 +14,33 @@ spec = importlib.util.spec_from_file_location(
 alphazero = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(alphazero)
 
+THINK_TIME = 0.5
 CPUCT = 2
 TEMP = 0.5
 
 
-def eval_posistion(gs, agent, depth):
+def eval_posistion(gs, agent):
     mcts = alphazero.MCTS(CPUCT, gs.num_players(), gs.num_moves())
     v, pi = agent.predict(torch.from_numpy(gs.canonicalized()))
-    print(f'\tRaw Score: {v.cpu().numpy()}')
-    print(f'\tRaw Probs: {pi.cpu().numpy()}')
-    for _ in range(depth):
+    v = v.cpu().numpy()
+    pi = pi.cpu().numpy()
+    print(f'\tRaw Score: {v}')
+    print(f'\tRaw Probs: {pi}')
+    print(f'\tRaw Best: {np.argmax(pi)}')
+    print(f'\tRaw Rand: {np.random.choice(pi.shape[0], p=pi)}')
+    start = time.time()
+    while time.time() - start < THINK_TIME:
         leaf = mcts.find_leaf(gs)
         v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
-        mcts.process_result(gs, v.cpu().numpy(), pi.cpu().numpy(), False)
+        v = v.cpu().numpy()
+        pi = pi.cpu().numpy()
+        mcts.process_result(gs, v, pi, False)
     print(f'\tMCTS Value Current Player: {mcts.root_value()}')
     print(f'\tMCTS Counts: {mcts.counts()}')
-    print(f'\tMCTS Probs: {mcts.probs(TEMP)}')
+    probs = mcts.probs(TEMP)
+    print(f'\tMCTS Probs: {probs}')
+    print(f'\tMCTS Best: {np.argmax(probs)}')
+    print(f'\tMCTS Rand: {np.random.choice(probs.shape[0], p=probs)}')
 
 
 if __name__ == '__main__':
@@ -47,14 +59,11 @@ if __name__ == '__main__':
     nnargs = neural_net.NNArgs(num_channels=channels, depth=depth)
     nn = neural_net.NNWrapper(Game, nnargs)
     nn.load_checkpoint(nn_folder, nn_file)
-    rand = game_runner.RandPlayer(Game, 1)
     gs = Game()
     while gs.scores() is None:
         print(gs)
-        print('MCTS-400: ')
-        eval_posistion(gs, rand, 400)
-        print('NN-125: ')
-        eval_posistion(gs, nn, 125)
+        print('NN: ')
+        eval_posistion(gs, nn)
         print()
         print('Which Move? ')
         gs.play_move(int(input()))

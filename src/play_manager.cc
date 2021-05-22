@@ -135,10 +135,11 @@ void PlayManager::play() {
     auto& mcts = game.mcts[game.gs->current_player()];
     auto leaf = mcts.find_leaf(*game.gs);
     game.canonical = leaf->canonicalized();
+    game.leaf = std::move(leaf);
     if (params_.max_cache_size > 0) {
       auto opt =
           caches_[params_.self_play ? 0 : game.gs->current_player()]->find(
-              game.canonical);
+              game.leaf);
       if (opt.has_value()) {
         std::tie(game.v, game.pi) = opt.value();
         awaiting_mcts_.push(i.value());
@@ -160,8 +161,7 @@ void PlayManager::update_inferences(const uint8_t player,
     game.pi = pi.row(i);
     if (params_.max_cache_size > 0) {
       caches_[params_.self_play ? 0 : player]->insert(
-          Tensor<float, 3>{game.canonical},
-          {Vector<float>{game.v}, Vector<float>{game.pi}});
+          game.leaf, {Vector<float>{game.v}, Vector<float>{game.pi}});
     }
     awaiting_mcts_.push(game_indices[i]);
   }

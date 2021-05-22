@@ -18,13 +18,13 @@ gtest_dep = gtest_proj.get_variable('gtest_main_dep')
 connect4_gs = library(
     'connect4_gs',
     'connect4_gs.cc',
-    dependencies: [eigen_dep],
+    dependencies: [eigen_dep, absl_hash_dep],
 )
 
 connect4_gs_test = executable(
   'connect4_gs_test',
   'connect4_gs_test.cc',
-  dependencies: [gtest_dep, eigen_dep],
+  dependencies: [gtest_dep, eigen_dep, absl_hash_dep],
   link_with: [connect4_gs],
 )
 test('gtest tests', connect4_gs_test)
@@ -32,13 +32,13 @@ test('gtest tests', connect4_gs_test)
 mcts = library(
     'mcts',
     'mcts.cc',
-    dependencies: [eigen_dep],
+    dependencies: [eigen_dep, absl_hash_dep],
 )
 
 mcts_test = executable(
   'mcts_test',
   'mcts_test.cc',
-  dependencies: [gtest_dep, eigen_dep],
+  dependencies: [gtest_dep, eigen_dep, absl_hash_dep],
   link_with: [mcts, connect4_gs],
 )
 test('gtest tests', mcts_test)

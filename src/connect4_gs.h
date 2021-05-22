@@ -30,6 +30,8 @@ class Connect4GS : public GameState {
   [[nodiscard]] std::unique_ptr<GameState> copy() const noexcept override;
   [[nodiscard]] bool operator==(const GameState& other) const noexcept override;
 
+  void hash(absl::HashState h) const override;
+
   // Returns the current player. Players must be 0 indexed.
   [[nodiscard]] uint8_t current_player() const noexcept override {
     return player_;
@@ -66,7 +68,7 @@ class Connect4GS : public GameState {
   // Returns a string representation of the game state.
   [[nodiscard]] std::string dump() const noexcept override;
 
- protected:
+ private:
   // Board contains a layer for each player.
   // A 0 means no piece, a 1 means a piece for that player.
   BoardTensor board_{};

@@ -40,7 +40,7 @@ bool operator==(const TensorKeyWrapper& lhs, const TensorKeyWrapper& rhs) {
 }
 
 using Cache =
-    LRUCache<TensorKeyWrapper, std::tuple<Vector<float>, Vector<float>>>;
+    LRUCache<GameStateKeyWrapper, std::tuple<Vector<float>, Vector<float>>>;
 
 using namespace std::chrono_literals;
 
@@ -54,6 +54,7 @@ struct PlayHistory {
 
 struct GameData {
   std::unique_ptr<GameState> gs;
+  std::shared_ptr<GameState> leaf;
   bool initialized = false;
   bool capped = false;
   std::vector<MCTS> mcts;

@@ -3,7 +3,9 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <typeindex>
 
+#include "absl/hash/hash.h"
 #include "shapes.h"
 
 namespace alphazero {
@@ -20,11 +22,17 @@ class GameState {
   virtual ~GameState() = default;
 
   [[nodiscard]] virtual std::unique_ptr<GameState> copy() const noexcept = 0;
+
+  // Equality and Hash should only compare things as the neural network sees
+  // things. I.E. if the network doesn't know the exact score, don't compare the
+  // exact score or hash it. This enables use in the LRU cache correctly.
   [[nodiscard]] virtual bool operator==(const GameState& other) const
       noexcept = 0;
   [[nodiscard]] bool operator!=(const GameState& other) const noexcept {
     return !(*this == other);
   }
+
+  void virtual hash(absl::HashState h) const = 0;
 
   // Returns the current player. Players must be 0 indexed.
   [[nodiscard]] virtual uint8_t current_player() const noexcept = 0;
@@ -59,6 +67,22 @@ class GameState {
   // Returns a string representation of the game state.
   [[nodiscard]] virtual std::string dump() const noexcept = 0;
 };
+
+struct GameStateKeyWrapper {
+  GameStateKeyWrapper(std::shared_ptr<GameState> gs) : gs(gs) {}
+  std::shared_ptr<GameState> gs;
+};
+template <typename H>
+H AbslHashValue(H h, const GameStateKeyWrapper& wrapper) {
+  h = H::combine(std::move(h), std::type_index(typeid(wrapper.gs.get())));
+  wrapper.gs->hash(absl::HashState::Create(&h));
+  return std::move(h);
+}
+
+bool operator==(const GameStateKeyWrapper& lhs,
+                const GameStateKeyWrapper& rhs) {
+  return *lhs.gs == *rhs.gs;
+}
 
 // A sample evaluation function for testing.
 // It just returns even probablity.

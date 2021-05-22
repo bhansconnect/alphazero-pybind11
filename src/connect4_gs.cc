@@ -21,7 +21,13 @@ namespace alphazero::connect4_gs {
       }
     }
   }
-  return (other_cs->player_ == player_ && other_cs->turn_ == turn_);
+  return (other_cs->player_ == player_);
+}
+
+void Connect4GS::hash(absl::HashState h) const {
+  h = absl::HashState::combine_contiguous(std::move(h), board_.data(),
+                                          board_.size());
+  absl::HashState::combine(std::move(h), player_);
 }
 
 [[nodiscard]] Vector<uint8_t> Connect4GS::valid_moves() const noexcept {

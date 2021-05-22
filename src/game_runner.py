@@ -429,7 +429,7 @@ if __name__ == '__main__':
         for i in pbar:
             writer.add_scalar(
                 f'Elo/Current Best', current_best, i)
-            if i > 0:
+            if i > 1:
                 past_iter = max(0, i - compare_past)
                 nn_rate, draw_rate, hit_rate, game_length = play_past(
                     Game, nnargs, nn_compare_mcts_depth,  i, past_iter)

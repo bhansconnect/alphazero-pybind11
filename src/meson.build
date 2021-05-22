@@ -29,6 +29,13 @@ connect4_gs_test = executable(
 )
 test('gtest tests', connect4_gs_test)
 
+photosynthesis_gs_test = executable(
+  'photosynthesis_gs_test',
+  'photosynthesis_gs_test.cc',
+  dependencies: [gtest_dep, eigen_dep, absl_hash_dep],
+)
+test('gtest tests', photosynthesis_gs_test)
+
 mcts = library(
     'mcts',
     'mcts.cc',

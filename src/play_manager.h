@@ -134,6 +134,13 @@ class PlayManager {
     return awaiting_inference_.size();
   }
   size_t hist_count() const noexcept { return history_.size(); }
+  [[nodiscard]] size_t cache_size() const {
+    size_t out = 0;
+    for (auto& cache : caches_) {
+      out += cache->size();
+    }
+    return out;
+  };
   [[nodiscard]] size_t cache_hits() const {
     size_t out = 0;
     for (auto& cache : caches_) {

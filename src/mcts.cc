@@ -1,6 +1,7 @@
 #include "mcts.h"
 
 #include <algorithm>
+#include <iostream>
 #include <random>
 
 namespace alphazero {
@@ -49,7 +50,8 @@ void MCTS::update_root(const GameState& gs, uint32_t move) {
   auto x = std::find_if(root_.children.begin(), root_.children.end(),
                         [move](const Node& n) { return n.move == move; });
   if (x == root_.children.end()) {
-    throw std::runtime_error("ahh, what is this move");
+    std::cout << gs.dump();
+    throw std::runtime_error("ahh, what is this move: " + std::to_string(move));
   }
   root_ = std::move(*x);
 }

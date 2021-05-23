@@ -29,7 +29,9 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     awaiting_mcts_.push(i);
   }
   for (auto i = 0U; i < base_gs_->num_players(); ++i) {
-    caches_.push_back(std::make_unique<Cache>(params_.max_cache_size));
+    caches_.push_back(std::make_unique<Cache>(
+        params_.max_cache_size /
+        (params_.self_play ? 1 : base_gs_->num_players())));
     awaiting_inference_.push_back(
         std::make_unique<ConcurrentQueue<uint32_t>>());
     if (params_.self_play) {
@@ -175,6 +177,10 @@ void PlayManager::dumb_inference(const uint8_t player) {
     }
     auto& game = games_[i.value()];
     std::tie(game.v, game.pi) = dumb_eval(*game.gs);
+    if (params_.max_cache_size > 0) {
+      caches_[params_.self_play ? 0 : player]->insert(
+          game.leaf, {Vector<float>{game.v}, Vector<float>{game.pi}});
+    }
     awaiting_mcts_.push(i.value());
   }
 }

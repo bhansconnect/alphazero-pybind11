@@ -91,8 +91,9 @@ class GameRunner:
 
         monitor = threading.Thread(target=self.monitor)
         monitor.start()
-        hist_saver = threading.Thread(target=self.hist_saver)
-        hist_saver.start()
+        if self.pm.params().history_enabled:
+            hist_saver = threading.Thread(target=self.hist_saver)
+            hist_saver.start()
 
         for bw in batch_workers:
             bw.join()
@@ -103,7 +104,8 @@ class GameRunner:
         for mw in mcts_workers:
             mw.join()
         monitor.join()
-        hist_saver.join()
+        if self.pm.params().history_enabled:
+            hist_saver.join()
 
     def monitor(self):
         last_completed = 0
@@ -223,24 +225,23 @@ class RandPlayer:
         return self.v[:batch.shape[0]], self.pi[:batch.shape[0]]
 
 
-EXPECTED_OPENING_LENGTH = 6
+EXPECTED_OPENING_LENGTH = 12
 CPUCT = 2
 SELF_PLAY_TEMP = 1
 EVAL_TEMP = 0.5
 TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
 FINAL_TEMP = 0.2
-MAX_CACHE_SIZE = 1000000
+MAX_CACHE_SIZE = 100000
 
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
 WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
 WINDOW_SIZE_BETA = 0.7  # This decides the rough overall slope.
 WINDOW_SIZE_SCALAR = 6  # This ends up being approximately first time history doesn't grow
 
-CONCURRENT_BATCHES = 4
 RESULT_WORKERS = 2
 
 
-def base_params(Game, start_temp, bs):
+def base_params(Game, start_temp, bs, cb):
     params = alphazero.PlayParams()
     params.max_cache_size = MAX_CACHE_SIZE
     params.cpuct = CPUCT
@@ -248,7 +249,7 @@ def base_params(Game, start_temp, bs):
     params.temp_decay_half_life = TEMP_DECAY_HALF_LIFE
     params.final_temp = FINAL_TEMP
     params.max_batch_size = bs
-    params.concurrent_games = bs * CONCURRENT_BATCHES
+    params.concurrent_games = bs * cb
     return params
 
 
@@ -288,8 +289,9 @@ if __name__ == '__main__':
 
     def self_play(Game, nnargs, best, iteration, depth):
         bs = 512
-        n = bs*12*4
-        params = base_params(Game, SELF_PLAY_TEMP, bs)
+        cb = 6
+        n = bs*cb
+        params = base_params(Game, SELF_PLAY_TEMP, bs, cb)
         params.games_to_play = n
         params.mcts_depth = [depth] * Game.NUM_PLAYERS()
         params.self_play = True
@@ -301,7 +303,7 @@ if __name__ == '__main__':
         pm = alphazero.PlayManager(Game(), params)
 
         grargs = GRArgs(title='Self Play', game=Game, iteration=iteration,
-                        max_batch_size=bs, concurrent_batches=CONCURRENT_BATCHES, result_workers=RESULT_WORKERS)
+                        max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
         nn = neural_net.NNWrapper(Game, nnargs)
         nn.load_checkpoint('data/checkpoint', f'{best:04d}.pt')
         players = []
@@ -314,7 +316,9 @@ if __name__ == '__main__':
         draw_rate = scores[-1]/n
         hits = pm.cache_hits()
         total = hits + pm.cache_misses()
-        hr = hits/total
+        hr = 0
+        if total > 0:
+            hr = hits/total
         agl = pm.avg_game_length()
         del pm
         del nn
@@ -330,16 +334,16 @@ if __name__ == '__main__':
         nn_past = neural_net.NNWrapper(Game, nnargs)
         nn_past.load_checkpoint('data/checkpoint', f'{past_iter:04d}.pt')
         for i in range(Game.NUM_PLAYERS()):
-            params = alphazero.PlayParams()
             bs = 64
-            n = bs*4
-            params = base_params(Game, EVAL_TEMP, bs)
+            cb = 3
+            n = bs*cb
+            params = base_params(Game, EVAL_TEMP, bs, cb)
             params.games_to_play = n
             params.mcts_depth = [depth] * Game.NUM_PLAYERS()
             pm = alphazero.PlayManager(Game(), params)
 
             grargs = GRArgs(title=f'Bench {iteration} v {past_iter}({i+1}/{Game.NUM_PLAYERS()})', game=Game, iteration=iteration,
-                            max_batch_size=bs, concurrent_batches=CONCURRENT_BATCHES, result_workers=RESULT_WORKERS)
+                            max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
             players = []
             for _ in range(Game.NUM_PLAYERS()):
                 players.append(nn_past)
@@ -351,9 +355,11 @@ if __name__ == '__main__':
             draw_rate += scores[-1]/n
             hits = pm.cache_hits()
             total = hits + pm.cache_misses()
-            hr += hits/total
+            if total > 0:
+                hr += hits/total
             agl += pm.avg_game_length()
-        del pm
+            del pm
+            gc.collect()
         del nn
         del nn_past
         return nn_rate / Game.NUM_PLAYERS(), draw_rate / Game.NUM_PLAYERS(), hr / Game.NUM_PLAYERS(), agl / Game.NUM_PLAYERS()
@@ -391,7 +397,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth, lr_milestones=[150])
-    Game = alphazero.Connect4GS
+    Game = alphazero.PhotosynthesisGS
 
     if start == 0:
         create_init_net(Game, nnargs,)

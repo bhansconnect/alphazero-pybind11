@@ -1,6 +1,7 @@
 #include <cmath>
 
 #include "connect4_gs.h"
+#include "photosynthesis_gs.h"
 #include "play_manager.h"
 #include "pybind11/eigen.h"
 #include "pybind11/numpy.h"
@@ -14,6 +15,7 @@ namespace alphazero {
 
 namespace py = pybind11;
 using connect4_gs::Connect4GS;
+using photosynthesis_gs::PhotosynthesisGS;
 
 // NOLINTNEXTLINE
 PYBIND11_MODULE(alphazero, m) {
@@ -230,6 +232,13 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_MOVES", [] { return connect4_gs::NUM_MOVES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return connect4_gs::CANONICAL_SHAPE; });
+
+  py::class_<PhotosynthesisGS<3>, GameState>(m, "PhotosynthesisGS")
+      .def(py::init<>())
+      .def_static("NUM_PLAYERS", [] { return 3; })
+      .def_static("NUM_MOVES", [] { return photosynthesis_gs::NUM_MOVES; })
+      .def_static("CANONICAL_SHAPE",
+                  [] { return PhotosynthesisGS<3>::CANONICAL_SHAPE; });
 }
 
 }  // namespace alphazero

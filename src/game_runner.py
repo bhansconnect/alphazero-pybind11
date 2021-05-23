@@ -213,11 +213,11 @@ class GameRunner:
             if size == 0:
                 continue
             torch.save(
-                self.hist_canonical[:size], f'{self.args.data_folder}/{self.args.iteration:04d}-{batch:04d}-canonical.pt')
+                self.hist_canonical[:size].clone(), f'{self.args.data_folder}/{self.args.iteration:04d}-{batch:04d}-canonical.pt')
             torch.save(
-                self.hist_v[:size], f'{self.args.data_folder}/{self.args.iteration:04d}-{batch:04d}-v.pt')
+                self.hist_v[:size].clone(), f'{self.args.data_folder}/{self.args.iteration:04d}-{batch:04d}-v.pt')
             torch.save(
-                self.hist_pi[:size], f'{self.args.data_folder}/{self.args.iteration:04d}-{batch:04d}-pi.pt')
+                self.hist_pi[:size].clone(), f'{self.args.data_folder}/{self.args.iteration:04d}-{batch:04d}-pi.pt')
             self.saved_samples += size
             batch += 1
 
@@ -447,7 +447,7 @@ if __name__ == '__main__':
     with tqdm.trange(start, iters, desc='Build Amazing Network') as pbar:
         for i in pbar:
             writer.add_scalar(
-                f'Elo/Current Best', current_best, i)
+                f'Misc/Current Best', current_best, i)
             if i >= compare_past:
                 past_iter = i - compare_past
                 nn_rate, draw_rate, hit_rate, game_length = play_past(
@@ -496,7 +496,7 @@ if __name__ == '__main__':
             gc.collect()
 
             hist_size = calc_hist_size(i)
-            writer.add_scalar('History Size', hist_size, i)
+            writer.add_scalar('Misc/History Size', hist_size, i)
             v_loss, pi_loss = train(Game, nnargs, i, hist_size)
             writer.add_scalar('Loss/V', v_loss, i)
             writer.add_scalar('Loss/Pi', pi_loss, i)

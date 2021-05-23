@@ -26,12 +26,14 @@ def pit_agents(Game, players, mcts_depths, bs, name):
         cb = 3
         n = bs*cb
         ordered_players = [None]*np
+        ordered_depths = [None]*np
         for j in range(np):
             ordered_players[j] = players[(j+i) % np]
+            ordered_depths[j] = mcts_depths[(j+i) % np]
 
         params = base_params(Game, 0.5, bs, cb)
         params.games_to_play = n
-        params.mcts_depth = mcts_depths
+        params.mcts_depth = ordered_depths
         pm = alphazero.PlayManager(Game(), params)
 
         grargs = GRArgs(title=f'{name}({i+1}/{np})', game=Game,
@@ -51,16 +53,15 @@ def pit_agents(Game, players, mcts_depths, bs, name):
 if __name__ == '__main__':
     nn_agents = [os.path.basename(x) for x in sorted(
         glob.glob('data/roundrobin/*.pt'))]
-    rand_agents = [1000]
-    # agents = nn_agents + rand_agents
-    agents = [nn_agents[-1], nn_agents[-1], nn_agents[-1], nn_agents[-1]]
-    depths = [125, 250, 500, 1000]
+    # rand_agents = [1000]
+    rand_agents = []
+    agents = nn_agents + rand_agents
 
     Game = alphazero.PhotosynthesisGS
     bs = 32
     depth = 5
     channels = 32
-    # nn_mtcs_depth = 250
+    nn_mtcs_depth = 250
 
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth)
@@ -78,7 +79,7 @@ if __name__ == '__main__':
             else:
                 p1 = neural_net.NNWrapper(Game, nnargs)
                 p1.load_checkpoint('data/roundrobin', agents[i])
-                d1 = depths[i]
+                d1 = nn_mtcs_depth
             for j in range(i+1, count):
                 p2 = None
                 d2 = 0
@@ -88,11 +89,11 @@ if __name__ == '__main__':
                 else:
                     p2 = neural_net.NNWrapper(Game, nnargs)
                     p2.load_checkpoint('data/roundrobin', agents[j])
-                    d2 = depths[j]
+                    d2 = nn_mtcs_depth
                 win_rates = pit_agents(
-                    Game, [p1, p2, p2], [d1, d2, d2], bs, f'{depths[i]}-{depths[j]}')
+                    Game, [p1, p2, p2], [d1, d2, d2], bs, f'{agents[i]}-{agents[j]}')
                 win_rates2 = pit_agents(
-                    Game, [p2, p1, p1], [d2, d1, d1], bs, f'{depths[j]}-{depths[i]}')
+                    Game, [p2, p1, p1], [d2, d1, d1], bs, f'{agents[j]}-{agents[i]}')
                 win_matrix[i, j] = (
                     win_rates[0] + win_rates2[1] + win_rates2[2])/2
                 win_matrix[j, i] = (

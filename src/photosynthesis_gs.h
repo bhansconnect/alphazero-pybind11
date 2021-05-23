@@ -41,7 +41,7 @@ class PhotosynthesisGS : public GameState {
   static constexpr const std::array<int, 3> BOARD_SHAPE = {NUM_PLAYERS, HEIGHT,
                                                            WIDTH};
   static constexpr const std::array<int, 3> CANONICAL_SHAPE = {
-      47 + 94 * NUM_PLAYERS, HEIGHT, WIDTH};
+      53 + 94 * NUM_PLAYERS, HEIGHT, WIDTH};
   static constexpr const std::array<uint8_t, 4> MAX_BUYABLE_PLANTS{4, 4, 3, 2};
   static constexpr const std::array<uint8_t, 4> MAX_AVAILABLE_PLANTS{6, 8, 4,
                                                                      2};
@@ -113,8 +113,8 @@ class PhotosynthesisGS : public GameState {
         score_, score_tiles_);
   }
 
-  [[nodiscard]] bool operator==(
-      const GameState& other) const noexcept override {
+  [[nodiscard]] bool operator==(const GameState& other) const
+      noexcept override {
     const auto* other_ps =
         dynamic_cast<const PhotosynthesisGS<NUM_PLAYERS>*>(&other);
     if (other_ps == nullptr) {
@@ -394,8 +394,24 @@ class PhotosynthesisGS : public GameState {
     auto t = CanonicalTensor{};
     t.setZero();
 
-    // Current sun phase.
     auto offset = 0;
+    // Current player.
+    for (auto h = 0; h < HEIGHT; ++h) {
+      for (auto w = 0; w < WIDTH; ++w) {
+        t(offset + player_, h, w) = 1;
+      }
+    }
+    offset += NUM_PLAYERS;
+
+    // Current round first player.
+    for (auto h = 0; h < HEIGHT; ++h) {
+      for (auto w = 0; w < WIDTH; ++w) {
+        t(offset + first_player_, h, w) = 1;
+      }
+    }
+    offset += NUM_PLAYERS;
+
+    // Current sun phase.
     for (auto h = 0; h < HEIGHT; ++h) {
       for (auto w = 0; w < WIDTH; ++w) {
         t(offset + sun_phase_, h, w) = 1;

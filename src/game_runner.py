@@ -126,14 +126,22 @@ class GameRunner:
                     hr = hits/total
                 completed = self.pm.games_completed()
                 p1_rate = 0
+                p2_rate = 0
+                p3_rate = 0
                 draw_rate = 0
                 if completed > 0:
                     scores = self.pm.scores()
                     p1_rate = (scores[0] + scores[-1] /
                                self.num_players)/completed
+                    p2_rate = (scores[1] + scores[-1] /
+                               self.num_players)/completed
+                    p3_rate = (scores[2] + scores[-1] /
+                               self.num_players)/completed
                     draw_rate = scores[-1]/completed
                 pbar.set_postfix({
                     'p1 rate': p1_rate,
+                    'p2 rate': p2_rate,
+                    'p3 rate': p3_rate,
                     'draw rate': draw_rate,
                     'cache rate': hr})
                 pbar.update(completed-last_completed)
@@ -146,9 +154,13 @@ class GameRunner:
             hr = hits/total
         scores = self.pm.scores()
         p1_rate = (scores[0] + scores[-1]/self.num_players)/n
+        p2_rate = (scores[1] + scores[-1]/self.num_players)/n
+        p3_rate = (scores[2] + scores[-1]/self.num_players)/n
         draw_rate = scores[-1]/n
         pbar.set_postfix({
             'p1 rate': p1_rate,
+            'p2 rate': p2_rate,
+            'p3 rate': p3_rate,
             'draw rate': draw_rate,
             'cache hit': hr})
         pbar.update(n - last_completed)
@@ -231,7 +243,7 @@ SELF_PLAY_TEMP = 1
 EVAL_TEMP = 0.5
 TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
 FINAL_TEMP = 0.2
-MAX_CACHE_SIZE = 100000
+MAX_CACHE_SIZE = 200000
 
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
 WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
@@ -267,8 +279,8 @@ if __name__ == '__main__':
     def train(Game, nnargs, iteration, hist_size):
         nn = neural_net.NNWrapper(Game, nnargs)
         nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
-        datasets = []
-        for i in range(max(0, iteration - hist_size), iteration + 1):
+        for i in tqdm.trange(max(0, iteration - hist_size), iteration + 1, leave=False, desc="Train on iters"):
+            datasets = []
             c = sorted(glob.glob(f'data/history/{i:04d}-*-canonical.pt'))
             v = sorted(glob.glob(f'data/history/{i:04d}-*-v.pt'))
             p = sorted(glob.glob(f'data/history/{i:04d}-*-pi.pt'))
@@ -276,15 +288,16 @@ if __name__ == '__main__':
                 datasets.append(TensorDataset(
                     torch.load(c[j]), torch.load(v[j]), torch.load(p[j])))
 
-        dataset = ConcatDataset(datasets)
-        dataloader = DataLoader(dataset, batch_size=512, shuffle=True,
-                                num_workers=11, pin_memory=True)
+            dataset = ConcatDataset(datasets)
+            dataloader = DataLoader(dataset, batch_size=512, shuffle=True,
+                                    num_workers=11, pin_memory=True)
 
-        v_loss, pi_loss = nn.train(dataloader, 250)
+            v_loss, pi_loss = nn.train(
+                dataloader, math.ceil(250/min(hist_size, iteration+1)))
+            del dataset
+            del dataloader
         nn.save_checkpoint('data/checkpoint', f'{iteration+1:04d}.pt')
         del nn
-        del dataset
-        del dataloader
         return v_loss, pi_loss
 
     def self_play(Game, nnargs, best, iteration, depth):
@@ -333,7 +346,7 @@ if __name__ == '__main__':
         nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
         nn_past = neural_net.NNWrapper(Game, nnargs)
         nn_past.load_checkpoint('data/checkpoint', f'{past_iter:04d}.pt')
-        for i in range(Game.NUM_PLAYERS()):
+        for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc="Bench as all players"):
             bs = 64
             cb = 3
             n = bs*cb
@@ -342,7 +355,7 @@ if __name__ == '__main__':
             params.mcts_depth = [depth] * Game.NUM_PLAYERS()
             pm = alphazero.PlayManager(Game(), params)
 
-            grargs = GRArgs(title=f'Bench {iteration} v {past_iter}({i+1}/{Game.NUM_PLAYERS()})', game=Game, iteration=iteration,
+            grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
                             max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
             players = []
             for _ in range(Game.NUM_PLAYERS()):
@@ -435,13 +448,12 @@ if __name__ == '__main__':
         for i in pbar:
             writer.add_scalar(
                 f'Elo/Current Best', current_best, i)
-            if i > 1:
-                past_iter = max(0, i - compare_past)
+            if i >= compare_past:
+                past_iter = i - compare_past
                 nn_rate, draw_rate, hit_rate, game_length = play_past(
                     Game, nnargs, nn_compare_mcts_depth,  i, past_iter)
                 wr[i, past_iter] = nn_rate
                 wr[past_iter, i] = 1-nn_rate
-                elo = get_elo(elo, wr, i)
                 writer.add_scalar(
                     f'Win Rate/NN vs -{compare_past}', nn_rate, i)
                 writer.add_scalar(
@@ -450,8 +462,6 @@ if __name__ == '__main__':
                     f'Cache Hit Rate/NN vs -{compare_past}', hit_rate, i)
                 writer.add_scalar(
                     f'Average Game Length/NN vs -{compare_past}', game_length, i)
-                writer.add_scalar(
-                    f'Elo/NN', elo[i], i)
                 if i == current_best:
                     writer.add_scalar(
                         f'Win Rate/Best vs -{compare_past}', nn_rate, i)
@@ -461,12 +471,17 @@ if __name__ == '__main__':
                         f'Cache Hit Rate/Best vs -{compare_past}', hit_rate, i)
                     writer.add_scalar(
                         f'Average Game Length/Best vs -{compare_past}', game_length, i)
-                    writer.add_scalar(
-                        f'Elo/Best', elo[i], i)
                 postfix[f'vs -{compare_past}'] = nn_rate
-                postfix['elo'] = int(elo[i])
-                pbar.set_postfix(postfix)
                 gc.collect()
+
+            elo = get_elo(elo, wr, i)
+            writer.add_scalar(
+                f'Elo/NN', elo[i], i)
+            if i == current_best:
+                writer.add_scalar(
+                    f'Elo/Best', elo[i], i)
+            postfix['elo'] = int(elo[i])
+            pbar.set_postfix(postfix)
 
             p1_rate, draw_rate, hit_rate, game_length = self_play(
                 Game, nnargs, current_best, i, nn_selfplay_mcts_depth)

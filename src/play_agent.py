@@ -18,18 +18,25 @@ THINK_TIME = 0.5
 CPUCT = 2
 TEMP = 0.5
 
+bf = 0
+bfc = 0
 
 def eval_posistion(gs, agent):
     mcts = alphazero.MCTS(CPUCT, gs.num_players(), gs.num_moves())
     v, pi = agent.predict(torch.from_numpy(gs.canonicalized()))
     v = v.cpu().numpy()
     pi = pi.cpu().numpy()
+    global bf
+    global bfc
+    bf += np.sum(gs.valid_moves())
+    bfc += 1
     print(f'\tRaw Score: {v}')
     print(f'\tRaw Probs: {pi}')
     print(f'\tRaw Best: {np.argmax(pi)}')
     print(f'\tRaw Rand: {np.random.choice(pi.shape[0], p=pi)}')
     start = time.time()
-    while time.time() - start < THINK_TIME:
+    # while time.time() - start < THINK_TIME:
+    for _ in range(500):
         leaf = mcts.find_leaf(gs)
         v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
         v = v.cpu().numpy()
@@ -40,7 +47,9 @@ def eval_posistion(gs, agent):
     probs = mcts.probs(TEMP)
     print(f'\tMCTS Probs: {probs}')
     print(f'\tMCTS Best: {np.argmax(probs)}')
-    print(f'\tMCTS Rand: {np.random.choice(probs.shape[0], p=probs)}')
+    rand = np.random.choice(probs.shape[0], p=probs)
+    print(f'\tMCTS Rand: {rand}')
+    return rand
 
 
 if __name__ == '__main__':
@@ -48,7 +57,7 @@ if __name__ == '__main__':
     import game_runner
 
     np.set_printoptions(precision=3, suppress=True)
-    Game = alphazero.Connect4GS
+    Game = alphazero.PhotosynthesisGS
     nn_folder = 'data/checkpoint'
     nn_file = os.path.basename(
         sorted(glob.glob(os.path.join(nn_folder, '*.pt')))[-1])
@@ -60,10 +69,20 @@ if __name__ == '__main__':
     nn = neural_net.NNWrapper(Game, nnargs)
     nn.load_checkpoint(nn_folder, nn_file)
     gs = Game()
+    pc = 0
     while gs.scores() is None:
         print(gs)
         print('NN: ')
-        eval_posistion(gs, nn)
-        print()
-        print('Which Move? ')
-        gs.play_move(int(input()))
+        best = eval_posistion(gs, nn)
+        # print()
+        # print('Which Move? ')
+        # gs.play_move(int(input()))
+        if best == 2454:
+            pc += 1
+        gs.play_move(best)
+    print(gs)
+    print(gs.scores())
+    print('Passes:',pc)
+    print('BranchFactor:', bf/bfc)
+    print(bf)
+    print(bfc)

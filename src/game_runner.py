@@ -346,10 +346,10 @@ if __name__ == '__main__':
         nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
         nn_past = neural_net.NNWrapper(Game, nnargs)
         nn_past.load_checkpoint('data/checkpoint', f'{past_iter:04d}.pt')
-        for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc="Bench as all players"):
-            bs = 64
-            cb = 3
-            n = bs*cb
+        bs = 32
+        cb = 3
+        n = bs*cb
+        for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc="Bench 1 new vs 2 old"):
             params = base_params(Game, EVAL_TEMP, bs, cb)
             params.games_to_play = n
             params.mcts_depth = [depth] * Game.NUM_PLAYERS()
@@ -373,9 +373,36 @@ if __name__ == '__main__':
             agl += pm.avg_game_length()
             del pm
             gc.collect()
+        for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc="Bench 2 new vs 1 old"):
+            params = base_params(Game, EVAL_TEMP, bs, cb)
+            params.games_to_play = n
+            params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+            pm = alphazero.PlayManager(Game(), params)
+
+            grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
+                            max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
+            players = []
+            for _ in range(Game.NUM_PLAYERS()):
+                players.append(nn)
+            players[i] = nn_past
+            gr = GameRunner(players, pm, grargs)
+            gr.run()
+            scores = pm.scores()
+            nn_rate += (scores[(i+1) % Game.NUM_PLAYERS()] +
+                        scores[-1]/Game.NUM_PLAYERS())/n
+            nn_rate += (scores[(i+2) % Game.NUM_PLAYERS()] +
+                        scores[-1]/Game.NUM_PLAYERS())/n
+            draw_rate += scores[-1]/n
+            hits = pm.cache_hits()
+            total = hits + pm.cache_misses()
+            if total > 0:
+                hr += hits/total
+            agl += pm.avg_game_length()
+            del pm
+            gc.collect()
         del nn
         del nn_past
-        return nn_rate / Game.NUM_PLAYERS(), draw_rate / Game.NUM_PLAYERS(), hr / Game.NUM_PLAYERS(), agl / Game.NUM_PLAYERS()
+        return nn_rate / (2*Game.NUM_PLAYERS()), draw_rate / (2*Game.NUM_PLAYERS()), hr / (2*Game.NUM_PLAYERS()), agl / (2*Game.NUM_PLAYERS())
 
     def elo_prob(r1, r2):
         return 1.0 / (1 + 1.0 * math.pow(10, 1.0 * (r1-r2) / 400))
@@ -448,8 +475,8 @@ if __name__ == '__main__':
         for i in pbar:
             writer.add_scalar(
                 f'Misc/Current Best', current_best, i)
-            if i >= compare_past:
-                past_iter = i - compare_past
+            past_iter = max(0, i - compare_past)
+            if past_iter != current_best:
                 nn_rate, draw_rate, hit_rate, game_length = play_past(
                     Game, nnargs, nn_compare_mcts_depth,  i, past_iter)
                 wr[i, past_iter] = nn_rate
@@ -482,6 +509,7 @@ if __name__ == '__main__':
                     f'Elo/Best', elo[i], i)
             postfix['elo'] = int(elo[i])
             pbar.set_postfix(postfix)
+            np.savetxt("data/elo.csv", elo, delimiter=",")
 
             p1_rate, draw_rate, hit_rate, game_length = self_play(
                 Game, nnargs, current_best, i, nn_selfplay_mcts_depth)
@@ -528,6 +556,5 @@ if __name__ == '__main__':
                 pbar.set_postfix(postfix)
             gc.collect()
             np.savetxt("data/win_rate.csv", wr, delimiter=",")
-            np.savetxt("data/elo.csv", elo, delimiter=",")
 
     writer.close()

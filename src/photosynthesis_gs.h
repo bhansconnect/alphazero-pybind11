@@ -113,8 +113,8 @@ class PhotosynthesisGS : public GameState {
         score_, score_tiles_);
   }
 
-  [[nodiscard]] bool operator==(const GameState& other) const
-      noexcept override {
+  [[nodiscard]] bool operator==(
+      const GameState& other) const noexcept override {
     const auto* other_ps =
         dynamic_cast<const PhotosynthesisGS<NUM_PLAYERS>*>(&other);
     if (other_ps == nullptr) {
@@ -338,6 +338,7 @@ class PhotosynthesisGS : public GameState {
             break;
           }
         }
+        ++buyable_plants_(player_, board_(player_, h, w) - 1);
         buyable_plants_(player_, board_(player_, h, w) - 1) =
             std::min(buyable_plants_(player_, board_(player_, h, w) - 1),
                      MAX_BUYABLE_PLANTS[board_(player_, h, w) - 1]);
@@ -345,6 +346,7 @@ class PhotosynthesisGS : public GameState {
         activated_tiles_(h, w) = 1;
       } else {
         --available_plants_(player_, board_(player_, h, w));
+        ++buyable_plants_(player_, board_(player_, h, w) - 1);
         buyable_plants_(player_, board_(player_, h, w) - 1) =
             std::min(buyable_plants_(player_, board_(player_, h, w) - 1),
                      MAX_BUYABLE_PLANTS[board_(player_, h, w) - 1]);

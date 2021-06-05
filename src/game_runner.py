@@ -452,7 +452,7 @@ if __name__ == '__main__':
     run_name = f'c_{channels}_d_{depth}'
     writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
-        num_channels=channels, depth=depth, lr_milestones=[150])
+        num_channels=channels, depth=depth, lr_milestone=150)
     Game = alphazero.PhotosynthesisGS
 
     if start == 0:

@@ -3,10 +3,11 @@ import os
 import torch
 from torch import optim, nn
 from torch.autograd import profiler
+from torch.optim.swa_utils import AveragedModel
 from tqdm import tqdm
 
-NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'lr_milestones',
-                               'lr', 'cv', 'cuda'], defaults=([40], 0.01, 1.5, torch.cuda.is_available()))
+NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'lr_milestone',
+                               'lr', 'cv', 'cuda'], defaults=(40, 0.01, 1.5, torch.cuda.is_available()))
 
 
 def conv1x1(in_channels, out_channels, stride=1):
@@ -115,8 +116,19 @@ class NNWrapper:
         self.nnet = NNArch(game, args)
         self.optimizer = optim.SGD(
             self.nnet.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-3)
-        self.scheduler = optim.lr_scheduler.MultiStepLR(
-            self.optimizer, milestones=args.lr_milestones, gamma=0.1)
+
+        def lr_lambda(epoch):
+            if epoch < 5:
+                return 1/3
+            elif epoch > args.lr_milestone:
+                return 1/10
+            else:
+                return 1
+
+        self.scheduler = torch.optim.lr_scheduler.LambdaLR(
+            self.optimizer, lr_lambda=lr_lambda)
+        # self.scheduler = optim.lr_scheduler.MultiStepLR(
+        #     self.optimizer, milestones=args.lr_milestones, gamma=0.1)
         self.cuda = args.cuda
         self.cv = args.cv
         if self.cuda:
@@ -130,8 +142,12 @@ class NNWrapper:
         current_step = 0
         pbar = tqdm(total=train_steps, unit='batches',
                     desc='Training NN', leave=False)
+        past_states = []
         while current_step < train_steps:
             for batch in batches:
+                if current_step % (train_steps//4) == 0 and current_step != 0:
+                    # Snapshot model weights
+                    past_states.append(dict(self.nnet.named_parameters()))
                 if current_step == train_steps:
                     break
                 canonical, target_vs, target_pis = batch
@@ -158,6 +174,17 @@ class NNWrapper:
                 pbar.set_postfix(
                     {'v loss': v_loss/current_step, 'pi loss': pi_loss/current_step, 'total': (v_loss+pi_loss)/current_step})
                 pbar.update()
+
+        # Perform expontential averaging of network weights.
+        past_states.append(dict(self.nnet.named_parameters()))
+        merged_states = past_states[0]
+        for state in past_states[1:]:
+            for k in merged_states.keys():
+                merged_states[k].data = merged_states[k].data * \
+                    0.25 + state[k].data * 0.75
+        nnet_dict = self.nnet.state_dict()
+        nnet_dict.update(merged_states)
+        self.nnet.load_state_dict(nnet_dict)
 
         self.scheduler.step()
         pbar.close()
@@ -194,7 +221,7 @@ class NNWrapper:
     def load_checkpoint(self, folder='data/checkpoint', filename='checkpoint.pt'):
         filepath = os.path.join(folder, filename)
         if not os.path.exists(filepath):
-            raise ("No model in path {}".format(filepath))
+            raise Exception(f"No model in path {filepath}")
         checkpoint = torch.load(filepath)
         self.nnet.load_state_dict(checkpoint['state_dict'])
         self.optimizer.load_state_dict(checkpoint['opt_state'])

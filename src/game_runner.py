@@ -212,12 +212,17 @@ class GameRunner:
                 self.hist_canonical, self.hist_v, self.hist_pi)
             if size == 0:
                 continue
-            torch.save(
-                self.hist_canonical[:size].clone(), f'{self.args.data_folder}/{self.args.iteration:04d}-{batch:04d}-canonical.pt')
-            torch.save(
-                self.hist_v[:size].clone(), f'{self.args.data_folder}/{self.args.iteration:04d}-{batch:04d}-v.pt')
-            torch.save(
-                self.hist_pi[:size].clone(), f'{self.args.data_folder}/{self.args.iteration:04d}-{batch:04d}-pi.pt')
+
+            cs = self.args.game.CANONICAL_SHAPE()
+            c_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                f'{self.args.data_folder}/{self.args.iteration:04d}-{batch:04d}-canonical-{size}.pt', shared=True, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
+            v_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                f'{self.args.data_folder}/{self.args.iteration:04d}-{batch:04d}-v-{size}.pt', shared=True, size=size*(self.num_players+1))).reshape(size, self.num_players+1)
+            p_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                f'{self.args.data_folder}/{self.args.iteration:04d}-{batch:04d}-pi-{size}.pt', shared=True, size=size*(self.args.game.NUM_MOVES()))).reshape(size, self.args.game.NUM_MOVES())
+            c_tensor[:] = self.hist_canonical[:size]
+            v_tensor[:] = self.hist_v[:size]
+            p_tensor[:] = self.hist_pi[:size]
             self.saved_samples += size
             batch += 1
 
@@ -279,31 +284,42 @@ if __name__ == '__main__':
     def train(Game, nnargs, iteration, hist_size):
         nn = neural_net.NNWrapper(Game, nnargs)
         nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
-        for i in tqdm.trange(max(0, iteration - hist_size), iteration + 1, leave=False, desc="Train on iters"):
-            datasets = []
-            c = sorted(glob.glob(f'data/history/{i:04d}-*-canonical.pt'))
-            v = sorted(glob.glob(f'data/history/{i:04d}-*-v.pt'))
-            p = sorted(glob.glob(f'data/history/{i:04d}-*-pi.pt'))
+
+        datasets = []
+        for i in range(max(0, iteration - hist_size), iteration + 1):
+            c = sorted(glob.glob(f'data/history/{i:04d}-*-canonical-*.pt'))
+            v = sorted(glob.glob(f'data/history/{i:04d}-*-v-*.pt'))
+            p = sorted(glob.glob(f'data/history/{i:04d}-*-pi-*.pt'))
             for j in range(len(c)):
-                datasets.append(TensorDataset(
-                    torch.load(c[j]), torch.load(v[j]), torch.load(p[j])))
+                size = int(c[j].split('-')[-1].split('.')[0])
+                cs = Game.CANONICAL_SHAPE()
+                c_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                    c[j], shared=False, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
+                v_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                    v[j], shared=False, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
+                p_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                    p[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+                datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
+                del c_tensor
+                del v_tensor
+                del p_tensor
 
-            dataset = ConcatDataset(datasets)
-            dataloader = DataLoader(dataset, batch_size=512, shuffle=True,
-                                    num_workers=11, pin_memory=True)
+        dataset = ConcatDataset(datasets)
+        dataloader = DataLoader(dataset, batch_size=512,
+                                shuffle=True, num_workers=11)
 
-            v_loss, pi_loss = nn.train(
-                dataloader, math.ceil(250/min(hist_size, iteration+1)))
-            del dataset
-            del dataloader
+        v_loss, pi_loss = nn.train(dataloader, 500*4)
         nn.save_checkpoint('data/checkpoint', f'{iteration+1:04d}.pt')
+        del datasets[:]
+        del dataset
+        del dataloader
         del nn
         return v_loss, pi_loss
 
     def self_play(Game, nnargs, best, iteration, depth):
         bs = 512
         cb = 6
-        n = bs*cb
+        n = bs*cb*2
         params = base_params(Game, SELF_PLAY_TEMP, bs, cb)
         params.games_to_play = n
         params.mcts_depth = [depth] * Game.NUM_PLAYERS()
@@ -455,8 +471,7 @@ if __name__ == '__main__':
     if bootstrap_iters > 0 and bootstrap_iters > start:
         # We are just going to assume the new nets have similar elo to the past instead of running many comparisons matches.
         prev_elo = np.genfromtxt('data/elo.csv', delimiter=',')
-        start = bootstrap_iters
-        with tqdm.trange(bootstrap_iters, desc='Bootstraping Network') as pbar:
+        with tqdm.trange(start, bootstrap_iters, desc='Bootstraping Network') as pbar:
             for i in pbar:
                 elo[i] = prev_elo[i]
                 hist_size = calc_hist_size(i)
@@ -469,6 +484,7 @@ if __name__ == '__main__':
                 pbar.set_postfix(postfix)
                 gc.collect()
         current_best = bootstrap_iters
+        start = bootstrap_iters
         postfix['best'] = current_best
 
     with tqdm.trange(start, iters, desc='Build Amazing Network') as pbar:

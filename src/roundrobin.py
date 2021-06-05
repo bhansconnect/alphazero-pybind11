@@ -52,16 +52,16 @@ def pit_agents(Game, players, mcts_depths, bs, name):
 
 if __name__ == '__main__':
     nn_agents = [os.path.basename(x) for x in sorted(
-        glob.glob('data/roundrobin/*.pt'))]
+        glob.glob('data/roundrobin/*.pt'), reverse=True)]
     # rand_agents = [1000]
     rand_agents = []
     agents = nn_agents + rand_agents
 
     Game = alphazero.PhotosynthesisGS
-    bs = 32
+    bs = 16
     depth = 5
     channels = 32
-    nn_mtcs_depth = 250
+    nn_mtcs_depth = 500
 
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth)

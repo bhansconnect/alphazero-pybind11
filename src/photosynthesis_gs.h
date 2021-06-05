@@ -293,6 +293,58 @@ class PhotosynthesisGS : public GameState {
     return moves;
   }
 
+  void rotate_board() {
+    for (auto p = 0; p < NUM_PLAYERS; ++p) {
+      auto tmp = board_(p, 0, 3);
+      board_(p, 0, 3) = board_(p, 0, 6);
+      board_(p, 0, 6) = board_(p, 3, 6);
+      board_(p, 3, 6) = board_(p, 6, 3);
+      board_(p, 6, 3) = board_(p, 6, 0);
+      board_(p, 6, 0) = board_(p, 3, 0);
+      board_(p, 3, 0) = tmp;
+
+      tmp = board_(p, 0, 4);
+      board_(p, 0, 4) = board_(p, 1, 6);
+      board_(p, 1, 6) = board_(p, 4, 5);
+      board_(p, 4, 5) = board_(p, 6, 2);
+      board_(p, 6, 2) = board_(p, 5, 0);
+      board_(p, 5, 0) = board_(p, 2, 1);
+      board_(p, 2, 1) = tmp;
+
+      tmp = board_(p, 0, 5);
+      board_(p, 0, 5) = board_(p, 2, 6);
+      board_(p, 2, 6) = board_(p, 5, 4);
+      board_(p, 5, 4) = board_(p, 6, 1);
+      board_(p, 6, 1) = board_(p, 4, 0);
+      board_(p, 4, 0) = board_(p, 1, 2);
+      board_(p, 1, 2) = tmp;
+
+      tmp = board_(p, 1, 3);
+      board_(p, 1, 3) = board_(p, 1, 5);
+      board_(p, 1, 5) = board_(p, 3, 5);
+      board_(p, 3, 5) = board_(p, 5, 3);
+      board_(p, 5, 3) = board_(p, 5, 1);
+      board_(p, 5, 1) = board_(p, 3, 1);
+      board_(p, 3, 1) = tmp;
+
+      tmp = board_(p, 1, 4);
+      board_(p, 1, 4) = board_(p, 2, 5);
+      board_(p, 2, 5) = board_(p, 4, 4);
+      board_(p, 4, 4) = board_(p, 5, 2);
+      board_(p, 5, 2) = board_(p, 4, 1);
+      board_(p, 4, 1) = board_(p, 2, 2);
+      board_(p, 2, 2) = tmp;
+
+      tmp = board_(p, 2, 3);
+      board_(p, 2, 3) = board_(p, 2, 4);
+      board_(p, 2, 4) = board_(p, 3, 4);
+      board_(p, 3, 4) = board_(p, 4, 3);
+      board_(p, 4, 3) = board_(p, 4, 2);
+      board_(p, 4, 2) = board_(p, 3, 2);
+      board_(p, 3, 2) = tmp;
+    }
+  }
+
   // Plays a move, modifying the current GameState.
   void play_move(uint32_t move) override {
     // Special case where we are setting up the board.
@@ -646,58 +698,6 @@ class PhotosynthesisGS : public GameState {
     }
     for (auto p = 0; p < NUM_PLAYERS; ++p) {
       sun_points_(p) = std::min(sun_points_(p), MAX_SUN);
-    }
-  }
-
-  void rotate_board() {
-    for (auto p = 0; p < NUM_PLAYERS; ++p) {
-      auto tmp = board_(p, 0, 3);
-      board_(p, 0, 3) = board_(p, 0, 6);
-      board_(p, 0, 6) = board_(p, 3, 6);
-      board_(p, 3, 6) = board_(p, 6, 3);
-      board_(p, 6, 3) = board_(p, 6, 0);
-      board_(p, 6, 0) = board_(p, 3, 0);
-      board_(p, 3, 0) = tmp;
-
-      tmp = board_(p, 0, 4);
-      board_(p, 0, 4) = board_(p, 1, 6);
-      board_(p, 1, 6) = board_(p, 4, 5);
-      board_(p, 4, 5) = board_(p, 6, 2);
-      board_(p, 6, 2) = board_(p, 5, 0);
-      board_(p, 5, 0) = board_(p, 2, 1);
-      board_(p, 2, 1) = tmp;
-
-      tmp = board_(p, 0, 5);
-      board_(p, 0, 5) = board_(p, 2, 6);
-      board_(p, 2, 6) = board_(p, 5, 4);
-      board_(p, 5, 4) = board_(p, 6, 1);
-      board_(p, 6, 1) = board_(p, 4, 0);
-      board_(p, 4, 0) = board_(p, 1, 2);
-      board_(p, 1, 2) = tmp;
-
-      tmp = board_(p, 1, 3);
-      board_(p, 1, 3) = board_(p, 1, 5);
-      board_(p, 1, 5) = board_(p, 5, 3);
-      board_(p, 5, 3) = board_(p, 3, 5);
-      board_(p, 3, 5) = board_(p, 5, 1);
-      board_(p, 5, 1) = board_(p, 3, 1);
-      board_(p, 3, 1) = tmp;
-
-      tmp = board_(p, 1, 4);
-      board_(p, 1, 4) = board_(p, 2, 5);
-      board_(p, 2, 5) = board_(p, 4, 4);
-      board_(p, 4, 4) = board_(p, 5, 2);
-      board_(p, 5, 2) = board_(p, 4, 1);
-      board_(p, 4, 1) = board_(p, 2, 2);
-      board_(p, 2, 2) = tmp;
-
-      tmp = board_(p, 2, 3);
-      board_(p, 2, 3) = board_(p, 2, 4);
-      board_(p, 2, 4) = board_(p, 3, 4);
-      board_(p, 3, 4) = board_(p, 4, 3);
-      board_(p, 4, 3) = board_(p, 4, 2);
-      board_(p, 4, 2) = board_(p, 3, 2);
-      board_(p, 3, 2) = tmp;
     }
   }
 

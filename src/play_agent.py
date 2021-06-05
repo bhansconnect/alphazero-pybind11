@@ -30,10 +30,6 @@ def eval_posistion(gs, agent):
     global bfc
     bf += np.sum(gs.valid_moves())
     bfc += 1
-    print(f'\tRaw Score: {v}')
-    print(f'\tRaw Probs: {pi}')
-    print(f'\tRaw Best: {np.argmax(pi)}')
-    print(f'\tRaw Rand: {np.random.choice(pi.shape[0], p=pi)}')
     start = time.time()
     # while time.time() - start < THINK_TIME:
     for _ in range(500):
@@ -42,14 +38,23 @@ def eval_posistion(gs, agent):
         v = v.cpu().numpy()
         pi = pi.cpu().numpy()
         mcts.process_result(gs, v, pi, False)
+    print('Press enter for ai analysis')
+    input()
+    print(f'\tRaw Score: {v}')
+    thing = {x[0]: pi[x[0]] for x in np.argwhere(pi > 0.05)}
+    print(f'\tRaw Probs: {thing}')
+    print(f'\tRaw Best: {np.argmax(pi)}')
+    print(f'\tRaw Rand: {np.random.choice(pi.shape[0], p=pi)}')
+
     print(f'\tMCTS Value Current Player: {mcts.root_value()}')
     print(f'\tMCTS Counts: {mcts.counts()}')
     probs = mcts.probs(TEMP)
-    print(f'\tMCTS Probs: {probs}')
+    thing = {x[0]: probs[x[0]] for x in np.argwhere(probs > 0.05)}
+    print(f'\tMCTS Probs: {thing}')
     print(f'\tMCTS Best: {np.argmax(probs)}')
     rand = np.random.choice(probs.shape[0], p=probs)
     print(f'\tMCTS Rand: {rand}')
-    return rand
+    return np.argmax(probs)
 
 
 if __name__ == '__main__':
@@ -71,18 +76,93 @@ if __name__ == '__main__':
     gs = Game()
     pc = 0
     while gs.scores() is None:
+        print()
+        print()
         print(gs)
-        print('NN: ')
         best = eval_posistion(gs, nn)
-        # print()
-        # print('Which Move? ')
-        # gs.play_move(int(input()))
-        if best == 2454:
-            pc += 1
-        gs.play_move(best)
+        print()
+        valids = gs.valid_moves()
+        valid = False
+
+        # grow, seed, buy, pass, by number
+        # grow locaction
+        # seed from locaction
+        # seed to locaction
+
+        def get_input_num(stuff, max_stuff):
+            valid = False
+            while not valid:
+                try:
+                    print(f'Enter {stuff}: ', end='')
+                    selection = int(input())
+                    if 0 < selection <= max_stuff:
+                        return selection
+                    else:
+                        raise Exception('Sad')
+                except KeyboardInterrupt:
+                    exit()
+                except:
+                    print('You suck at typing numbers. Get Gut!')
+
+        def print_ref_board():
+            for h in range(7):
+                for w in range(7):
+                    if not ((h == 0 and w == 0) or (h == 1 and w == 0) or (h == 0 and w == 1) or
+                            (h == 1 and w == 1) or (h == 2 and w == 0) or (h == 0 and w == 2) or
+                            (h == 6 and w == 6) or (h == 5 and w == 6) or (h == 6 and w == 5) or
+                            (h == 5 and w == 5) or (h == 4 and w == 6) or (h == 6 and w == 4)):
+                        print(f'{w+h*7:2d}', end=' ')
+                    else:
+                        print('  ', end=' ')
+                print()
+        valid = False
+        move = 0
+        while not valid:
+            choice = get_input_num(
+                '1-buy, 2-grow, 3-seed, 4-pass, 5-wild card', 5)
+            if choice == 1:
+                buy_choice = get_input_num(
+                    '1-seed, 2-small, 3-med, 4-large', 4)
+                move = 2449+buy_choice
+            elif choice == 2:
+                print_ref_board()
+                grow_choice = get_input_num('grow tile location (0-49ish)', 49)
+                move = grow_choice
+            elif choice == 3:
+                print_ref_board()
+                from_choice = get_input_num('from tile location (0-49ish)', 49)
+                to_choice = get_input_num('to tile location (0-49ish)', 49)
+                move = 49 + from_choice*49 + to_choice
+            elif choice == 4:
+                move = 2454
+            elif choice == 5:
+                move = get_input_num('anything(0-2454)', 2454)
+            valid = valids[move]
+            if not valid:
+                print(f'Move {move} is sad :(')
+            print()
+
+        gs.play_move(move)
+        # selection = -1
+        # while not valid:
+        #     try:
+        #         print('Enter Move: ', end='')
+        #         selection = int(input())
+        #         if 0 <= selection < len(valids):
+        #             valid = valids[selection]
+        #         else:
+        #             raise Exception('Sad')
+        #     except KeyboardInterrupt:
+        #         exit()
+        #     except:
+        #         print('You suck at typing numbers. Get Gut!')
+        # gs.play_move(selection)
+        # if best == 2454:
+        #     pc += 1
+        # gs.play_move(best)
     print(gs)
     print(gs.scores())
-    print('Passes:',pc)
+    print('Passes:', pc)
     print('BranchFactor:', bf/bfc)
     print(bf)
     print(bfc)

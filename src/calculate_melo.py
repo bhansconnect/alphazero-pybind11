@@ -65,18 +65,18 @@ if __name__ == '__main__':
 
     melo -= melo[0]
     np.savetxt("data/melo.csv", melo, delimiter=",")
-    tmp_melo = np.zeros(len(agents))
-    tmp_c = np.zeros((len(agents), 2))
-    tmp_melo[:len(agents)-1] = melo[:len(agents)-1]
-    tmp_melo[len(agents)-1] = melo[wr.shape[0]-1]
-    tmp_c[:len(agents)-1] = c[:len(agents)-1]
-    tmp_c[len(agents)-1] = c[wr.shape[0]-1]
-    print(tmp_c)
-    print(tmp_melo)
+    # tmp_melo = np.zeros(len(agents))
+    # tmp_c = np.zeros((len(agents), 2))
+    # tmp_melo[:len(agents)] = melo[:len(agents)]
+    # tmp_melo[len(agents)] = melo[wr.shape[0]]
+    # tmp_c[:len(agents)] = c[:len(agents)]
+    # tmp_c[len(agents)] = c[wr.shape[0]]
+    print(c)
+    print(melo)
 
     fig, ax1 = plt.subplots()
-    ax1.plot(sorted(agents)[:len(agents)-1],
-             melo[:len(agents)-1], '-o', color='tab:orange')
+    ax1.plot(sorted(agents)[:len(agents)],
+             melo[:len(agents)], '-o', color='tab:orange')
     ax1.set_xlabel('iteration')
     ax1.set_ylabel('elo rating')
     plt.show()

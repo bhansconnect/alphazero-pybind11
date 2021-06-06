@@ -63,7 +63,7 @@ if __name__ == '__main__':
     import game_runner
 
     np.set_printoptions(precision=3, suppress=True)
-    Game = alphazero.Connect4GS
+    Game = alphazero.PhotosynthesisGS4
     nn_folder = 'data/checkpoint'
     nn_file = os.path.basename(
         sorted(glob.glob(os.path.join(nn_folder, '*.pt')))[-1])

@@ -308,7 +308,7 @@ if __name__ == '__main__':
         return v_loss, pi_loss
 
     def self_play(Game, nnargs, best, iteration, depth):
-        bs = 512
+        bs = 384
         cb = Game.NUM_PLAYERS()*2
         n = bs*cb
         params = base_params(Game, SELF_PLAY_TEMP, bs, cb)
@@ -332,8 +332,11 @@ if __name__ == '__main__':
         gr = GameRunner(players, pm, grargs)
         gr.run()
         scores = pm.scores()
-        p1_rate = (scores[0] + scores[-1]/Game.NUM_PLAYERS())/n
-        draw_rate = scores[-1]/n
+        win_rates = [0] * len(scores)
+        for i in range(len(scores)-1):
+            win_rates[i] = (scores[i] + scores[-1] /
+                            Game.NUM_PLAYERS())/n
+        win_rates[-1] = scores[-1]/n
         hits = pm.cache_hits()
         total = hits + pm.cache_misses()
         hr = 0
@@ -342,7 +345,7 @@ if __name__ == '__main__':
         agl = pm.avg_game_length()
         del pm
         del nn
-        return p1_rate, draw_rate, hr, agl
+        return win_rates, hr, agl
 
     def play_past(Game, nnargs, depth, iteration, past_iter):
         nn_rate = 0
@@ -473,7 +476,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth, lr_milestone=150)
-    Game = alphazero.Connect4GS
+    Game = alphazero.PhotosynthesisGS4
 
     if start == 0:
         create_init_net(Game, nnargs,)
@@ -486,8 +489,7 @@ if __name__ == '__main__':
         elo = np.genfromtxt('data/elo.csv', delimiter=',')
         current_best = np.argmax(elo)
 
-    postfix = {'best': current_best, 'elo': 0, 'vs best': 0,
-               f'vs -{compare_past}': 0, 'p1rate': 0, 'drawrate': 0, 'vloss': 0, 'ploss': 0}
+    postfix = {'best': current_best}
     if bootstrap_iters > 0 and bootstrap_iters > start:
         # We are just going to assume the new nets have similar elo to the past instead of running many comparisons matches.
         prev_elo = np.genfromtxt('data/elo.csv', delimiter=',')
@@ -547,15 +549,16 @@ if __name__ == '__main__':
             pbar.set_postfix(postfix)
             np.savetxt("data/elo.csv", elo, delimiter=",")
 
-            p1_rate, draw_rate, hit_rate, game_length = self_play(
+            win_rates, hit_rate, game_length = self_play(
                 Game, nnargs, current_best, i, nn_selfplay_mcts_depth)
-            writer.add_scalar('Win Rate/Self Play P1', p1_rate, i)
-            writer.add_scalar('Draw Rate/Self Play', draw_rate, i)
+            for j in range(len(win_rates)-1):
+                writer.add_scalar(
+                    f'Win Rate/Self Play P{j+1}', win_rates[j], i)
+            writer.add_scalar('Draw Rate/Self Play', win_rates[-1], i)
             writer.add_scalar('Cache Hit Rate/Self Play', hit_rate, i)
             writer.add_scalar(
                 'Average Game Length/Self Play', game_length, i)
-            postfix['p1rate'] = p1_rate
-            postfix['drawrate'] = draw_rate
+            postfix['win_rates'] = list(map(lambda x: f'{x:0.3f}', win_rates))
             pbar.set_postfix(postfix)
             gc.collect()
 

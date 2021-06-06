@@ -125,24 +125,16 @@ class GameRunner:
                 if total > 0:
                     hr = hits/total
                 completed = self.pm.games_completed()
-                p1_rate = 0
-                p2_rate = 0
-                p3_rate = 0
-                draw_rate = 0
+                scores = self.pm.scores()
+                win_rates = [0] * len(scores)
                 if completed > 0:
-                    scores = self.pm.scores()
-                    p1_rate = (scores[0] + scores[-1] /
-                               self.num_players)/completed
-                    p2_rate = (scores[1] + scores[-1] /
-                               self.num_players)/completed
-                    p3_rate = (scores[2] + scores[-1] /
-                               self.num_players)/completed
-                    draw_rate = scores[-1]/completed
+                    for i in range(len(scores)-1):
+                        win_rates[i] = (scores[i] + scores[-1] /
+                                        self.num_players)/completed
+                    win_rates[-1] = scores[-1]/completed
+                win_rates = list(map(lambda x: f'{x:0.3f}', win_rates))
                 pbar.set_postfix({
-                    'p1 rate': p1_rate,
-                    'p2 rate': p2_rate,
-                    'p3 rate': p3_rate,
-                    'draw rate': draw_rate,
+                    'win rates': win_rates,
                     'cache rate': hr})
                 pbar.update(completed-last_completed)
                 last_completed = completed
@@ -153,15 +145,14 @@ class GameRunner:
         if total > 0:
             hr = hits/total
         scores = self.pm.scores()
-        p1_rate = (scores[0] + scores[-1]/self.num_players)/n
-        p2_rate = (scores[1] + scores[-1]/self.num_players)/n
-        p3_rate = (scores[2] + scores[-1]/self.num_players)/n
-        draw_rate = scores[-1]/n
+        win_rates = [0] * len(scores)
+        for i in range(len(scores)-1):
+            win_rates[i] = (scores[i] + scores[-1] /
+                            self.num_players)/completed
+        win_rates[-1] = scores[-1]/completed
+        win_rates = list(map(lambda x: f'{x:0.3f}', win_rates))
         pbar.set_postfix({
-            'p1 rate': p1_rate,
-            'p2 rate': p2_rate,
-            'p3 rate': p3_rate,
-            'draw rate': draw_rate,
+            'win rates': win_rates,
             'cache hit': hr})
         pbar.update(n - last_completed)
         pbar.close()
@@ -318,8 +309,8 @@ if __name__ == '__main__':
 
     def self_play(Game, nnargs, best, iteration, depth):
         bs = 512
-        cb = 6
-        n = bs*cb*2
+        cb = Game.NUM_PLAYERS()*2
+        n = bs*cb
         params = base_params(Game, SELF_PLAY_TEMP, bs, cb)
         params.games_to_play = n
         params.mcts_depth = [depth] * Game.NUM_PLAYERS()
@@ -362,60 +353,89 @@ if __name__ == '__main__':
         nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
         nn_past = neural_net.NNWrapper(Game, nnargs)
         nn_past.load_checkpoint('data/checkpoint', f'{past_iter:04d}.pt')
-        bs = 32
-        cb = 3
-        n = bs*cb
-        for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc="Bench 1 new vs 2 old"):
-            params = base_params(Game, EVAL_TEMP, bs, cb)
-            params.games_to_play = n
-            params.mcts_depth = [depth] * Game.NUM_PLAYERS()
-            pm = alphazero.PlayManager(Game(), params)
+        cb = Game.NUM_PLAYERS()
+        if Game.NUM_PLAYERS() > 2:
+            bs = 32
+            n = bs*cb
+            for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc=f"Bench 1 new vs {Game.NUM_PLAYERS() - 1} old"):
+                params = base_params(Game, EVAL_TEMP, bs, cb)
+                params.games_to_play = n
+                params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+                pm = alphazero.PlayManager(Game(), params)
 
-            grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
-                            max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
-            players = []
-            for _ in range(Game.NUM_PLAYERS()):
-                players.append(nn_past)
-            players[i] = nn
-            gr = GameRunner(players, pm, grargs)
-            gr.run()
-            scores = pm.scores()
-            nn_rate += (scores[i] + scores[-1]/Game.NUM_PLAYERS())/n
-            draw_rate += scores[-1]/n
-            hits = pm.cache_hits()
-            total = hits + pm.cache_misses()
-            if total > 0:
-                hr += hits/total
-            agl += pm.avg_game_length()
-            del pm
-            gc.collect()
-        for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc="Bench 2 new vs 1 old"):
-            params = base_params(Game, EVAL_TEMP, bs, cb)
-            params.games_to_play = n
-            params.mcts_depth = [depth] * Game.NUM_PLAYERS()
-            pm = alphazero.PlayManager(Game(), params)
+                grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
+                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
+                players = []
+                for _ in range(Game.NUM_PLAYERS()):
+                    players.append(nn_past)
+                players[i] = nn
+                gr = GameRunner(players, pm, grargs)
+                gr.run()
+                scores = pm.scores()
+                nn_rate += (scores[i] + scores[-1]/Game.NUM_PLAYERS())/n
+                draw_rate += scores[-1]/n
+                hits = pm.cache_hits()
+                total = hits + pm.cache_misses()
+                if total > 0:
+                    hr += hits/total
+                agl += pm.avg_game_length()
+                del pm
+                gc.collect()
+            for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc=f"Bench {Game.NUM_PLAYERS() - 1} new vs 1 old"):
+                params = base_params(Game, EVAL_TEMP, bs, cb)
+                params.games_to_play = n
+                params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+                pm = alphazero.PlayManager(Game(), params)
 
-            grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
-                            max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
-            players = []
-            for _ in range(Game.NUM_PLAYERS()):
-                players.append(nn)
-            players[i] = nn_past
-            gr = GameRunner(players, pm, grargs)
-            gr.run()
-            scores = pm.scores()
-            nn_rate += (scores[(i+1) % Game.NUM_PLAYERS()] +
-                        scores[-1]/Game.NUM_PLAYERS())/n
-            nn_rate += (scores[(i+2) % Game.NUM_PLAYERS()] +
-                        scores[-1]/Game.NUM_PLAYERS())/n
-            draw_rate += scores[-1]/n
-            hits = pm.cache_hits()
-            total = hits + pm.cache_misses()
-            if total > 0:
-                hr += hits/total
-            agl += pm.avg_game_length()
-            del pm
-            gc.collect()
+                grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
+                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
+                players = []
+                for _ in range(Game.NUM_PLAYERS()):
+                    players.append(nn)
+                players[i] = nn_past
+                gr = GameRunner(players, pm, grargs)
+                gr.run()
+                scores = pm.scores()
+                nn_rate += (scores[(i+1) % Game.NUM_PLAYERS()] +
+                            scores[-1]/Game.NUM_PLAYERS())/n
+                nn_rate += (scores[(i+2) % Game.NUM_PLAYERS()] +
+                            scores[-1]/Game.NUM_PLAYERS())/n
+                draw_rate += scores[-1]/n
+                hits = pm.cache_hits()
+                total = hits + pm.cache_misses()
+                if total > 0:
+                    hr += hits/total
+                agl += pm.avg_game_length()
+                del pm
+                gc.collect()
+        else:
+            bs = 64
+            n = bs*cb
+            for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc=f"Bench new vs old"):
+                params = base_params(Game, EVAL_TEMP, bs, cb)
+                params.games_to_play = n
+                params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+                pm = alphazero.PlayManager(Game(), params)
+
+                grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
+                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
+                players = []
+                for _ in range(Game.NUM_PLAYERS()):
+                    players.append(nn_past)
+                players[i] = nn
+                gr = GameRunner(players, pm, grargs)
+                gr.run()
+                scores = pm.scores()
+                nn_rate += (scores[i] + scores[-1]/Game.NUM_PLAYERS())/n
+                draw_rate += scores[-1]/n
+                hits = pm.cache_hits()
+                total = hits + pm.cache_misses()
+                if total > 0:
+                    hr += hits/total
+                agl += pm.avg_game_length()
+                del pm
+                gc.collect()
+
         del nn
         del nn_past
         return nn_rate / (2*Game.NUM_PLAYERS()), draw_rate / (2*Game.NUM_PLAYERS()), hr / (2*Game.NUM_PLAYERS()), agl / (2*Game.NUM_PLAYERS())
@@ -453,7 +473,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth, lr_milestone=150)
-    Game = alphazero.PhotosynthesisGS
+    Game = alphazero.Connect4GS
 
     if start == 0:
         create_init_net(Game, nnargs,)

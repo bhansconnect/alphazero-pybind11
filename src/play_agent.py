@@ -21,6 +21,7 @@ TEMP = 0.5
 bf = 0
 bfc = 0
 
+
 def eval_posistion(gs, agent):
     mcts = alphazero.MCTS(CPUCT, gs.num_players(), gs.num_moves())
     v, pi = agent.predict(torch.from_numpy(gs.canonicalized()))
@@ -62,7 +63,7 @@ if __name__ == '__main__':
     import game_runner
 
     np.set_printoptions(precision=3, suppress=True)
-    Game = alphazero.PhotosynthesisGS
+    Game = alphazero.Connect4GS
     nn_folder = 'data/checkpoint'
     nn_file = os.path.basename(
         sorted(glob.glob(os.path.join(nn_folder, '*.pt')))[-1])

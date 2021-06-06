@@ -233,12 +233,26 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("CANONICAL_SHAPE",
                   [] { return connect4_gs::CANONICAL_SHAPE; });
 
-  py::class_<PhotosynthesisGS<3>, GameState>(m, "PhotosynthesisGS")
+  py::class_<PhotosynthesisGS<2>, GameState>(m, "PhotosynthesisGS2")
+      .def(py::init<>())
+      .def_static("NUM_PLAYERS", [] { return 2; })
+      .def_static("NUM_MOVES", [] { return photosynthesis_gs::NUM_MOVES; })
+      .def_static("CANONICAL_SHAPE",
+                  [] { return PhotosynthesisGS<2>::CANONICAL_SHAPE; });
+
+  py::class_<PhotosynthesisGS<3>, GameState>(m, "PhotosynthesisGS3")
       .def(py::init<>())
       .def_static("NUM_PLAYERS", [] { return 3; })
       .def_static("NUM_MOVES", [] { return photosynthesis_gs::NUM_MOVES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return PhotosynthesisGS<3>::CANONICAL_SHAPE; });
+
+  py::class_<PhotosynthesisGS<4>, GameState>(m, "PhotosynthesisGS4")
+      .def(py::init<>())
+      .def_static("NUM_PLAYERS", [] { return 4; })
+      .def_static("NUM_MOVES", [] { return photosynthesis_gs::NUM_MOVES; })
+      .def_static("CANONICAL_SHAPE",
+                  [] { return PhotosynthesisGS<4>::CANONICAL_SHAPE; });
 }
 
 }  // namespace alphazero

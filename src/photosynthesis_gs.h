@@ -41,7 +41,7 @@ class PhotosynthesisGS : public GameState {
   static constexpr const std::array<int, 3> BOARD_SHAPE = {NUM_PLAYERS, HEIGHT,
                                                            WIDTH};
   static constexpr const std::array<int, 3> CANONICAL_SHAPE = {
-      53 + 94 * NUM_PLAYERS, HEIGHT, WIDTH};
+      47 + 96 * NUM_PLAYERS, HEIGHT, WIDTH};
   static constexpr const std::array<uint8_t, 4> MAX_BUYABLE_PLANTS{4, 4, 3, 2};
   static constexpr const std::array<uint8_t, 4> MAX_AVAILABLE_PLANTS{6, 8, 4,
                                                                      2};

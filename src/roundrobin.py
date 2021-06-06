@@ -23,7 +23,7 @@ def pit_agents(Game, players, mcts_depths, bs, name):
     win_rates = [0]*np
     for i in tqdm.trange(np, leave=False, desc=name):
         params = alphazero.PlayParams()
-        cb = 3
+        cb = Game.NUM_PLAYERS()
         n = bs*cb
         ordered_players = [None]*np
         ordered_depths = [None]*np
@@ -57,7 +57,7 @@ if __name__ == '__main__':
     rand_agents = []
     agents = nn_agents + rand_agents
 
-    Game = alphazero.PhotosynthesisGS
+    Game = alphazero.Connect4GS
     bs = 16
     depth = 5
     channels = 32
@@ -90,14 +90,25 @@ if __name__ == '__main__':
                     p2 = neural_net.NNWrapper(Game, nnargs)
                     p2.load_checkpoint('data/roundrobin', agents[j])
                     d2 = nn_mtcs_depth
+                players = [p2] * Game.NUM_PLAYERS()
+                depths = [d2] * Game.NUM_PLAYERS()
+                players[0] = p1
+                depths[0] = d1
                 win_rates = pit_agents(
-                    Game, [p1, p2, p2], [d1, d2, d2], bs, f'{agents[i]}-{agents[j]}')
+                    Game, players, depths, bs, f'{agents[i]}-{agents[j]}')
+                players = [p1] * Game.NUM_PLAYERS()
+                depths = [d1] * Game.NUM_PLAYERS()
+                players[0] = p2
+                depths[0] = d2
                 win_rates2 = pit_agents(
-                    Game, [p2, p1, p1], [d2, d1, d1], bs, f'{agents[j]}-{agents[i]}')
-                win_matrix[i, j] = (
-                    win_rates[0] + win_rates2[1] + win_rates2[2])/2
-                win_matrix[j, i] = (
-                    win_rates2[0] + win_rates[1] + win_rates[2])/2
+                    Game, players, depths, bs, f'{agents[j]}-{agents[i]}')
+                wr1 = win_rates[0]
+                wr2 = win_rates2[0]
+                for i in range(1, len(win_rates)):
+                    wr1 += win_rates2[i]
+                    wr2 += win_rates[i]
+                win_matrix[i, j] = wr1/2
+                win_matrix[j, i] = wr2/2
                 print(win_matrix[i, j])
                 pbar.update()
             print(win_matrix[i])

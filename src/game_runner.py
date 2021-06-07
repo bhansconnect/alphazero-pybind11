@@ -358,7 +358,7 @@ if __name__ == '__main__':
         nn_past.load_checkpoint('data/checkpoint', f'{past_iter:04d}.pt')
         cb = Game.NUM_PLAYERS()
         if Game.NUM_PLAYERS() > 2:
-            bs = 32
+            bs = 16
             n = bs*cb
             for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc=f"Bench 1 new vs {Game.NUM_PLAYERS() - 1} old"):
                 params = base_params(Game, EVAL_TEMP, bs, cb)
@@ -399,10 +399,9 @@ if __name__ == '__main__':
                 gr = GameRunner(players, pm, grargs)
                 gr.run()
                 scores = pm.scores()
-                nn_rate += (scores[(i+1) % Game.NUM_PLAYERS()] +
-                            scores[-1]/Game.NUM_PLAYERS())/n
-                nn_rate += (scores[(i+2) % Game.NUM_PLAYERS()] +
-                            scores[-1]/Game.NUM_PLAYERS())/n
+                for j in range(1, Game.NUM_PLAYERS()):
+                    nn_rate += (scores[(i+j) % Game.NUM_PLAYERS()] +
+                                scores[-1]/Game.NUM_PLAYERS())/n
                 draw_rate += scores[-1]/n
                 hits = pm.cache_hits()
                 total = hits + pm.cache_misses()
@@ -411,6 +410,10 @@ if __name__ == '__main__':
                 agl += pm.avg_game_length()
                 del pm
                 gc.collect()
+            nn_rate /= 2*Game.NUM_PLAYERS()
+            draw_rate /= 2*Game.NUM_PLAYERS()
+            hr /= 2*Game.NUM_PLAYERS()
+            agl /= 2*Game.NUM_PLAYERS()
         else:
             bs = 64
             n = bs*cb
@@ -438,10 +441,14 @@ if __name__ == '__main__':
                 agl += pm.avg_game_length()
                 del pm
                 gc.collect()
+            nn_rate /= Game.NUM_PLAYERS()
+            draw_rate /= Game.NUM_PLAYERS()
+            hr /= Game.NUM_PLAYERS()
+            agl /= Game.NUM_PLAYERS()
 
         del nn
         del nn_past
-        return nn_rate / (2*Game.NUM_PLAYERS()), draw_rate / (2*Game.NUM_PLAYERS()), hr / (2*Game.NUM_PLAYERS()), agl / (2*Game.NUM_PLAYERS())
+        return nn_rate, draw_rate, hr, agl
 
     def elo_prob(r1, r2):
         return 1.0 / (1 + 1.0 * math.pow(10, 1.0 * (r1-r2) / 400))

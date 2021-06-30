@@ -46,7 +46,7 @@ class PhotosynthesisGS : public GameState {
   static constexpr const std::array<uint8_t, 4> MAX_AVAILABLE_PLANTS{6, 8, 4,
                                                                      2};
   static constexpr const std::array<std::array<uint8_t, 4>, 4> BUY_COSTS{{
-      {2, 2, 2, 1},
+      {2, 2, 1, 1},
       {3, 3, 2, 2},
       {4, 3, 3, static_cast<uint8_t>(-1)},
       {5, 4, static_cast<uint8_t>(-1), static_cast<uint8_t>(-1)},

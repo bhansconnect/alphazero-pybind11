@@ -15,7 +15,7 @@ alphazero = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(alphazero)
 
 THINK_TIME = 0.5
-CPUCT = 2
+CPUCT = 1.1
 TEMP = 0.5
 
 bf = 0
@@ -33,14 +33,14 @@ def eval_posistion(gs, agent):
     bfc += 1
     start = time.time()
     # while time.time() - start < THINK_TIME:
-    for _ in range(500):
+    for _ in range(250):
         leaf = mcts.find_leaf(gs)
         v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
         v = v.cpu().numpy()
         pi = pi.cpu().numpy()
         mcts.process_result(gs, v, pi, False)
-    print('Press enter for ai analysis')
-    input()
+    # print('Press enter for ai analysis')
+    # input()
     print(f'\tRaw Score: {v}')
     thing = {x[0]: pi[x[0]] for x in np.argwhere(pi > 0.05)}
     print(f'\tRaw Probs: {thing}')
@@ -55,7 +55,7 @@ def eval_posistion(gs, agent):
     print(f'\tMCTS Best: {np.argmax(probs)}')
     rand = np.random.choice(probs.shape[0], p=probs)
     print(f'\tMCTS Rand: {rand}')
-    return np.argmax(probs)
+    return rand
 
 
 if __name__ == '__main__':
@@ -76,11 +76,13 @@ if __name__ == '__main__':
     nn.load_checkpoint(nn_folder, nn_file)
     gs = Game()
     pc = 0
+    hist = []
     while gs.scores() is None:
+        hist.append(gs.copy())
         print()
         print()
         print(gs)
-        best = eval_posistion(gs, nn)
+        rand = eval_posistion(gs, nn)
         print()
         valids = gs.valid_moves()
         valid = False
@@ -96,6 +98,8 @@ if __name__ == '__main__':
                 try:
                     print(f'Enter {stuff}: ', end='')
                     selection = int(input())
+                    if selection == 0:
+                        return 0
                     if 0 < selection <= max_stuff:
                         return selection
                     else:
@@ -118,9 +122,19 @@ if __name__ == '__main__':
                 print()
         valid = False
         move = 0
+
         while not valid:
             choice = get_input_num(
-                '1-buy, 2-grow, 3-seed, 4-pass, 5-wild card', 5)
+                '0-undo, 1-buy, 2-grow, 3-seed, 4-pass, 5-wild card', 5)
+            if choice == 0:
+                if len(hist) == 1:
+                    gs = hist[-1].copy()
+                    hist = []
+                else:
+                    gs = hist[-2].copy()
+                    hist = hist[:-2]
+                move = -1
+                break
             if choice == 1:
                 buy_choice = get_input_num(
                     '1-seed, 2-small, 3-med, 4-large', 4)
@@ -143,7 +157,9 @@ if __name__ == '__main__':
                 print(f'Move {move} is sad :(')
             print()
 
-        gs.play_move(move)
+        if move != -1:
+            gs.play_move(move)
+
         # selection = -1
         # while not valid:
         #     try:
@@ -158,9 +174,10 @@ if __name__ == '__main__':
         #     except:
         #         print('You suck at typing numbers. Get Gut!')
         # gs.play_move(selection)
-        # if best == 2454:
+
+        # if rand == 2454:
         #     pc += 1
-        # gs.play_move(best)
+        # gs.play_move(rand)
     print(gs)
     print(gs.scores())
     print('Passes:', pc)

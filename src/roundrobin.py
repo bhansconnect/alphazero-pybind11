@@ -57,7 +57,7 @@ if __name__ == '__main__':
     rand_agents = []
     agents = nn_agents + rand_agents
 
-    Game = alphazero.PhotosynthesisGS4
+    Game = alphazero.Connect4GS
     bs = 16
     depth = 5
     channels = 32

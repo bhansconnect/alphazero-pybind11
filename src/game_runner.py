@@ -308,9 +308,9 @@ if __name__ == '__main__':
         return v_loss, pi_loss
 
     def self_play(Game, nnargs, best, iteration, depth):
-        bs = 384
+        bs = 512
         cb = Game.NUM_PLAYERS()*2
-        n = bs*cb
+        n = bs*cb*12
         params = base_params(Game, SELF_PLAY_TEMP, bs, cb)
         params.games_to_play = n
         params.mcts_depth = [depth] * Game.NUM_PLAYERS()
@@ -483,7 +483,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth, lr_milestone=150)
-    Game = alphazero.PhotosynthesisGS4
+    Game = alphazero.Connect4GS
 
     if start == 0:
         create_init_net(Game, nnargs,)

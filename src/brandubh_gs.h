@@ -42,6 +42,7 @@ using CanonicalTensor =
 struct RepetitionKeyWrapper {
   RepetitionKeyWrapper(const BoardTensor& tensor, uint8_t player)
       : t(tensor), p(player) {}
+  RepetitionKeyWrapper(const RepetitionKeyWrapper& rkw) : t(rkw.t), p(rkw.p) {}
   BoardTensor t;
   uint8_t p;
 };
@@ -93,6 +94,18 @@ class BrandubhGS : public GameState {
       : board_(board), player_(player), turn_(turn) {}
   BrandubhGS(BoardTensor&& board, int8_t player, int32_t turn)
       : board_(std::move(board)), player_(player), turn_(turn) {}
+  BrandubhGS(
+      BoardTensor board, int8_t player, int32_t turn,
+      uint8_t current_repetition_count,
+      absl::flat_hash_map<RepetitionKeyWrapper, uint8_t> repetition_counts)
+      : board_(board),
+        player_(player),
+        turn_(turn),
+        current_repetition_count_(current_repetition_count) {
+    for (const auto& entry : repetition_counts) {
+      repetition_counts_[entry.first] = entry.second;
+    }
+  }
 
   [[nodiscard]] std::unique_ptr<GameState> copy() const noexcept override;
   [[nodiscard]] bool operator==(const GameState& other) const noexcept override;

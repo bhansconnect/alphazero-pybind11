@@ -1,9 +1,12 @@
 #include "brandubh_gs.h"
 
+#include "color.h"
+
 namespace alphazero::brandubh_gs {
 
 [[nodiscard]] std::unique_ptr<GameState> BrandubhGS::copy() const noexcept {
-  return std::make_unique<BrandubhGS>(board_, player_, turn_);
+  return std::make_unique<BrandubhGS>(
+      board_, player_, turn_, current_repetition_count_, repetition_counts_);
 }
 
 [[nodiscard]] bool BrandubhGS::operator==(
@@ -359,6 +362,11 @@ void BrandubhGS::play_move(uint32_t move) {
       '\n';
   for (auto h = 0; h < HEIGHT; ++h) {
     for (auto w = 0; w < WIDTH; ++w) {
+      if ((h == 0 && w == 0) || (h == HEIGHT - 1 && w == 0) ||
+          (h == 0 && w == WIDTH - 1) || (h == HEIGHT - 1 && w == WIDTH - 1) ||
+          (h == 3 && w == 3)) {
+        out += color::Modifier{color::BG_RED}.dump();
+      }
       if (board_(0, h, w) == 1) {
         out += '@';
       } else if (board_(1, h, w) == 1) {
@@ -367,6 +375,11 @@ void BrandubhGS::play_move(uint32_t move) {
         out += 'X';
       } else {
         out += '.';
+      }
+      if ((h == 0 && w == 0) || (h == HEIGHT - 1 && w == 0) ||
+          (h == 0 && w == WIDTH - 1) || (h == HEIGHT - 1 && w == WIDTH - 1) ||
+          (h == 3 && w == 3)) {
+        out += color::Modifier{color::BG_DEFAULT}.dump();
       }
     }
     out += '\n';

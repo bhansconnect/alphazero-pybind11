@@ -40,24 +40,9 @@ using CanonicalTensor =
                                     CANONICAL_SHAPE[2]>>;
 
 struct RepetitionKeyWrapper {
-  RepetitionKeyWrapper(const BoardTensor& tensor, uint8_t player) : p(player) {
-    for (auto i = 0; i < BOARD_SHAPE[0]; ++i) {
-      for (auto j = 0; j < BOARD_SHAPE[1]; ++j) {
-        for (auto k = 0; k < BOARD_SHAPE[2]; ++k) {
-          t(i, j, k) = tensor(i, j, k);
-        }
-      }
-    }
-  }
-  RepetitionKeyWrapper(const RepetitionKeyWrapper& rkw) : p(rkw.p) {
-    for (auto i = 0; i < BOARD_SHAPE[0]; ++i) {
-      for (auto j = 0; j < BOARD_SHAPE[1]; ++j) {
-        for (auto k = 0; k < BOARD_SHAPE[2]; ++k) {
-          t(i, j, k) = rkw.t(i, j, k);
-        }
-      }
-    }
-  }
+  RepetitionKeyWrapper(const BoardTensor& tensor, uint8_t player)
+      : t(tensor), p(player) {}
+  RepetitionKeyWrapper(const RepetitionKeyWrapper& rkw) : t(rkw.t), p(rkw.p) {}
   BoardTensor t;
   uint8_t p;
 };
@@ -77,7 +62,7 @@ bool operator==(const RepetitionKeyWrapper& lhs,
       }
     }
   }
-  return true;
+  return rhs.p == lhs.p;
 }
 
 class BrandubhGS : public GameState {

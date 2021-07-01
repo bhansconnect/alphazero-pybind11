@@ -8,10 +8,21 @@ namespace {
 
 // NOLINTNEXTLINE
 TEST(BrandubhGS, Equals) {
-  auto gs = BrandubhGS();
-  gs.play_move((3 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 4);
-  std::cout << gs.dump();
-  auto m = gs.valid_moves();
+  auto gs = BrandubhGS().copy();
+  gs->play_move((3 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 4);
+  gs->play_move((4 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 3);
+  std::cout << gs->dump();
+  gs->play_move((3 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 4);
+  gs->play_move((4 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 3);
+  std::cout << gs->dump();
+  gs = gs->copy();
+  gs->play_move((3 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 4);
+  gs->play_move((4 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 3);
+  std::cout << gs->dump();
+  gs->play_move((3 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 4);
+  gs->play_move((4 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 3);
+  std::cout << gs->dump();
+  auto m = gs->valid_moves();
   for (auto i = 0; i < m.size(); ++i) {
     if (m(i) == 1) {
       auto new_loc = i % (WIDTH + HEIGHT);
@@ -34,7 +45,7 @@ TEST(BrandubhGS, Equals) {
                 << '\n';
     }
   }
-  auto s = gs.scores().value_or(SizedVector<float, 3>{0, 0, 0});
+  auto s = gs->scores().value_or(SizedVector<float, 3>{0, 0, 0});
 
   std::cout << s(0) << ", " << s(1) << ", " << s(2);
   // EXPECT_TRUE(false);

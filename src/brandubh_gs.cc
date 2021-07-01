@@ -259,7 +259,7 @@ void BrandubhGS::play_move(uint32_t move) {
   auto scores = SizedVector<float, 3>{};
   scores.setZero();
   // Check if 3 fold repetition.
-  if (current_repetition_count_ == 3) {
+  if (current_repetition_count_ >= 3) {
     // The opponent brought us to this state and thus loses.
     auto opponent = (player_ + 1) % 2;
     scores(opponent) = 1;

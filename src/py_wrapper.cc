@@ -8,6 +8,7 @@
 #include "pybind11/numpy.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
+#include "tawlbwrdd_gs.h"
 
 // This file deals with exposing C++ to Python.
 // It uses Pybind11 for this.
@@ -18,6 +19,7 @@ namespace py = pybind11;
 using brandubh_gs::BrandubhGS;
 using connect4_gs::Connect4GS;
 using photosynthesis_gs::PhotosynthesisGS;
+using tawlbwrdd_gs::TawlbwrddGS;
 
 // NOLINTNEXTLINE
 PYBIND11_MODULE(alphazero, m) {
@@ -234,6 +236,32 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_MOVES", [] { return brandubh_gs::NUM_MOVES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return brandubh_gs::CANONICAL_SHAPE; });
+
+  py::class_<TawlbwrddGS, GameState>(m, "BrandubhGS")
+      .def(py::init<>())
+      .def(py::init(
+          [](const py::array_t<int8_t>& board, int8_t player, int32_t turn) {
+            if (board.ndim() != tawlbwrdd_gs::BOARD_SHAPE.size() ||
+                board.shape(0) != tawlbwrdd_gs::BOARD_SHAPE[0] ||
+                board.shape(1) != tawlbwrdd_gs::BOARD_SHAPE[1] ||
+                board.shape(2) != tawlbwrdd_gs::BOARD_SHAPE[2]) {
+              throw std::runtime_error{"Improper tawlbwrdd board shape"};
+            }
+            auto np_unchecked = board.unchecked<3>();
+            auto tensor_board = tawlbwrdd_gs::BoardTensor{};
+            for (auto i = 0; i < tawlbwrdd_gs::BOARD_SHAPE[0]; ++i) {
+              for (auto j = 0; j < tawlbwrdd_gs::BOARD_SHAPE[1]; ++j) {
+                for (auto k = 0; k < tawlbwrdd_gs::BOARD_SHAPE[2]; ++k) {
+                  tensor_board(i, j, k) = np_unchecked(i, j, k);
+                }
+              }
+            }
+            return TawlbwrddGS(tensor_board, player, turn);
+          }))
+      .def_static("NUM_PLAYERS", [] { return tawlbwrdd_gs::NUM_PLAYERS; })
+      .def_static("NUM_MOVES", [] { return tawlbwrdd_gs::NUM_MOVES; })
+      .def_static("CANONICAL_SHAPE",
+                  [] { return tawlbwrdd_gs::CANONICAL_SHAPE; });
 
   py::class_<Connect4GS, GameState>(m, "Connect4GS")
       .def(py::init<>())

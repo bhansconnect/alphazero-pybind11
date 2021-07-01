@@ -237,7 +237,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("CANONICAL_SHAPE",
                   [] { return brandubh_gs::CANONICAL_SHAPE; });
 
-  py::class_<TawlbwrddGS, GameState>(m, "BrandubhGS")
+  py::class_<TawlbwrddGS, GameState>(m, "TawlbwrddGS")
       .def(py::init<>())
       .def(py::init(
           [](const py::array_t<int8_t>& board, int8_t player, int32_t turn) {

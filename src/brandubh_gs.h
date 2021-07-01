@@ -40,9 +40,24 @@ using CanonicalTensor =
                                     CANONICAL_SHAPE[2]>>;
 
 struct RepetitionKeyWrapper {
-  RepetitionKeyWrapper(const BoardTensor& tensor, uint8_t player)
-      : t(tensor), p(player) {}
-  RepetitionKeyWrapper(const RepetitionKeyWrapper& rkw) : t(rkw.t), p(rkw.p) {}
+  RepetitionKeyWrapper(const BoardTensor& tensor, uint8_t player) : p(player) {
+    for (auto i = 0; i < BOARD_SHAPE[0]; ++i) {
+      for (auto j = 0; j < BOARD_SHAPE[1]; ++j) {
+        for (auto k = 0; k < BOARD_SHAPE[2]; ++k) {
+          t(i, j, k) = tensor(i, j, k);
+        }
+      }
+    }
+  }
+  RepetitionKeyWrapper(const RepetitionKeyWrapper& rkw) : p(rkw.p) {
+    for (auto i = 0; i < BOARD_SHAPE[0]; ++i) {
+      for (auto j = 0; j < BOARD_SHAPE[1]; ++j) {
+        for (auto k = 0; k < BOARD_SHAPE[2]; ++k) {
+          t(i, j, k) = rkw.t(i, j, k);
+        }
+      }
+    }
+  }
   BoardTensor t;
   uint8_t p;
 };
@@ -103,7 +118,7 @@ class BrandubhGS : public GameState {
         turn_(turn),
         current_repetition_count_(current_repetition_count) {
     for (const auto& entry : repetition_counts) {
-      repetition_counts_[entry.first] = entry.second;
+      repetition_counts_[RepetitionKeyWrapper(entry.first)] = entry.second;
     }
   }
 
@@ -151,8 +166,8 @@ class BrandubhGS : public GameState {
   [[nodiscard]] std::string dump() const noexcept override;
 
  private:
-  // Board contains a layer for the king, other white pieces, and black pieces.
-  // A 0 means no piece, a 1 means a piece of the respective type.
+  // Board contains a layer for the king, other white pieces, and black
+  // pieces. A 0 means no piece, a 1 means a piece of the respective type.
   BoardTensor board_{};
   int8_t player_{0};
   int32_t turn_{0};

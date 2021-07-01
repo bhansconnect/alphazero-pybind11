@@ -15,6 +15,20 @@ gtest_proj = subproject('gtest')
 gtest_dep = gtest_proj.get_variable('gtest_main_dep')
 
 
+brandubh_gs = library(
+    'brandubh_gs',
+    'brandubh_gs.cc',
+    dependencies: [eigen_dep, absl_hash_dep, absl_container_dep],
+)
+
+brandubh_gs_test = executable(
+  'brandubh_gs_test',
+  'brandubh_gs_test.cc',
+  dependencies: [gtest_dep, eigen_dep, absl_hash_dep, absl_container_dep],
+  link_with: [brandubh_gs],
+)
+test('gtest tests', brandubh_gs_test)
+
 connect4_gs = library(
     'connect4_gs',
     'connect4_gs.cc',
@@ -84,6 +98,6 @@ test('gtest tests', play_manager_test)
 py3_install.extension_module(
   'alphazero',
   sources: ['py_wrapper.cc'],
-  link_with: [connect4_gs, play_manager],
+  link_with: [connect4_gs, brandubh_gs, play_manager],
   dependencies : [pybind11_dep, py3_dep, eigen_dep, absl_container_dep, absl_hash_dep],
 )

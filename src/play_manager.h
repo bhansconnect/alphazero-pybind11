@@ -15,30 +15,6 @@
 
 namespace alphazero {
 
-struct TensorKeyWrapper {
-  TensorKeyWrapper(const Tensor<float, 3>& tensor) : t(tensor) {}
-  Tensor<float, 3> t;
-};
-template <typename H>
-H AbslHashValue(H h, const TensorKeyWrapper& t) {
-  return H::combine_contiguous(std::move(h), t.t.data(), t.t.size());
-}
-bool operator==(const TensorKeyWrapper& lhs, const TensorKeyWrapper& rhs) {
-  if (lhs.t.dimensions() != rhs.t.dimensions()) {
-    return false;
-  }
-  for (auto i = 0; i < lhs.t.dimension(0); ++i) {
-    for (auto j = 0; j < lhs.t.dimension(1); ++j) {
-      for (auto k = 0; k < lhs.t.dimension(2); ++k) {
-        if (lhs.t(i, j, k) != rhs.t(i, j, k)) {
-          return false;
-        }
-      }
-    }
-  }
-  return true;
-}
-
 using Cache =
     LRUCache<GameStateKeyWrapper, std::tuple<Vector<float>, Vector<float>>>;
 

@@ -260,7 +260,9 @@ void BrandubhGS::play_move(uint32_t move) {
   scores.setZero();
   // Check if 3 fold repetition.
   if (current_repetition_count_ >= 3) {
-    // The opponent brought us to this state and thus loses.
+    // The player who brought us to this state probably was forced to do so.
+    // (E.G. it was required to block a king escape)
+    // The opponent brought us to this state and thus wins.
     auto opponent = (player_ + 1) % 2;
     scores(opponent) = 1;
     return scores;

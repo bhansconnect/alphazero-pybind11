@@ -4,7 +4,7 @@
 #include "game_state.h"
 
 // Base rules from http://www.cyningstan.com/game/175/tawlbwrdd
-// In addition, 3 fold repetitions lead to a loss for the player who played the
+// In addition, 3 fold repetitions lead to a loss for the player who forced the
 // 3rd repetition.
 // Lastly, the starting position is the lewis cross as it has been seen to be
 // fairer.

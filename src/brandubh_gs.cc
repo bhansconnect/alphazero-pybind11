@@ -68,8 +68,8 @@ bool is_valid_square(const BoardTensor& bt, bool is_king, int target_h,
   if (target_w < 0 || target_w >= WIDTH || target_h < 0 || target_h >= HEIGHT) {
     return false;
   }
-  // Center and corners are only valid to the king.
-  if ((target_w == 3 && target_h == 3) || (target_w == 0 && target_h == 0) ||
+  // Corners are only valid to the king.
+  if ((target_w == 0 && target_h == 0) ||
       (target_w == WIDTH - 1 && target_h == 0) ||
       (target_w == 0 && target_h == HEIGHT - 1) ||
       (target_w == WIDTH - 1 && target_h == HEIGHT - 1)) {
@@ -78,6 +78,65 @@ bool is_valid_square(const BoardTensor& bt, bool is_king, int target_h,
   // Otherwise is valid if it is empty.
   return bt(0, target_h, target_w) == 0 && bt(1, target_h, target_w) == 0 &&
          bt(2, target_h, target_w) == 0;
+}
+
+[[nodiscard]] bool BrandubhGS::has_valid_moves() const noexcept {
+  for (auto h = 0; h < HEIGHT; ++h) {
+    for (auto w = 0; w < WIDTH; ++w) {
+      if (is_players_piece(board_, player_, h, w)) {
+        bool is_king = board_(0, h, w) == 1;
+        {
+          auto target_w = w + 1;
+          while (is_valid_square(board_, is_king, h, target_w)) {
+            // Special exception for the center. If not king you can move
+            // through but not land on.
+            if (h == 3 && target_w == 3 && !is_king) {
+              ++target_w;
+              continue;
+            }
+            return true;
+          }
+        }
+        {
+          auto target_w = w - 1;
+          while (is_valid_square(board_, is_king, h, target_w)) {
+            // Special exception for the center. If not king you can move
+            // through but not land on.
+            if (h == 3 && target_w == 3 && !is_king) {
+              --target_w;
+              continue;
+            }
+            return true;
+          }
+        }
+        {
+          auto target_h = h + 1;
+          while (is_valid_square(board_, is_king, target_h, w)) {
+            // Special exception for the center. If not king you can move
+            // through but not land on.
+            if (target_h == 3 && w == 3 && !is_king) {
+              ++target_h;
+              continue;
+            }
+            return true;
+          }
+        }
+        {
+          auto target_h = h - 1;
+          while (is_valid_square(board_, is_king, target_h, w)) {
+            // Special exception for the center. If not king you can move
+            // through but not land on.
+            if (target_h == 3 && w == 3 && !is_king) {
+              --target_h;
+              continue;
+            }
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
 }
 
 [[nodiscard]] Vector<uint8_t> BrandubhGS::valid_moves() const noexcept {
@@ -90,6 +149,12 @@ bool is_valid_square(const BoardTensor& bt, bool is_king, int target_h,
         {
           auto target_w = w + 1;
           while (is_valid_square(board_, is_king, h, target_w)) {
+            // Special exception for the center. If not king you can move
+            // through but not land on.
+            if (h == 3 && target_w == 3 && !is_king) {
+              ++target_w;
+              continue;
+            }
             valids[(h * WIDTH + w) * (WIDTH + HEIGHT) + target_w + 0] = 1;
             ++target_w;
           }
@@ -97,6 +162,12 @@ bool is_valid_square(const BoardTensor& bt, bool is_king, int target_h,
         {
           auto target_w = w - 1;
           while (is_valid_square(board_, is_king, h, target_w)) {
+            // Special exception for the center. If not king you can move
+            // through but not land on.
+            if (h == 3 && target_w == 3 && !is_king) {
+              --target_w;
+              continue;
+            }
             valids[(h * WIDTH + w) * (WIDTH + HEIGHT) + target_w + 0] = 1;
             --target_w;
           }
@@ -104,6 +175,12 @@ bool is_valid_square(const BoardTensor& bt, bool is_king, int target_h,
         {
           auto target_h = h + 1;
           while (is_valid_square(board_, is_king, target_h, w)) {
+            // Special exception for the center. If not king you can move
+            // through but not land on.
+            if (target_h == 3 && w == 3 && !is_king) {
+              ++target_h;
+              continue;
+            }
             valids[(h * WIDTH + w) * (WIDTH + HEIGHT) + WIDTH + target_h] = 1;
             ++target_h;
           }
@@ -111,6 +188,12 @@ bool is_valid_square(const BoardTensor& bt, bool is_king, int target_h,
         {
           auto target_h = h - 1;
           while (is_valid_square(board_, is_king, target_h, w)) {
+            // Special exception for the center. If not king you can move
+            // through but not land on.
+            if (target_h == 3 && w == 3 && !is_king) {
+              --target_h;
+              continue;
+            }
             valids[(h * WIDTH + w) * (WIDTH + HEIGHT) + WIDTH + target_h] = 1;
             --target_h;
           }
@@ -279,16 +362,7 @@ void BrandubhGS::play_move(uint32_t move) {
     return scores;
   }
   // Current player has no moves left.
-  // TODO: implement in fast way that doesn't generate all valid moves
-  auto valids = valid_moves();
-  bool has_valid = false;
-  for (auto i = 0; i < NUM_MOVES; ++i) {
-    if (valids[i] == 1) {
-      has_valid = true;
-      break;
-    }
-  }
-  if (!has_valid) {
+  if (!has_valid_moves()) {
     auto opponent = (player_ + 1) % 2;
     scores(opponent) = 1;
     return scores;

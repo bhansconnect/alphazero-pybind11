@@ -157,6 +157,7 @@ class TawlbwrddGS : public GameState {
   // Returns a bool for all moves. The value is true if the move is playable
   // from this GameState.
   [[nodiscard]] Vector<uint8_t> valid_moves() const noexcept override;
+  [[nodiscard]] bool has_valid_moves() const noexcept;
 
   // Plays a move, modifying the current GameState.
   void play_move(uint32_t move) override;

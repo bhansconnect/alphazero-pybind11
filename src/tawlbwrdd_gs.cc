@@ -70,6 +70,40 @@ bool is_valid_square(const BoardTensor& bt, int target_h, int target_w) {
          bt(2, target_h, target_w) == 0;
 }
 
+[[nodiscard]] bool TawlbwrddGS::has_valid_moves() const noexcept {
+  for (auto h = 0; h < HEIGHT; ++h) {
+    for (auto w = 0; w < WIDTH; ++w) {
+      if (is_players_piece(board_, player_, h, w)) {
+        {
+          auto target_w = w + 1;
+          while (is_valid_square(board_, h, target_w)) {
+            return true;
+          }
+        }
+        {
+          auto target_w = w - 1;
+          while (is_valid_square(board_, h, target_w)) {
+            return true;
+          }
+        }
+        {
+          auto target_h = h + 1;
+          while (is_valid_square(board_, target_h, w)) {
+            return true;
+          }
+        }
+        {
+          auto target_h = h - 1;
+          while (is_valid_square(board_, target_h, w)) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
 [[nodiscard]] Vector<uint8_t> TawlbwrddGS::valid_moves() const noexcept {
   auto valids = Vector<uint8_t>{NUM_MOVES};
   valids.setZero();
@@ -247,16 +281,7 @@ void TawlbwrddGS::play_move(uint32_t move) {
     return scores;
   }
   // Current player has no moves left.
-  // TODO: implement in fast way that doesn't generate all valid moves
-  auto valids = valid_moves();
-  bool has_valid = false;
-  for (auto i = 0; i < NUM_MOVES; ++i) {
-    if (valids[i] == 1) {
-      has_valid = true;
-      break;
-    }
-  }
-  if (!has_valid) {
+  if (!has_valid_moves()) {
     auto opponent = (player_ + 1) % 2;
     scores(opponent) = 1;
     return scores;

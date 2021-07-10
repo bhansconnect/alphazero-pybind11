@@ -75,7 +75,7 @@ TEST(OpenTaflGS, Equals) {
   auto s = gs->scores().value_or(SizedVector<float, 3>{0, 0, 0});
 
   std::cout << s(0) << ", " << s(1) << ", " << s(2);
-  EXPECT_TRUE(false);
+  // EXPECT_TRUE(false);
 }
 
 }  // namespace

@@ -24,16 +24,14 @@ bfc = 0
 
 def eval_posistion(gs, agent):
     mcts = alphazero.MCTS(CPUCT, gs.num_players(), gs.num_moves())
-    v, pi = agent.predict(torch.from_numpy(gs.canonicalized()))
-    v = v.cpu().numpy()
-    pi = pi.cpu().numpy()
     global bf
     global bfc
     bf += np.sum(gs.valid_moves())
     bfc += 1
-    start = time.time()
+    # start = time.time()
     # while time.time() - start < THINK_TIME:
-    for _ in range(250):
+    sims = 500
+    for _ in range(sims):
         leaf = mcts.find_leaf(gs)
         v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
         v = v.cpu().numpy()
@@ -41,6 +39,9 @@ def eval_posistion(gs, agent):
         mcts.process_result(gs, v, pi, False)
     # print('Press enter for ai analysis')
     # input()
+    v, pi = agent.predict(torch.from_numpy(gs.canonicalized()))
+    v = v.cpu().numpy()
+    pi = pi.cpu().numpy()
     print(f'\tRaw Score: {v}')
     thing = {x[0]: pi[x[0]] for x in np.argwhere(pi > 0.05)}
     print(f'\tRaw Probs: {thing}')
@@ -87,27 +88,22 @@ if __name__ == '__main__':
         valids = gs.valid_moves()
         valid = False
 
-        # # grow, seed, buy, pass, by number
-        # # grow locaction
-        # # seed from locaction
-        # # seed to locaction
-
-        # def get_input_num(stuff, max_stuff):
-        #     valid = False
-        #     while not valid:
-        #         try:
-        #             print(f'Enter {stuff}: ', end='')
-        #             selection = int(input())
-        #             if selection == 0:
-        #                 return 0
-        #             if 0 < selection <= max_stuff:
-        #                 return selection
-        #             else:
-        #                 raise Exception('Sad')
-        #         except KeyboardInterrupt:
-        #             exit()
-        #         except:
-        #             print('You suck at typing numbers. Get Gut!')
+        def get_input_num(stuff, max_stuff):
+            valid = False
+            while not valid:
+                try:
+                    print(f'Enter {stuff}: ', end='')
+                    selection = int(input())
+                    if selection == 0:
+                        return 0
+                    if 0 < selection <= max_stuff:
+                        return selection
+                    else:
+                        raise Exception('Sad')
+                except KeyboardInterrupt:
+                    exit()
+                except:
+                    print('You suck at typing numbers. Get Gut!')
 
         # def print_ref_board():
         #     for h in range(7):
@@ -122,6 +118,11 @@ if __name__ == '__main__':
         #         print()
         # valid = False
         # move = 0
+
+        # # grow, seed, buy, pass, by number
+        # # grow locaction
+        # # seed from locaction
+        # # seed to locaction
 
         # while not valid:
         #     choice = get_input_num(
@@ -156,13 +157,48 @@ if __name__ == '__main__':
         #     if not valid:
         #         print(f'Move {move} is sad :(')
         #     print()
+        # if rand == 2454:
+        #     pc += 1
+
+        # move = -1
+        # while not valid:
+        #     try:
+        #         print('Enter Move(-1 is undo): ', end='')
+        #         move = int(input())
+        #         if 0 <= move < len(valids):
+        #             valid = valids[move]
+        #         elif move == -1:
+        #             if len(hist) == 1:
+        #                 gs = hist[-1].copy()
+        #                 hist = []
+        #             else:
+        #                 gs = hist[-2].copy()
+        #                 hist = hist[:-2]
+        #             move = -1
+        #             break
+        #         else:
+        #             raise Exception('Sad')
+        #     except KeyboardInterrupt:
+        #         exit()
+        #     except:
+        #         print('You suck at typing numbers. Get Gut!')
+        # if move != -1:
+        #     gs.play_move(move)
+
+        HEIGHT = Game.CANONICAL_SHAPE()[1]
+        WIDTH = Game.CANONICAL_SHAPE()[2]
+
+        def gen_move(from_h, from_w, h_move, to_loc):
+            if h_move:
+                return (from_h * WIDTH + from_w) * (WIDTH + HEIGHT) + WIDTH + to_loc
+            return (from_h * WIDTH + from_w) * (WIDTH + HEIGHT) + to_loc
 
         move = -1
         while not valid:
             try:
-                print('Enter Move(-1 is undo): ', end='')
+                print('Enter Move(-1 is undo, -2 human input): ', end='')
                 move = int(input())
-                if 0 <= move < len(valids):
+                if 0 <= move <= len(valids):
                     valid = valids[move]
                 elif move == -1:
                     if len(hist) == 1:
@@ -173,17 +209,31 @@ if __name__ == '__main__':
                         hist = hist[:-2]
                     move = -1
                     break
+                elif move == -2:
+                    print('locations are 1 indexed')
+                    from_h = get_input_num('from height', HEIGHT) - 1
+                    from_w = get_input_num('from width', WIDTH) - 1
+                    to_h = get_input_num('to height', HEIGHT) - 1
+                    to_w = get_input_num('to width', WIDTH) - 1
+                    if (from_h != to_h and from_w != to_w):
+                        raise Exception(
+                            'move not valid. Needs to be rook like move')
+                    if from_h == to_h:
+                        move = gen_move(from_h, from_w, False, to_w)
+                        valid = valids[move]
+                    else:
+                        move = gen_move(from_h, from_w, True, to_h)
+                        valid = valids[move]
                 else:
                     raise Exception('Sad')
             except KeyboardInterrupt:
                 exit()
-            except:
+            except Exception as e:
                 print('You suck at typing numbers. Get Gut!')
+                print(e)
         if move != -1:
             gs.play_move(move)
 
-        # if rand == 2454:
-        #     pc += 1
         # gs.play_move(rand)
     print(gs)
     print(gs.scores())

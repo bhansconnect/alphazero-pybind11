@@ -63,9 +63,6 @@ if __name__ == '__main__':
     channels = 32
     nn_mtcs_depth = 500
 
-    nnargs = neural_net.NNArgs(
-        num_channels=channels, depth=depth)
-
     count = len(agents)
     print(agents)
     win_matrix = np.zeros((count, count))
@@ -77,6 +74,9 @@ if __name__ == '__main__':
                 p1 = RandPlayer(Game, bs)
                 d1 = agents[i]
             else:
+                _, depth, channels = os.path.splitext(agents[i])[0].split('-')
+                nnargs = neural_net.NNArgs(
+                    num_channels=int(channels), depth=int(depth))
                 p1 = neural_net.NNWrapper(Game, nnargs)
                 p1.load_checkpoint('data/roundrobin', agents[i])
                 d1 = nn_mtcs_depth
@@ -87,6 +87,10 @@ if __name__ == '__main__':
                     p2 = RandPlayer(Game, bs)
                     d2 = agents[j]
                 else:
+                    _, depth, channels = os.path.splitext(agents[j])[
+                        0].split('-')
+                    nnargs = neural_net.NNArgs(
+                        num_channels=int(channels), depth=int(depth))
                     p2 = neural_net.NNWrapper(Game, nnargs)
                     p2.load_checkpoint('data/roundrobin', agents[j])
                     d2 = nn_mtcs_depth
@@ -96,6 +100,12 @@ if __name__ == '__main__':
                 depths[0] = d1
                 win_rates = pit_agents(
                     Game, players, depths, bs, f'{agents[i]}-{agents[j]}')
+                if Game.NUM_PLAYERS() == 2:
+                    win_matrix[i, j] = win_rates[0]
+                    win_matrix[j, i] = win_rates[1]
+                    print(win_matrix[i, j])
+                    pbar.update()
+                    continue
                 players = [p1] * Game.NUM_PLAYERS()
                 depths = [d1] * Game.NUM_PLAYERS()
                 players[0] = p2

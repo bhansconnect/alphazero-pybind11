@@ -3,6 +3,7 @@ import importlib.util
 import os
 from collections import namedtuple
 import math
+import random
 import time
 import torch
 from torch.utils.data import TensorDataset, ConcatDataset, DataLoader
@@ -22,8 +23,11 @@ spec = importlib.util.spec_from_file_location(
 alphazero = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(alphazero)
 
+HIST_SIZE = 30000
+HIST_LOCATION = 'data/history'
+TMP_HIST_LOCATION = 'data/tmp_history'
 GRArgs = namedtuple(
-    'GRArgs', ['title', 'game', 'max_batch_size', 'iteration',  'data_save_size', 'data_folder', 'concurrent_batches', 'batch_workers', 'nn_workers', 'result_workers', 'mcts_workers', 'cuda'], defaults=(0, 30000, 'data/history', 0, 0, 1, 1, os.cpu_count() - 1, torch.cuda.is_available()))
+    'GRArgs', ['title', 'game', 'max_batch_size', 'iteration',  'data_save_size', 'data_folder', 'concurrent_batches', 'batch_workers', 'nn_workers', 'result_workers', 'mcts_workers', 'cuda'], defaults=(0, HIST_SIZE, TMP_HIST_LOCATION, 0, 0, 1, 1, os.cpu_count() - 1, torch.cuda.is_available()))
 
 
 class GameRunner:
@@ -272,15 +276,110 @@ if __name__ == '__main__':
     def calc_hist_size(i):
         return int(WINDOW_SIZE_SCALAR*(1 + WINDOW_SIZE_BETA*(((i+1)/WINDOW_SIZE_SCALAR)**WINDOW_SIZE_ALPHA-1)/WINDOW_SIZE_ALPHA))
 
+    def resample_by_surprise(Game, nnargs, iteration):
+        # Used to resample the latest iteration by how surprising each sample is.
+        # Each sample is given 0.5 weight as a base.
+        # The other half of the weight is distributed based on the sample loss.
+        # The sample is then added to the dataset floor(weight) times.
+        # It is also added an extra time with the probability of weight - floor(weight)
+        nn = neural_net.NNWrapper(Game, nnargs)
+        nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
+
+        c = sorted(
+            glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-canonical-*.pt'))
+        v = sorted(glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-v-*.pt'))
+        p = sorted(glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-pi-*.pt'))
+
+        datasets = []
+        for j in range(len(c)):
+            size = int(c[j].split('-')[-1].split('.')[0])
+            cs = Game.CANONICAL_SHAPE()
+            c_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                c[j], shared=False, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
+            v_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                v[j], shared=False, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
+            p_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                p[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+            datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
+            del c_tensor
+            del v_tensor
+            del p_tensor
+
+        dataset = ConcatDataset(datasets)
+        sample_count = len(dataset)
+        dataloader = DataLoader(dataset, batch_size=512,
+                                shuffle=False, num_workers=11)
+        loss = nn.sample_loss(dataloader, sample_count)
+        total_loss = np.sum(loss)
+
+        i_out = 0
+        batch_out = 0
+        cs = Game.CANONICAL_SHAPE()
+        c_out = torch.zeros(
+            HIST_SIZE, cs[0], cs[1], cs[2])
+        v_out = torch.zeros(
+            HIST_SIZE, Game.NUM_PLAYERS()+1)
+        p_out = torch.zeros(
+            HIST_SIZE, Game.NUM_MOVES())
+        os.makedirs(HIST_LOCATION, exist_ok=True)
+
+        def maybe_save(c, v, p, size, batch, force=False):
+            if size == HIST_SIZE or (force and size > 0):
+                c_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                    f'{HIST_LOCATION}/{iteration:04d}-{batch:04d}-canonical-{size}.pt', shared=True, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
+                v_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                    f'{HIST_LOCATION}/{iteration:04d}-{batch:04d}-v-{size}.pt', shared=True, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
+                p_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                    f'{HIST_LOCATION}/{iteration:04d}-{batch:04d}-pi-{size}.pt', shared=True, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+                c_tensor[:] = c[:size]
+                v_tensor[:] = v[:size]
+                p_tensor[:] = p[:size]
+                return True
+            return False
+
+        for i in range(sample_count):
+            sample_weight = 0.5 + (loss[i]/total_loss) * 0.5 * sample_count
+            for _ in range(math.floor(sample_weight)):
+                c, v, pi = dataset[i]
+                c_out[i_out] = c
+                v_out[i_out] = v
+                p_out[i_out] = pi
+                i_out += 1
+                if maybe_save(c_out, v_out, p_out, i_out, batch_out):
+                    i_out = 0
+                    batch_out += 1
+            if random.random() < sample_weight - math.floor(sample_weight):
+                c, v, pi = dataset[i]
+                c_out[i_out] = c
+                v_out[i_out] = v
+                p_out[i_out] = pi
+                i_out += 1
+                if maybe_save(c_out, v_out, p_out, i_out, batch_out):
+                    i_out = 0
+                    batch_out += 1
+
+        maybe_save(c_out, v_out, p_out, i_out, batch_out, force=True)
+
+        del datasets[:]
+        del dataset
+        del dataloader
+        del nn
+        del c_out
+        del v_out
+        del p_out
+
+        for fn in glob.glob(f'{TMP_HIST_LOCATION}/*'):
+            os.remove(fn)
+
     def train(Game, nnargs, iteration, hist_size):
         nn = neural_net.NNWrapper(Game, nnargs)
         nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
 
         datasets = []
         for i in range(max(0, iteration - hist_size), iteration + 1):
-            c = sorted(glob.glob(f'data/history/{i:04d}-*-canonical-*.pt'))
-            v = sorted(glob.glob(f'data/history/{i:04d}-*-v-*.pt'))
-            p = sorted(glob.glob(f'data/history/{i:04d}-*-pi-*.pt'))
+            c = sorted(glob.glob(f'{HIST_LOCATION}/{i:04d}-*-canonical-*.pt'))
+            v = sorted(glob.glob(f'{HIST_LOCATION}/{i:04d}-*-v-*.pt'))
+            p = sorted(glob.glob(f'{HIST_LOCATION}/{i:04d}-*-pi-*.pt'))
             for j in range(len(c)):
                 size = int(c[j].split('-')[-1].split('.')[0])
                 cs = Game.CANONICAL_SHAPE()
@@ -307,7 +406,7 @@ if __name__ == '__main__':
         del nn
         return v_loss, pi_loss
 
-    def self_play(Game, nnargs, best, iteration, depth):
+    def self_play(Game, nnargs, best, iteration, depth, fast_depth):
         bs = 512
         cb = Game.NUM_PLAYERS()*2
         n = bs*cb*12
@@ -318,7 +417,7 @@ if __name__ == '__main__':
         params.history_enabled = True
         params.add_noise = True
         params.playout_cap_randomization = True
-        params.playout_cap_depth = 50
+        params.playout_cap_depth = fast_depth
         params.playout_cap_percent = 0.75
         pm = alphazero.PlayManager(Game(), params)
 
@@ -474,6 +573,7 @@ if __name__ == '__main__':
     depth = 5
     channels = 32
     nn_selfplay_mcts_depth = 250
+    nn_selfplay_fast_mcts_depth = 50
     nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
     compare_past = 20
     gating_percent = 0.52
@@ -492,17 +592,23 @@ if __name__ == '__main__':
         elo = np.zeros(total_agents)
         current_best = 0
     else:
-        wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
-        elo = np.genfromtxt('data/elo.csv', delimiter=',')
-        current_best = np.argmax(elo)
+        tmp_wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
+        wr = np.zeros_like(tmp_wr)
+        wr[:start+1][:start+1] = tmp_wr[:start+1][:start+1]
+        tmp_elo = np.genfromtxt('data/elo.csv', delimiter=',')
+        elo = np.zeros_like(elo)
+        elo[:start+1] = tmp_elo[:start+1]
+        current_best = np.argmax(elo[:start+1])
 
     postfix = {'best': current_best}
     if bootstrap_iters > 0 and bootstrap_iters > start:
         # We are just going to assume the new nets have similar elo to the past instead of running many comparisons matches.
         prev_elo = np.genfromtxt('data/elo.csv', delimiter=',')
+        prev_wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
         with tqdm.trange(start, bootstrap_iters, desc='Bootstraping Network') as pbar:
             for i in pbar:
                 elo[i] = prev_elo[i]
+                wr[i][:bootstrap_iters] = prev_wr[i][:bootstrap_iters]
                 hist_size = calc_hist_size(i)
                 v_loss, pi_loss = train(Game, nnargs, i, hist_size)
                 writer.add_scalar('Loss/V', v_loss, i)
@@ -557,7 +663,7 @@ if __name__ == '__main__':
             np.savetxt("data/elo.csv", elo, delimiter=",")
 
             win_rates, hit_rate, game_length = self_play(
-                Game, nnargs, current_best, i, nn_selfplay_mcts_depth)
+                Game, nnargs, current_best, i, nn_selfplay_mcts_depth, nn_selfplay_fast_mcts_depth)
             for j in range(len(win_rates)-1):
                 writer.add_scalar(
                     f'Win Rate/Self Play P{j+1}', win_rates[j], i)
@@ -567,6 +673,9 @@ if __name__ == '__main__':
                 'Average Game Length/Self Play', game_length, i)
             postfix['win_rates'] = list(map(lambda x: f'{x:0.3f}', win_rates))
             pbar.set_postfix(postfix)
+            gc.collect()
+
+            resample_by_surprise(Game, nnargs, i)
             gc.collect()
 
             hist_size = calc_hist_size(i)

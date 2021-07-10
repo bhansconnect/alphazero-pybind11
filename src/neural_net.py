@@ -5,6 +5,7 @@ from torch import optim, nn
 from torch.autograd import profiler
 from torch.optim.swa_utils import AveragedModel
 from tqdm import tqdm
+import numpy as np
 
 NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'lr_milestone',
                                'lr', 'cv', 'cuda'], defaults=(40, 0.01, 1.5, torch.cuda.is_available()))
@@ -134,6 +135,26 @@ class NNWrapper:
         if self.cuda:
             self.nnet.cuda()
 
+    def sample_loss(self, dataset, size):
+        loss = np.zeros(size)
+        self.nnet.eval()
+        i = 0
+        for batch in dataset:
+            canonical, target_vs, target_pis = batch
+            if self.cuda:
+                canonical = canonical.contiguous().cuda()
+                target_vs = target_vs.contiguous().cuda()
+                target_pis = target_pis.contiguous().cuda()
+
+            out_v, out_pi = self.nnet(canonical)
+            l_v = self.sample_loss_v(target_vs, out_v)
+            l_pi = self.sample_loss_pi(target_pis, out_pi)
+            total_loss = l_pi + l_v
+            for sample_loss in total_loss:
+                loss[i] = sample_loss
+                i += 1
+        return loss
+
     def train(self, batches, train_steps):
         self.nnet.train()
 
@@ -201,6 +222,12 @@ class NNWrapper:
         with torch.no_grad():
             v, pi = self.nnet(batch)
             return torch.exp(v), torch.exp(pi)
+
+    def sample_loss_pi(self, targets, outputs):
+        return -1 * torch.sum(targets * outputs, axis=1)
+
+    def sample_loss_v(self, targets, outputs):
+        return -self.cv * torch.sum(targets * outputs, axis=1)
 
     def loss_pi(self, targets, outputs):
         return -torch.sum(targets * outputs) / targets.size()[0]

@@ -29,6 +29,20 @@ brandubh_gs_test = executable(
 )
 test('gtest tests', brandubh_gs_test)
 
+opentafl_gs = library(
+    'opentafl_gs',
+    'opentafl_gs.cc',
+    dependencies: [eigen_dep, absl_hash_dep, absl_container_dep],
+)
+
+opentafl_gs_test = executable(
+  'opentafl_gs_test',
+  'opentafl_gs_test.cc',
+  dependencies: [gtest_dep, eigen_dep, absl_hash_dep, absl_container_dep],
+  link_with: [opentafl_gs],
+)
+test('gtest tests', opentafl_gs_test)
+
 tawlbwrdd_gs = library(
     'tawlbwrdd_gs',
     'tawlbwrdd_gs.cc',
@@ -112,6 +126,6 @@ test('gtest tests', play_manager_test)
 py3_install.extension_module(
   'alphazero',
   sources: ['py_wrapper.cc'],
-  link_with: [connect4_gs, brandubh_gs, tawlbwrdd_gs, play_manager],
+  link_with: [connect4_gs, brandubh_gs, opentafl_gs, tawlbwrdd_gs, play_manager],
   dependencies : [pybind11_dep, py3_dep, eigen_dep, absl_container_dep, absl_hash_dep],
 )

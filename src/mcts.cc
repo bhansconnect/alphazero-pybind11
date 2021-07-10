@@ -94,7 +94,12 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
     value = current_->scores.value();
   }
   // Rescale pi based on valid moves.
-  pi.array() *= gs.valid_moves().cast<float>().array();
+  auto valids = Vector<float>(gs.num_moves());
+  valids.setZero();
+  for (auto& c : current_->children) {
+    valids(c.move) = 1;
+  }
+  pi.array() *= valids.array();
   pi /= pi.sum();
   if (current_ == &root_) {
     pi = pi.array().pow(1.0 / root_policy_temp_);

@@ -52,15 +52,13 @@ def pit_agents(Game, players, mcts_depths, bs, name):
 
 if __name__ == '__main__':
     nn_agents = [os.path.basename(x) for x in sorted(
-        glob.glob('data/roundrobin/*.pt'), reverse=True)]
-    # rand_agents = [1000]
-    rand_agents = []
-    agents = nn_agents + rand_agents
+        glob.glob('data/roundrobin/*.pt'), reverse=False)]
+    rand_agents = [5000]
+    # rand_agents = []
+    agents = rand_agents + nn_agents
 
     Game = alphazero.Connect4GS
-    bs = 16
-    depth = 5
-    channels = 32
+    bs = 64
     nn_mtcs_depth = 500
 
     count = len(agents)

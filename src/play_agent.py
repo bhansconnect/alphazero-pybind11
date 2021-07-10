@@ -15,7 +15,7 @@ alphazero = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(alphazero)
 
 THINK_TIME = 0.5
-CPUCT = 1.1
+CPUCT = 2
 TEMP = 0.5
 
 bf = 0
@@ -49,7 +49,9 @@ def eval_posistion(gs, agent):
     print(f'\tRaw Rand: {np.random.choice(pi.shape[0], p=pi)}')
 
     print(f'\tMCTS Value Current Player: {mcts.root_value()}')
-    print(f'\tMCTS Counts: {mcts.counts()}')
+    # counts = mcts.counts()
+    # thing = {x[0]: counts[x[0]] for x in np.argwhere(counts > 0.05*sims)}
+    # print(f'\tMCTS Counts: {thing}')
     probs = mcts.probs(TEMP)
     thing = {x[0]: probs[x[0]] for x in np.argwhere(probs > 0.05)}
     print(f'\tMCTS Probs: {thing}')

@@ -398,7 +398,7 @@ if __name__ == '__main__':
         dataloader = DataLoader(dataset, batch_size=512,
                                 shuffle=True, num_workers=11)
 
-        v_loss, pi_loss = nn.train(dataloader, 500*4)
+        v_loss, pi_loss = nn.train(dataloader, 250*4)
         nn.save_checkpoint('data/checkpoint', f'{iteration+1:04d}.pt')
         del datasets[:]
         del dataset

@@ -74,7 +74,8 @@ if __name__ == '__main__':
                 p1 = RandPlayer(Game, bs)
                 d1 = agents[i]
             else:
-                _, depth, channels = os.path.splitext(agents[i])[0].split('-')
+                _, depth, channels = os.path.splitext(
+                    agents[i])[0].split('-')[:3]
                 nnargs = neural_net.NNArgs(
                     num_channels=int(channels), depth=int(depth))
                 p1 = neural_net.NNWrapper(Game, nnargs)
@@ -88,7 +89,7 @@ if __name__ == '__main__':
                     d2 = agents[j]
                 else:
                     _, depth, channels = os.path.splitext(agents[j])[
-                        0].split('-')
+                        0].split('-')[:3]
                     nnargs = neural_net.NNArgs(
                         num_channels=int(channels), depth=int(depth))
                     p2 = neural_net.NNWrapper(Game, nnargs)

@@ -237,7 +237,7 @@ class RandPlayer:
         return self.v[:batch.shape[0]], self.pi[:batch.shape[0]]
 
 
-EXPECTED_OPENING_LENGTH = 12
+EXPECTED_OPENING_LENGTH = 6
 CPUCT = 2
 SELF_PLAY_TEMP = 1
 EVAL_TEMP = 0.5
@@ -596,7 +596,7 @@ if __name__ == '__main__':
         wr = np.zeros_like(tmp_wr)
         wr[:start+1][:start+1] = tmp_wr[:start+1][:start+1]
         tmp_elo = np.genfromtxt('data/elo.csv', delimiter=',')
-        elo = np.zeros_like(elo)
+        elo = np.zeros_like(tmp_elo)
         elo[:start+1] = tmp_elo[:start+1]
         current_best = np.argmax(elo[:start+1])
 

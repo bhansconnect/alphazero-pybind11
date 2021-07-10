@@ -194,47 +194,47 @@ if __name__ == '__main__':
             return (from_h * WIDTH + from_w) * (WIDTH + HEIGHT) + to_loc
 
         move = -1
-        while not valid:
-            try:
-                print('Enter Move(-1 is undo, -2 human input): ', end='')
-                move = int(input())
-                if 0 <= move <= len(valids):
-                    valid = valids[move]
-                elif move == -1:
-                    if len(hist) == 1:
-                        gs = hist[-1].copy()
-                        hist = []
-                    else:
-                        gs = hist[-2].copy()
-                        hist = hist[:-2]
-                    move = -1
-                    break
-                elif move == -2:
-                    print('locations are 1 indexed')
-                    from_h = get_input_num('from height', HEIGHT) - 1
-                    from_w = get_input_num('from width', WIDTH) - 1
-                    to_h = get_input_num('to height', HEIGHT) - 1
-                    to_w = get_input_num('to width', WIDTH) - 1
-                    if (from_h != to_h and from_w != to_w):
-                        raise Exception(
-                            'move not valid. Needs to be rook like move')
-                    if from_h == to_h:
-                        move = gen_move(from_h, from_w, False, to_w)
-                        valid = valids[move]
-                    else:
-                        move = gen_move(from_h, from_w, True, to_h)
-                        valid = valids[move]
-                else:
-                    raise Exception('Sad')
-            except KeyboardInterrupt:
-                exit()
-            except Exception as e:
-                print('You suck at typing numbers. Get Gut!')
-                print(e)
-        if move != -1:
-            gs.play_move(move)
+        # while not valid:
+        #     try:
+        #         print('Enter Move(-1 is undo, -2 human input): ', end='')
+        #         move = int(input())
+        #         if 0 <= move <= len(valids):
+        #             valid = valids[move]
+        #         elif move == -1:
+        #             if len(hist) == 1:
+        #                 gs = hist[-1].copy()
+        #                 hist = []
+        #             else:
+        #                 gs = hist[-2].copy()
+        #                 hist = hist[:-2]
+        #             move = -1
+        #             break
+        #         elif move == -2:
+        #             print('locations are 1 indexed')
+        #             from_h = get_input_num('from height', HEIGHT) - 1
+        #             from_w = get_input_num('from width', WIDTH) - 1
+        #             to_h = get_input_num('to height', HEIGHT) - 1
+        #             to_w = get_input_num('to width', WIDTH) - 1
+        #             if (from_h != to_h and from_w != to_w):
+        #                 raise Exception(
+        #                     'move not valid. Needs to be rook like move')
+        #             if from_h == to_h:
+        #                 move = gen_move(from_h, from_w, False, to_w)
+        #                 valid = valids[move]
+        #             else:
+        #                 move = gen_move(from_h, from_w, True, to_h)
+        #                 valid = valids[move]
+        #         else:
+        #             raise Exception('Sad')
+        #     except KeyboardInterrupt:
+        #         exit()
+        #     except Exception as e:
+        #         print('You suck at typing numbers. Get Gut!')
+        #         print(e)
+        # if move != -1:
+        #     gs.play_move(move)
 
-        # gs.play_move(rand)
+        gs.play_move(rand)
     print(gs)
     print(gs.scores())
     print('Passes:', pc)

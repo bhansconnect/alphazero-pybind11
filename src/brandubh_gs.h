@@ -11,7 +11,7 @@
 
 namespace alphazero::brandubh_gs {
 
-constexpr const int MAX_TURNS = 150;
+constexpr const uint16_t DEFAULT_MAX_TURNS = 150;
 
 constexpr const int KING_LAYER = 0;
 constexpr const int DEF_LAYER = 1;
@@ -67,7 +67,7 @@ bool operator==(const RepetitionKeyWrapper& lhs,
 
 class BrandubhGS : public GameState {
  public:
-  BrandubhGS() {
+  BrandubhGS(uint16_t max_turns = DEFAULT_MAX_TURNS) : max_turns_(max_turns) {
     board_.setZero();
     // King
     board_(KING_LAYER, 3, 3) = 1;
@@ -91,16 +91,16 @@ class BrandubhGS : public GameState {
     repetition_counts_[RepetitionKeyWrapper(board_, player_)] = 1;
   }
   BrandubhGS(BoardTensor board, int8_t player, int32_t turn)
-      : board_(board), player_(player), turn_(turn) {}
+      : board_(board), turn_(turn), player_(player) {}
   BrandubhGS(BoardTensor&& board, int8_t player, int32_t turn)
-      : board_(std::move(board)), player_(player), turn_(turn) {}
+      : board_(std::move(board)), turn_(turn), player_(player) {}
   BrandubhGS(
       BoardTensor board, int8_t player, int32_t turn,
       uint8_t current_repetition_count,
       absl::flat_hash_map<RepetitionKeyWrapper, uint8_t> repetition_counts)
       : board_(board),
-        player_(player),
         turn_(turn),
+        player_(player),
         current_repetition_count_(current_repetition_count) {
     for (const auto& entry : repetition_counts) {
       repetition_counts_[RepetitionKeyWrapper(entry.first)] = entry.second;
@@ -159,8 +159,9 @@ class BrandubhGS : public GameState {
   // Board contains a layer for the king, other white pieces, and black
   // pieces. A 0 means no piece, a 1 means a piece of the respective type.
   BoardTensor board_{};
+  uint16_t turn_{0};
+  uint16_t max_turns_{DEFAULT_MAX_TURNS};
   int8_t player_{0};
-  int32_t turn_{0};
   uint8_t current_repetition_count_{1};
   absl::flat_hash_map<RepetitionKeyWrapper, uint8_t> repetition_counts_{};
 

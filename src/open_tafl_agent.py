@@ -122,7 +122,8 @@ if __name__ == '__main__':
 
     print(f'status Loaded network in {time.time()-start} seconds')
 
-    gs = Game()
+    max_turns = 2 ^ 16-1
+    gs = Game(max_turns)
     height = gs.CANONICAL_SHAPE()[1]
     width = gs.CANONICAL_SHAPE()[2]
     mcts = alphazero.MCTS(args.cpuct, gs.num_players(), gs.num_moves())

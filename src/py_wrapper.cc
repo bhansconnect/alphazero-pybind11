@@ -215,6 +215,7 @@ PYBIND11_MODULE(alphazero, m) {
 
   py::class_<BrandubhGS, GameState>(m, "BrandubhGS")
       .def(py::init<>())
+      .def(py::init<uint16_t>())
       .def(py::init(
           [](const py::array_t<int8_t>& board, int8_t player, int32_t turn) {
             if (board.ndim() != brandubh_gs::BOARD_SHAPE.size() ||
@@ -241,6 +242,7 @@ PYBIND11_MODULE(alphazero, m) {
 
   py::class_<OpenTaflGS, GameState>(m, "OpenTaflGS")
       .def(py::init<>())
+      .def(py::init<uint16_t>())
       .def(py::init(
           [](const py::array_t<int8_t>& board, int8_t player, int32_t turn) {
             if (board.ndim() != opentafl_gs::BOARD_SHAPE.size() ||
@@ -267,6 +269,7 @@ PYBIND11_MODULE(alphazero, m) {
 
   py::class_<TawlbwrddGS, GameState>(m, "TawlbwrddGS")
       .def(py::init<>())
+      .def(py::init<uint16_t>())
       .def(py::init(
           [](const py::array_t<int8_t>& board, int8_t player, int32_t turn) {
             if (board.ndim() != tawlbwrdd_gs::BOARD_SHAPE.size() ||

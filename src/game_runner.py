@@ -271,7 +271,8 @@ if __name__ == '__main__':
 
     def create_init_net(Game, nnargs):
         nn = neural_net.NNWrapper(Game, nnargs)
-        nn.save_checkpoint('data/checkpoint', '0000.pt')
+        nn.save_checkpoint('data/checkpoint',
+                           f'0000-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
 
     def calc_hist_size(i):
         return int(WINDOW_SIZE_SCALAR*(1 + WINDOW_SIZE_BETA*(((i+1)/WINDOW_SIZE_SCALAR)**WINDOW_SIZE_ALPHA-1)/WINDOW_SIZE_ALPHA))
@@ -283,7 +284,8 @@ if __name__ == '__main__':
         # The sample is then added to the dataset floor(weight) times.
         # It is also added an extra time with the probability of weight - floor(weight)
         nn = neural_net.NNWrapper(Game, nnargs)
-        nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
+        nn.load_checkpoint(
+            'data/checkpoint', f'{iteration:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
 
         c = sorted(
             glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-canonical-*.pt'))
@@ -373,7 +375,8 @@ if __name__ == '__main__':
 
     def train(Game, nnargs, iteration, hist_size):
         nn = neural_net.NNWrapper(Game, nnargs)
-        nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
+        nn.load_checkpoint(
+            'data/checkpoint', f'{iteration:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
 
         datasets = []
         for i in range(max(0, iteration - hist_size), iteration + 1):
@@ -399,7 +402,8 @@ if __name__ == '__main__':
                                 shuffle=True, num_workers=11)
 
         v_loss, pi_loss = nn.train(dataloader, 250*4)
-        nn.save_checkpoint('data/checkpoint', f'{iteration+1:04d}.pt')
+        nn.save_checkpoint(
+            'data/checkpoint', f'{iteration+1:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
         del datasets[:]
         del dataset
         del dataloader
@@ -424,7 +428,8 @@ if __name__ == '__main__':
         grargs = GRArgs(title='Self Play', game=Game, iteration=iteration,
                         max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
         nn = neural_net.NNWrapper(Game, nnargs)
-        nn.load_checkpoint('data/checkpoint', f'{best:04d}.pt')
+        nn.load_checkpoint(
+            'data/checkpoint', f'{best:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
         players = []
         for _ in range(Game.NUM_PLAYERS()):
             players.append(nn)
@@ -452,9 +457,11 @@ if __name__ == '__main__':
         hr = 0
         agl = 0
         nn = neural_net.NNWrapper(Game, nnargs)
-        nn.load_checkpoint('data/checkpoint', f'{iteration:04d}.pt')
+        nn.load_checkpoint(
+            'data/checkpoint', f'{iteration:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
         nn_past = neural_net.NNWrapper(Game, nnargs)
-        nn_past.load_checkpoint('data/checkpoint', f'{past_iter:04d}.pt')
+        nn_past.load_checkpoint(
+            'data/checkpoint', f'{past_iter:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
         cb = Game.NUM_PLAYERS()
         if Game.NUM_PLAYERS() > 2:
             bs = 16

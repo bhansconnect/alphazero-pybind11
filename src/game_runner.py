@@ -577,7 +577,7 @@ if __name__ == '__main__':
     bootstrap_iters = 0
     start = 0
     iters = 200
-    depth = 5
+    depth = 4
     channels = 32
     nn_selfplay_mcts_depth = 250
     nn_selfplay_fast_mcts_depth = 50

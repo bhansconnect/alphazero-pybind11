@@ -666,6 +666,10 @@ class PhotosynthesisGS : public GameState {
     return out;
   }
 
+  // Deletes all data that is not necessary for storing as a hash key.
+  // This avoids wasting tons of space when caching states.
+  void minimize_storage() override {}
+
  private:
   void update_sun_points() {
     for (auto h = 0; h < HEIGHT; ++h) {

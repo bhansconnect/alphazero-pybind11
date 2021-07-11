@@ -145,6 +145,10 @@ if __name__ == '__main__':
                 move = gen_move(height, width, from_h, from_w, to_h, to_w)
                 mcts.update_root(gs, move)
                 gs.play_move(move)
+            elif command.startswith('finish'):
+                gs = Game()
+                mcts = alphazero.MCTS(
+                    args.cpuct, gs.num_players(), gs.num_moves())
             elif command.startswith('error'):
                 print('error -1')
                 break

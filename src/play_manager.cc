@@ -137,6 +137,9 @@ void PlayManager::play() {
     auto& mcts = game.mcts[game.gs->current_player()];
     auto leaf = mcts.find_leaf(*game.gs);
     game.canonical = leaf->canonicalized();
+    // Minimize the storage of the leaf node. It is only used as a hash key and
+    // network input.
+    leaf->minimize_storage();
     game.leaf = std::move(leaf);
     if (params_.max_cache_size > 0) {
       auto opt =

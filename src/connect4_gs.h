@@ -68,6 +68,10 @@ class Connect4GS : public GameState {
   // Returns a string representation of the game state.
   [[nodiscard]] std::string dump() const noexcept override;
 
+  // Deletes all data that is not necessary for storing as a hash key.
+  // This avoids wasting tons of space when caching states.
+  void minimize_storage() override {}
+
  private:
   // Board contains a layer for each player.
   // A 0 means no piece, a 1 means a piece for that player.

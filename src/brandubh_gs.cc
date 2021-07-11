@@ -464,4 +464,6 @@ void BrandubhGS::play_move(uint32_t move) {
   return out;
 }
 
+void BrandubhGS::minimize_storage() { repetition_counts_.clear(); }
+
 }  // namespace alphazero::brandubh_gs

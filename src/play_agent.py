@@ -22,7 +22,7 @@ bf = 0
 bfc = 0
 
 
-def eval_posistion(gs, agent):
+def eval_position(gs, agent):
     mcts = alphazero.MCTS(CPUCT, gs.num_players(), gs.num_moves())
     global bf
     global bfc
@@ -85,7 +85,7 @@ if __name__ == '__main__':
         print()
         print()
         print(gs)
-        rand = eval_posistion(gs, nn)
+        rand = eval_position(gs, nn)
         print()
         valids = gs.valid_moves()
         valid = False

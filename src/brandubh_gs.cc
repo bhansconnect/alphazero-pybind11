@@ -330,7 +330,7 @@ void BrandubhGS::play_move(uint32_t move) {
 [[nodiscard]] bool king_exists(const BoardTensor& bt) noexcept {
   for (auto h = 0; h < HEIGHT; ++h) {
     for (auto w = 0; w < WIDTH; ++w) {
-      if (bt(0, h, w) == 1) {
+      if (bt(KING_LAYER, h, w) == 1) {
         return true;
       }
     }
@@ -351,8 +351,9 @@ void BrandubhGS::play_move(uint32_t move) {
     return scores;
   }
   // Check if the king is on a corner.
-  if (board_(0, 0, 0) == 1 || board_(0, HEIGHT - 1, 0) == 1 ||
-      board_(0, 0, WIDTH - 1) == 1 || board_(0, HEIGHT - 1, WIDTH - 1) == 1) {
+  if (board_(KING_LAYER, 0, 0) == 1 || board_(KING_LAYER, HEIGHT - 1, 0) == 1 ||
+      board_(KING_LAYER, 0, WIDTH - 1) == 1 ||
+      board_(KING_LAYER, HEIGHT - 1, WIDTH - 1) == 1) {
     scores(1) = 1;
     return scores;
   }

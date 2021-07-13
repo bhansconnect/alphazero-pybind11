@@ -241,7 +241,7 @@ void TawlbwrddGS::play_move(uint32_t move) {
 [[nodiscard]] bool king_exists(const BoardTensor& bt) noexcept {
   for (auto h = 0; h < HEIGHT; ++h) {
     for (auto w = 0; w < WIDTH; ++w) {
-      if (bt(0, h, w) == 1) {
+      if (bt(KING_LAYER, h, w) == 1) {
         return true;
       }
     }
@@ -264,13 +264,15 @@ void TawlbwrddGS::play_move(uint32_t move) {
   }
   // Check if the king is on an edge.
   for (auto w = 0; w < WIDTH; ++w) {
-    if (board_(0, 0, w) == 1 || board_(0, HEIGHT - 1, w) == 1) {
+    if (board_(KING_LAYER, 0, w) == 1 ||
+        board_(KING_LAYER, HEIGHT - 1, w) == 1) {
       scores(1) = 1;
       return scores;
     }
   }
   for (auto h = 0; h < HEIGHT; ++h) {
-    if (board_(0, h, 0) == 1 || board_(0, h, WIDTH - 1) == 1) {
+    if (board_(KING_LAYER, h, 0) == 1 ||
+        board_(KING_LAYER, h, WIDTH - 1) == 1) {
       scores(1) = 1;
       return scores;
     }

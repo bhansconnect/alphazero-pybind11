@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include "absl/container/flat_hash_map.h"
 #include "game_state.h"
 
@@ -311,7 +313,7 @@ class TournamentOpenTaflGS : public GameState {
     } else {
       second_game_winner = -1;
     }
-    int8_t second_game_turns = game_->current_turn();
+    uint16_t second_game_turns = game_->current_turn();
 
     uint16_t first_player_turns = max_turns_;
     uint16_t second_player_turns = max_turns_;
@@ -320,20 +322,20 @@ class TournamentOpenTaflGS : public GameState {
 
     if (*first_game_winner_ == 0) {
       first_player_points += 1;
-      first_player_turns = *first_game_turns_;
+      first_player_turns = std::min(*first_game_turns_, first_player_turns);
     } else if (*first_game_winner_ == 1) {
       second_player_points += 1;
-      second_player_turns = *first_game_turns_;
+      second_player_turns = std::min(*first_game_turns_, second_player_turns);
     } else {
       first_player_points += 0.5;
       second_player_points += 0.5;
     }
     if (second_game_winner == 0) {
       second_player_points += 1;
-      second_player_turns = second_game_turns;
+      second_player_turns = std::min(second_game_turns, second_player_turns);
     } else if (second_game_winner == 1) {
       first_player_points += 1;
-      first_player_turns = second_game_turns;
+      first_player_turns = std::min(second_game_turns, first_player_turns);
     } else {
       first_player_points += 0.5;
       second_player_points += 0.5;
@@ -401,10 +403,11 @@ class TournamentOpenTaflGS : public GameState {
   // Returns a string representation of the game state.
   [[nodiscard]] std::string dump() const noexcept override {
     auto out = std::string("Game ") +
-               (!first_game_winner_.has_value() ? "1" : "2") + '\n';
+               (!first_game_winner_.has_value() ? "1" : "2: Players reversed") +
+               '\n';
     out += (first_game_winner_.has_value()
                 ? ("First result: " + std::to_string(*first_game_winner_) +
-                   " in " + std::to_string(*first_game_turns_))
+                   " in " + std::to_string(*first_game_turns_) + '\n')
                 : "");
     out += game_->dump();
     return out;

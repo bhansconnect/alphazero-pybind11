@@ -409,8 +409,8 @@ void OpenTaflGS::play_move(uint32_t move) {
     scores(opponent) = 1;
     return scores;
   }
-  // Draw if past max turns.
-  if (turn_ > max_turns_) {
+  // Draw if at/past max turns.
+  if (turn_ >= max_turns_) {
     scores(2) = 1;
     return scores;
   }

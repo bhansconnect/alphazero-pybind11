@@ -5,8 +5,9 @@
 namespace alphazero::brandubh_gs {
 
 [[nodiscard]] std::unique_ptr<GameState> BrandubhGS::copy() const noexcept {
-  return std::make_unique<BrandubhGS>(
-      board_, player_, turn_, current_repetition_count_, repetition_counts_);
+  return std::make_unique<BrandubhGS>(board_, player_, turn_, max_turns_,
+                                      current_repetition_count_,
+                                      repetition_counts_);
 }
 
 [[nodiscard]] bool BrandubhGS::operator==(
@@ -31,8 +32,7 @@ namespace alphazero::brandubh_gs {
 void BrandubhGS::hash(absl::HashState h) const {
   h = absl::HashState::combine_contiguous(std::move(h), board_.data(),
                                           board_.size());
-  absl::HashState::combine(std::move(h), player_);
-  absl::HashState::combine(std::move(h), current_repetition_count_);
+  absl::HashState::combine(std::move(h), player_, current_repetition_count_);
 }
 
 uint8_t piece_to_player(const BoardTensor& bt, uint8_t target_h,
@@ -433,6 +433,7 @@ void BrandubhGS::play_move(uint32_t move) {
 
 [[nodiscard]] std::string BrandubhGS::dump() const noexcept {
   auto out = "Current Player: " + std::to_string(player_) + '\n';
+  out += "Current Turn: " + std::to_string(turn_) + '\n';
   out +=
       "Current Repetition Count: " + std::to_string(current_repetition_count_) +
       '\n';

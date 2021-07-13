@@ -216,25 +216,6 @@ PYBIND11_MODULE(alphazero, m) {
   py::class_<BrandubhGS, GameState>(m, "BrandubhGS")
       .def(py::init<>())
       .def(py::init<uint16_t>())
-      .def(py::init(
-          [](const py::array_t<int8_t>& board, int8_t player, int32_t turn) {
-            if (board.ndim() != brandubh_gs::BOARD_SHAPE.size() ||
-                board.shape(0) != brandubh_gs::BOARD_SHAPE[0] ||
-                board.shape(1) != brandubh_gs::BOARD_SHAPE[1] ||
-                board.shape(2) != brandubh_gs::BOARD_SHAPE[2]) {
-              throw std::runtime_error{"Improper brandubh board shape"};
-            }
-            auto np_unchecked = board.unchecked<3>();
-            auto tensor_board = brandubh_gs::BoardTensor{};
-            for (auto i = 0; i < brandubh_gs::BOARD_SHAPE[0]; ++i) {
-              for (auto j = 0; j < brandubh_gs::BOARD_SHAPE[1]; ++j) {
-                for (auto k = 0; k < brandubh_gs::BOARD_SHAPE[2]; ++k) {
-                  tensor_board(i, j, k) = np_unchecked(i, j, k);
-                }
-              }
-            }
-            return BrandubhGS(tensor_board, player, turn);
-          }))
       .def_static("NUM_PLAYERS", [] { return brandubh_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return brandubh_gs::NUM_MOVES; })
       .def_static("CANONICAL_SHAPE",
@@ -243,25 +224,6 @@ PYBIND11_MODULE(alphazero, m) {
   py::class_<OpenTaflGS, GameState>(m, "OpenTaflGS")
       .def(py::init<>())
       .def(py::init<uint16_t>())
-      .def(py::init(
-          [](const py::array_t<int8_t>& board, int8_t player, int32_t turn) {
-            if (board.ndim() != opentafl_gs::BOARD_SHAPE.size() ||
-                board.shape(0) != opentafl_gs::BOARD_SHAPE[0] ||
-                board.shape(1) != opentafl_gs::BOARD_SHAPE[1] ||
-                board.shape(2) != opentafl_gs::BOARD_SHAPE[2]) {
-              throw std::runtime_error{"Improper opentafl board shape"};
-            }
-            auto np_unchecked = board.unchecked<3>();
-            auto tensor_board = opentafl_gs::BoardTensor{};
-            for (auto i = 0; i < opentafl_gs::BOARD_SHAPE[0]; ++i) {
-              for (auto j = 0; j < opentafl_gs::BOARD_SHAPE[1]; ++j) {
-                for (auto k = 0; k < opentafl_gs::BOARD_SHAPE[2]; ++k) {
-                  tensor_board(i, j, k) = np_unchecked(i, j, k);
-                }
-              }
-            }
-            return OpenTaflGS(tensor_board, player, turn);
-          }))
       .def_static("NUM_PLAYERS", [] { return opentafl_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return opentafl_gs::NUM_MOVES; })
       .def_static("CANONICAL_SHAPE",
@@ -270,25 +232,6 @@ PYBIND11_MODULE(alphazero, m) {
   py::class_<TawlbwrddGS, GameState>(m, "TawlbwrddGS")
       .def(py::init<>())
       .def(py::init<uint16_t>())
-      .def(py::init(
-          [](const py::array_t<int8_t>& board, int8_t player, int32_t turn) {
-            if (board.ndim() != tawlbwrdd_gs::BOARD_SHAPE.size() ||
-                board.shape(0) != tawlbwrdd_gs::BOARD_SHAPE[0] ||
-                board.shape(1) != tawlbwrdd_gs::BOARD_SHAPE[1] ||
-                board.shape(2) != tawlbwrdd_gs::BOARD_SHAPE[2]) {
-              throw std::runtime_error{"Improper tawlbwrdd board shape"};
-            }
-            auto np_unchecked = board.unchecked<3>();
-            auto tensor_board = tawlbwrdd_gs::BoardTensor{};
-            for (auto i = 0; i < tawlbwrdd_gs::BOARD_SHAPE[0]; ++i) {
-              for (auto j = 0; j < tawlbwrdd_gs::BOARD_SHAPE[1]; ++j) {
-                for (auto k = 0; k < tawlbwrdd_gs::BOARD_SHAPE[2]; ++k) {
-                  tensor_board(i, j, k) = np_unchecked(i, j, k);
-                }
-              }
-            }
-            return TawlbwrddGS(tensor_board, player, turn);
-          }))
       .def_static("NUM_PLAYERS", [] { return tawlbwrdd_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return tawlbwrdd_gs::NUM_MOVES; })
       .def_static("CANONICAL_SHAPE",

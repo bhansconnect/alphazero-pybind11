@@ -115,16 +115,13 @@ class OpenTaflGS : public GameState {
 
     repetition_counts_[RepetitionKeyWrapper(board_, player_)] = 1;
   }
-  OpenTaflGS(BoardTensor board, int8_t player, int32_t turn)
-      : board_(board), turn_(turn), player_(player) {}
-  OpenTaflGS(BoardTensor&& board, int8_t player, int32_t turn)
-      : board_(std::move(board)), turn_(turn), player_(player) {}
   OpenTaflGS(
-      BoardTensor board, int8_t player, int32_t turn,
+      BoardTensor board, int8_t player, uint16_t turn, uint16_t max_turns,
       uint8_t current_repetition_count,
       absl::flat_hash_map<RepetitionKeyWrapper, uint8_t> repetition_counts)
       : board_(board),
         turn_(turn),
+        max_turns_(max_turns),
         player_(player),
         current_repetition_count_(current_repetition_count) {
     for (const auto& entry : repetition_counts) {

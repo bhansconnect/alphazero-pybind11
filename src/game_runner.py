@@ -600,7 +600,7 @@ if __name__ == '__main__':
         current_best = 0
     else:
         tmp_wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
-        wr = np.zeros_like(tmp_wr)
+        wr = np.full_like(tmp_wr, np.NAN)
         wr[:start+1][:start+1] = tmp_wr[:start+1][:start+1]
         tmp_elo = np.genfromtxt('data/elo.csv', delimiter=',')
         elo = np.zeros_like(tmp_elo)

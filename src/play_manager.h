@@ -58,6 +58,7 @@ struct PlayParams {
   bool playout_cap_randomization = false;
   uint32_t playout_cap_depth = 25;
   float playout_cap_percent = 0.75;
+  float fpu_reduction = 0.0;
 };
 
 // This is a multithread safe game play manager.

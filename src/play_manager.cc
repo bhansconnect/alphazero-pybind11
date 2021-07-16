@@ -18,7 +18,7 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     for (auto j = 0; j < base_gs_->num_players(); ++j) {
       gd.mcts.emplace_back(params_.cpuct, base_gs_->num_players(),
                            base_gs_->num_moves(), params_.epsilon,
-                           params_.mcts_root_temp);
+                           params_.mcts_root_temp, params_.fpu_reduction);
     }
     gd.canonical = Tensor<float, 3>{base_gs_->canonicalized()};
     gd.v = Vector<float>{base_gs_->num_players() + 1};
@@ -111,9 +111,9 @@ void PlayManager::play() {
           // Setup next game.
           game.gs = base_gs_->copy();
           for (auto& m : game.mcts) {
-            m = MCTS{params_.cpuct, base_gs_->num_players(),
-                     base_gs_->num_moves(), params_.epsilon,
-                     params_.mcts_root_temp};
+            m = MCTS{params_.cpuct,          base_gs_->num_players(),
+                     base_gs_->num_moves(),  params_.epsilon,
+                     params_.mcts_root_temp, params_.fpu_reduction};
           }
         }
         // A move has been played, update playout cap.
@@ -122,9 +122,9 @@ void PlayManager::play() {
         // If self playing, reset mcts.
         if (params_.self_play) {
           for (auto& m : game.mcts) {
-            m = MCTS{params_.cpuct, base_gs_->num_players(),
-                     base_gs_->num_moves(), params_.epsilon,
-                     params_.mcts_root_temp};
+            m = MCTS{params_.cpuct,          base_gs_->num_players(),
+                     base_gs_->num_moves(),  params_.epsilon,
+                     params_.mcts_root_temp, params_.fpu_reduction};
           }
         }
       }

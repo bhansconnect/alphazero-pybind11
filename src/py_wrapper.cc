@@ -55,6 +55,7 @@ PYBIND11_MODULE(alphazero, m) {
 
   py::class_<MCTS>(m, "MCTS")
       .def(py::init<float, uint32_t, uint32_t>())
+      .def(py::init<float, uint32_t, uint32_t, float, float, float>())
       .def("update_root", &MCTS::update_root)
       .def("find_leaf", &MCTS::find_leaf)
       .def("process_result", &MCTS::process_result)
@@ -107,7 +108,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("history_enabled", &PlayParams::history_enabled)
       .def_readwrite("self_play", &PlayParams::self_play)
       .def_readwrite("add_noise", &PlayParams::add_noise)
-      .def_readwrite("epsilon", &PlayParams::epsilon);
+      .def_readwrite("epsilon", &PlayParams::epsilon)
+      .def_readwrite("fpu_reduction", &PlayParams::fpu_reduction);
 
   py::class_<PlayManager>(m, "PlayManager")
       .def(py::init([](const GameState* gs, PlayParams params) {

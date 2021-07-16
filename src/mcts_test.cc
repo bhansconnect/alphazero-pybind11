@@ -21,9 +21,9 @@ TEST(Node, Basic) {
   root.update_policy(pi);
   for (const auto& c : root.children) {
     if (c.move == 5) {
-      EXPECT_EQ(0.6F, c.policy);
-      EXPECT_EQ(1.2F, c.uct(1, CPUCT));
-      EXPECT_EQ(2.4F, c.uct(2, CPUCT));
+      EXPECT_FLOAT_EQ(0.6F, c.policy);
+      EXPECT_FLOAT_EQ(1.2F, c.uct(1, CPUCT));
+      EXPECT_FLOAT_EQ(2.4F, c.uct(2, CPUCT));
     }
   }
   root.n = 1;

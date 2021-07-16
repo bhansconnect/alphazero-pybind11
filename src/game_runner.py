@@ -243,6 +243,7 @@ SELF_PLAY_TEMP = 1
 EVAL_TEMP = 0.5
 TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
 FINAL_TEMP = 0.2
+FPU_REDUCTION = 0.2
 MAX_CACHE_SIZE = 200000
 
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
@@ -262,6 +263,7 @@ def base_params(Game, start_temp, bs, cb):
     params.final_temp = FINAL_TEMP
     params.max_batch_size = bs
     params.concurrent_games = bs * cb
+    params.fpu_reduction = FPU_REDUCTION
     return params
 
 

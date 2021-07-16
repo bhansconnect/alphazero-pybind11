@@ -23,6 +23,7 @@ def pit_agents(Game, players, mcts_depths, bs, name):
     win_rates = [0]*np
     for i in tqdm.trange(np, leave=False, desc=name):
         params = alphazero.PlayParams()
+        params.fpu_reduction = 0.2
         cb = Game.NUM_PLAYERS()
         n = bs*cb
         ordered_players = [None]*np

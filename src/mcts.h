@@ -24,6 +24,8 @@ struct Node {
 
   void add_children(const Vector<uint8_t>& valids) noexcept;
   void update_policy(const Vector<float>& pi) noexcept;
+  void update_fpu(const Vector<float>& value, const uint8_t num_players,
+                  const float fpu_reduction) noexcept;
   [[nodiscard]] float uct(float sqrt_parent_n, float cpuct) const noexcept;
   [[nodiscard]] Node* best_child(float cpuct) noexcept;
 };
@@ -31,26 +33,27 @@ struct Node {
 class MCTS {
  public:
   MCTS(float cpuct, uint32_t num_players, uint32_t num_moves, float epsilon = 0,
-       float root_policy_temp = 1.4)
+       float root_policy_temp = 1.4, float fpu_reduction = 0)
       : cpuct_(cpuct),
         num_players_(num_players),
         num_moves_(num_moves),
         current_(&root_),
         epsilon_(epsilon),
-        root_policy_temp_(root_policy_temp) {}
+        root_policy_temp_(root_policy_temp),
+        fpu_reduction_(fpu_reduction) {}
   void update_root(const GameState& gs, uint32_t move);
   [[nodiscard]] std::unique_ptr<GameState> find_leaf(const GameState& gs);
   void process_result(const GameState& gs, Vector<float>& value,
                       Vector<float>& pi, bool root_noise_enabled = false);
   void add_root_noise();
   [[nodiscard]] float root_value() const {
-    float q = 0;
+    float q = -1;
     for (const auto& c : root_.children) {
       if (c.q > q) {
         q = c.q;
       }
     }
-    return q;
+    return (q + 1.0) / 2.0;
   }
   [[nodiscard]] Vector<uint32_t> counts() const noexcept;
   [[nodiscard]] Vector<float> probs(float temp) const noexcept;
@@ -69,6 +72,7 @@ class MCTS {
   std::vector<Node*> path_{};
   float epsilon_;
   float root_policy_temp_;
+  float fpu_reduction_;
 };
 
 }  // namespace alphazero

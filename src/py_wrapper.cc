@@ -22,7 +22,6 @@ using connect4_gs::Connect4GS;
 using opentafl_gs::OpenTaflGS;
 using photosynthesis_gs::PhotosynthesisGS;
 using tawlbwrdd_gs::TawlbwrddGS;
-using tournament_opentafl_gs::TournamentOpenTaflGS;
 
 // NOLINTNEXTLINE
 PYBIND11_MODULE(alphazero, m) {
@@ -34,6 +33,7 @@ PYBIND11_MODULE(alphazero, m) {
            py::call_guard<py::gil_scoped_release>())
       .def("__str__", &GameState::dump,
            py::call_guard<py::gil_scoped_release>())
+      .def("current_turn", &GameState::current_turn)
       .def("current_player", &GameState::current_player)
       .def("num_players", &GameState::num_players)
       .def("num_moves", &GameState::num_moves)
@@ -229,14 +229,6 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_MOVES", [] { return opentafl_gs::NUM_MOVES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return opentafl_gs::CANONICAL_SHAPE; });
-
-  py::class_<TournamentOpenTaflGS, GameState>(m, "TournamentOpenTaflGS")
-      .def(py::init<>())
-      .def(py::init<uint16_t>())
-      .def_static("NUM_PLAYERS", [] { return opentafl_gs::NUM_PLAYERS; })
-      .def_static("NUM_MOVES", [] { return opentafl_gs::NUM_MOVES; })
-      .def_static("CANONICAL_SHAPE",
-                  [] { return tournament_opentafl_gs::CANONICAL_SHAPE; });
 
   py::class_<TawlbwrddGS, GameState>(m, "TawlbwrddGS")
       .def(py::init<>())

@@ -28,13 +28,15 @@ namespace alphazero::opentafl_gs {
     }
   }
   return (other_cs->player_ == player_ &&
-          other_cs->current_repetition_count_ == current_repetition_count_);
+          other_cs->current_repetition_count_ == current_repetition_count_ &&
+          other_cs->turn_ == turn_);
 }
 
 void OpenTaflGS::hash(absl::HashState h) const {
   h = absl::HashState::combine_contiguous(std::move(h), board_.data(),
                                           board_.size());
-  absl::HashState::combine(std::move(h), player_, current_repetition_count_);
+  absl::HashState::combine(std::move(h), player_, turn_,
+                           current_repetition_count_);
 }
 
 uint8_t piece_to_player(const BoardTensor& bt, uint8_t target_h,

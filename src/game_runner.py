@@ -132,10 +132,8 @@ class GameRunner:
                 scores = self.pm.scores()
                 win_rates = [0] * len(scores)
                 if completed > 0:
-                    for i in range(len(scores)-1):
-                        win_rates[i] = (scores[i] + scores[-1] /
-                                        self.num_players)/completed
-                    win_rates[-1] = scores[-1]/completed
+                    for i in range(len(scores)):
+                        win_rates[i] = scores[i]/completed
                 win_rates = list(map(lambda x: f'{x:0.3f}', win_rates))
                 pbar.set_postfix({
                     'win rates': win_rates,
@@ -150,10 +148,8 @@ class GameRunner:
             hr = hits/total
         scores = self.pm.scores()
         win_rates = [0] * len(scores)
-        for i in range(len(scores)-1):
-            win_rates[i] = (scores[i] + scores[-1] /
-                            self.num_players)/completed
-        win_rates[-1] = scores[-1]/completed
+        for i in range(len(scores)):
+            win_rates[i] = scores[i]/completed
         win_rates = list(map(lambda x: f'{x:0.3f}', win_rates))
         pbar.set_postfix({
             'win rates': win_rates,
@@ -237,13 +233,13 @@ class RandPlayer:
         return self.v[:batch.shape[0]], self.pi[:batch.shape[0]]
 
 
-EXPECTED_OPENING_LENGTH = 6
-CPUCT = 2
+EXPECTED_OPENING_LENGTH = 10
+CPUCT = 2.0
 SELF_PLAY_TEMP = 1
 EVAL_TEMP = 0.5
 TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
 FINAL_TEMP = 0.2
-FPU_REDUCTION = 0.2
+FPU_REDUCTION = 0.25
 MAX_CACHE_SIZE = 200000
 
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
@@ -439,10 +435,8 @@ if __name__ == '__main__':
         gr.run()
         scores = pm.scores()
         win_rates = [0] * len(scores)
-        for i in range(len(scores)-1):
-            win_rates[i] = (scores[i] + scores[-1] /
-                            Game.NUM_PLAYERS())/n
-        win_rates[-1] = scores[-1]/n
+        for i in range(len(scores)):
+            win_rates[i] = scores[i] / n
         hits = pm.cache_hits()
         total = hits + pm.cache_misses()
         hr = 0
@@ -483,7 +477,7 @@ if __name__ == '__main__':
                 gr = GameRunner(players, pm, grargs)
                 gr.run()
                 scores = pm.scores()
-                nn_rate += (scores[i] + scores[-1]/Game.NUM_PLAYERS())/n
+                nn_rate += scores[i]/n
                 draw_rate += scores[-1]/n
                 hits = pm.cache_hits()
                 total = hits + pm.cache_misses()
@@ -508,8 +502,7 @@ if __name__ == '__main__':
                 gr.run()
                 scores = pm.scores()
                 for j in range(1, Game.NUM_PLAYERS()):
-                    nn_rate += (scores[(i+j) % Game.NUM_PLAYERS()] +
-                                scores[-1]/Game.NUM_PLAYERS())/n
+                    nn_rate += scores[(i+j) % Game.NUM_PLAYERS()]/n
                 draw_rate += scores[-1]/n
                 hits = pm.cache_hits()
                 total = hits + pm.cache_misses()
@@ -540,7 +533,7 @@ if __name__ == '__main__':
                 gr = GameRunner(players, pm, grargs)
                 gr.run()
                 scores = pm.scores()
-                nn_rate += (scores[i] + scores[-1]/Game.NUM_PLAYERS())/n
+                nn_rate += scores[i]/n
                 draw_rate += scores[-1]/n
                 hits = pm.cache_hits()
                 total = hits + pm.cache_misses()
@@ -639,8 +632,8 @@ if __name__ == '__main__':
             if past_iter != current_best:
                 nn_rate, draw_rate, hit_rate, game_length = play_past(
                     Game, nnargs, nn_compare_mcts_depth,  i, past_iter)
-                wr[i, past_iter] = nn_rate
-                wr[past_iter, i] = 1-nn_rate
+                wr[i, past_iter] = (nn_rate + draw_rate/Game.NUM_PLAYERS())
+                wr[past_iter, i] = 1-(nn_rate + draw_rate/Game.NUM_PLAYERS())
                 writer.add_scalar(
                     f'Win Rate/NN vs -{compare_past}', nn_rate, i)
                 writer.add_scalar(
@@ -658,7 +651,8 @@ if __name__ == '__main__':
                         f'Cache Hit Rate/Best vs -{compare_past}', hit_rate, i)
                     writer.add_scalar(
                         f'Average Game Length/Best vs -{compare_past}', game_length, i)
-                postfix[f'vs -{compare_past}'] = nn_rate
+                postfix[f'vs -{compare_past}'] = (nn_rate +
+                                                  draw_rate/Game.NUM_PLAYERS())
                 gc.collect()
 
             elo = get_elo(elo, wr, i)
@@ -702,8 +696,10 @@ if __name__ == '__main__':
             next_net = i + 1
             nn_rate, draw_rate, hit_rate, game_length = play_past(
                 Game, nnargs, nn_compare_mcts_depth, next_net, current_best)
-            wr[next_net, current_best] = nn_rate
-            wr[current_best, next_net] = 1-nn_rate
+            wr[next_net, current_best] = (
+                nn_rate + draw_rate/Game.NUM_PLAYERS())
+            wr[current_best, next_net] = 1 - \
+                (nn_rate + draw_rate/Game.NUM_PLAYERS())
             writer.add_scalar(
                 f'Win Rate/NN vs Best', nn_rate, next_net)
             writer.add_scalar(
@@ -712,9 +708,9 @@ if __name__ == '__main__':
                 f'Cache Hit Rate/NN vs Best', hit_rate, next_net)
             writer.add_scalar(
                 f'Average Game Length/NN vs Best', game_length, next_net)
-            postfix['vs best'] = nn_rate
+            postfix['vs best'] = (nn_rate + draw_rate/Game.NUM_PLAYERS())
             pbar.set_postfix(postfix)
-            if nn_rate > gating_percent:
+            if (nn_rate + draw_rate/Game.NUM_PLAYERS()) > gating_percent:
                 current_best = next_net
                 postfix['best'] = current_best
                 pbar.set_postfix(postfix)

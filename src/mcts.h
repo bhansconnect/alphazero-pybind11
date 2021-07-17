@@ -15,6 +15,7 @@ struct Node {
   explicit Node(uint32_t m) : move(m){};
 
   float q = 0;
+  float v = 0;
   float policy = 0;
   uint32_t move = 0;
   uint32_t n = 0;
@@ -24,10 +25,9 @@ struct Node {
 
   void add_children(const Vector<uint8_t>& valids) noexcept;
   void update_policy(const Vector<float>& pi) noexcept;
-  void update_fpu(const Vector<float>& value, const uint8_t num_players,
-                  const float fpu_reduction) noexcept;
-  [[nodiscard]] float uct(float sqrt_parent_n, float cpuct) const noexcept;
-  [[nodiscard]] Node* best_child(float cpuct) noexcept;
+  [[nodiscard]] float uct(float sqrt_parent_n, float cpuct,
+                          float fpu_value) const noexcept;
+  [[nodiscard]] Node* best_child(float cpuct, float fpu_reduction) noexcept;
 };
 
 class MCTS {

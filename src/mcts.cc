@@ -24,28 +24,25 @@ void Node::update_policy(const Vector<float>& pi) noexcept {
   }
 }
 
-void Node::update_fpu(const Vector<float>& value, const uint8_t num_players,
-                      const float fpu_reduction) noexcept {
-  auto v = value(player) + value(num_players - 1) / num_players;
-  // Rescale to be from -1 to 1.
-  v = v * 2 - 1;
-  // reduce by fpu reduction.
-  auto fpu = std::max(-1.0f, v - fpu_reduction);
-  for (auto& c : children) {
-    c.q = fpu;
+float Node::uct(float sqrt_parent_n, float cpuct,
+                float fpu_value) const noexcept {
+  return (n == 0 ? fpu_value : q) +
+         cpuct * policy * sqrt_parent_n / static_cast<float>(n + 1);
+}
+
+Node* Node::best_child(float cpuct, float fpu_reduction) noexcept {
+  auto seen_policy = 0.0f;
+  for (const auto& c : children) {
+    if (c.n > 0) {
+      seen_policy += c.policy;
+    }
   }
-}
-
-float Node::uct(float sqrt_parent_n, float cpuct) const noexcept {
-  return q + cpuct * policy * sqrt_parent_n / static_cast<float>(n + 1);
-}
-
-Node* Node::best_child(float cpuct) noexcept {
+  auto fpu_value = v - fpu_reduction * std::sqrt(seen_policy);
   auto sqrt_n = std::sqrt(static_cast<float>(n));
   auto best_i = 0;
-  auto best_uct = children.at(0).uct(sqrt_n, cpuct);
+  auto best_uct = children.at(0).uct(sqrt_n, cpuct, fpu_value);
   for (auto i = 1; i < static_cast<int>(children.size()); ++i) {
-    auto uct = children.at(i).uct(sqrt_n, cpuct);
+    auto uct = children.at(i).uct(sqrt_n, cpuct, fpu_value);
     if (uct > best_uct) {
       best_uct = uct;
       best_i = i;
@@ -89,7 +86,7 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
   auto leaf = gs.copy();
   while (current_->n > 0 && !current_->scores.has_value()) {
     path_.push_back(current_);
-    current_ = current_->best_child(cpuct_);
+    current_ = current_->best_child(cpuct_, fpu_reduction_);
     leaf->play_move(current_->move);
   }
   if (current_->n == 0) {
@@ -123,7 +120,7 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
     } else {
       current_->update_policy(pi);
     }
-    current_->update_fpu(value, num_players_, fpu_reduction_);
+    // current_->update_fpu(value, num_players_, fpu_reduction_);
   }
 
   while (!path_.empty()) {
@@ -136,6 +133,9 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
     v = v * 2 - 1;
     current_->q = (current_->q * static_cast<float>(current_->n) + v) /
                   static_cast<float>(current_->n + 1);
+    if (current_->n == 0) {
+      current_->v = v;
+    }
     ++current_->n;
     current_ = parent;
   }

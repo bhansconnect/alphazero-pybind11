@@ -19,15 +19,19 @@ TEST(Node, Basic) {
   auto pi = SizedVector<float, 7>{};
   pi << 0.1F, 1.2F, 0.3F, 0.4F, 0.5F, 0.6F, 0.7F;
   root.update_policy(pi);
-  for (const auto& c : root.children) {
+  for (auto& c : root.children) {
     if (c.move == 5) {
       EXPECT_FLOAT_EQ(0.6F, c.policy);
-      EXPECT_FLOAT_EQ(1.2F, c.uct(1, CPUCT));
-      EXPECT_FLOAT_EQ(2.4F, c.uct(2, CPUCT));
+      EXPECT_FLOAT_EQ(1.2F, c.uct(1, CPUCT, 0));
+      EXPECT_FLOAT_EQ(2.4F, c.uct(2, CPUCT, 0));
+      EXPECT_FLOAT_EQ(3.4F, c.uct(2, CPUCT, 1));
+      c.n = 1;
+      EXPECT_FLOAT_EQ(1.2F, c.uct(2, CPUCT, 0));
+      EXPECT_FLOAT_EQ(1.2F, c.uct(2, CPUCT, 1));
     }
   }
   root.n = 1;
-  auto* n = root.best_child(CPUCT);
+  auto* n = root.best_child(CPUCT, 0);
   EXPECT_EQ(1, n->move);
 }
 

@@ -120,7 +120,6 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
     } else {
       current_->update_policy(pi);
     }
-    // current_->update_fpu(value, num_players_, fpu_reduction_);
   }
 
   while (!path_.empty()) {

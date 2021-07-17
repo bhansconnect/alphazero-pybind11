@@ -22,6 +22,15 @@ alphazero = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(alphazero)
 
 
+def calc_temp(start_temp, end_temp, decay, turn):
+    ln2 = 0.693
+    ld = ln2 / decay
+    temp = start_temp - end_temp
+    temp *= np.exp(-ld * turn)
+    temp += end_temp
+    return temp
+
+
 def move_to_string(move, height, width):
     new_loc = move % (width + height)
     height_move = new_loc >= width
@@ -40,11 +49,11 @@ def move_to_string(move, height, width):
     return f"{chr(ord('a')+piece_w)}{piece_h+1}-{chr(ord('a')+new_w)}{new_h+1}"
 
 
-def eval_position(gs, mcts, agent, think_time, temp):
+def eval_position(gs, mcts, agent, args):
     height = gs.CANONICAL_SHAPE()[1]
     width = gs.CANONICAL_SHAPE()[2]
     start = time.time()
-    while time.time() - start < think_time:
+    while time.time() - start < args.time:
         leaf = mcts.find_leaf(gs)
         v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
         v = v.cpu().numpy()
@@ -59,13 +68,14 @@ def eval_position(gs, mcts, agent, think_time, temp):
     print(f'status Raw win probs: {v}')
     print(f'status Raw top moves: {high_prob}')
 
-    probs = mcts.probs(temp)
+    probs = mcts.probs(calc_temp(args.start_temp, args.end_temp,
+                                 args.temp_half_life, gs.current_turn()))
     high_prob = {move_to_string(x[0], height, width): probs[x[0]]
                  for x in np.argwhere(probs > 0.05)}
     rand = np.random.choice(probs.shape[0], p=probs)
     print(
         f'status MCTS ran with {sum(mcts.counts())} simulations in {time.time()-start} seconds')
-    print(f'status MCTS win prob: {(mcts.root_value()+1)/2}')
+    print(f'status MCTS win prob: {mcts.root_value()}')
     print(f'status MCTS top moves: {high_prob}')
     print(
         f'status MCTS best: {move_to_string(np.argmax(probs), height, width)}')
@@ -88,10 +98,16 @@ if __name__ == '__main__':
                         help='The neural network weights. The file must be in the format {name}-{depth}-{channels}.')
     parser.add_argument('--time', type=float, default=9.5,
                         help='Time to think per move in seconds.')
-    parser.add_argument('--temp', type=float, default=0.5,
-                        help='How much randomness to use when picking a move. 0 is pick best move.')
+    parser.add_argument('--start-temp', type=float, default=0.5,
+                        help='How much randomness to use when picking a move at start of game. 0 is pick best move.')
+    parser.add_argument('--end-temp', type=float, default=0.1,
+                        help='How much randomness to use when picking a move at end of game. 0 is pick best move.')
+    parser.add_argument('--temp-half-life', type=float, default=10,
+                        help='How many turns for temp to become half of what it used to be.')
     parser.add_argument('--cpuct', type=float, default=2,
                         help='How much to explore when searching. Should be smaller for shorter time limits.')
+    parser.add_argument('--fpu-redux', type=float, default=0.25,
+                        help='First play urgency reduction')
     parser.add_argument('--game', type=str, default='computer-brandubh',
                         help='The game/ruleset being played.')
     args = parser.parse_args()
@@ -126,13 +142,14 @@ if __name__ == '__main__':
     gs = Game(max_turns)
     height = gs.CANONICAL_SHAPE()[1]
     width = gs.CANONICAL_SHAPE()[2]
-    mcts = alphazero.MCTS(args.cpuct, gs.num_players(), gs.num_moves())
+    mcts = alphazero.MCTS(args.cpuct, gs.num_players(),
+                          gs.num_moves(), 0, 1.4, args.fpu_redux)
 
     try:
         while True:
             command = input().strip()
             if command.startswith('play'):
-                move = eval_position(gs, mcts, nn, args.time, args.temp)
+                move = eval_position(gs, mcts, nn, args)
                 print(f'move {move_to_string(move, width, height)}')
                 mcts.update_root(gs, move)
                 gs.play_move(move)
@@ -149,7 +166,7 @@ if __name__ == '__main__':
             elif command.startswith('finish'):
                 gs = Game()
                 mcts = alphazero.MCTS(
-                    args.cpuct, gs.num_players(), gs.num_moves())
+                    args.cpuct, gs.num_players(), gs.num_moves(), 0, 1.4, args.fpu_redux)
             elif command.startswith('error'):
                 print('error -1')
                 break

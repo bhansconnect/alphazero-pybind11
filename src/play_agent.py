@@ -14,47 +14,62 @@ spec = importlib.util.spec_from_file_location(
 alphazero = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(alphazero)
 
-THINK_TIME = 0.5
+THINK_TIME = 9.5
 CPUCT = 2
-TEMP = 0.5
+START_TEMP = 0.5
+END_TEMP = 0.2
+TEMP_DECAY_HALF_LIFE = 10
 
 bf = 0
 bfc = 0
 
 
+def calc_temp(turn):
+    ln2 = 0.693
+    ld = ln2 / TEMP_DECAY_HALF_LIFE
+    temp = START_TEMP - END_TEMP
+    temp *= np.exp(-ld * turn)
+    temp += END_TEMP
+    return temp
+
+
 def eval_position(gs, agent):
-    mcts = alphazero.MCTS(CPUCT, gs.num_players(), gs.num_moves())
+    mcts = alphazero.MCTS(CPUCT, gs.num_players(),
+                          gs.num_moves(), 0, 1.4, 0.25)
     global bf
     global bfc
     bf += np.sum(gs.valid_moves())
     bfc += 1
-    # start = time.time()
-    # while time.time() - start < THINK_TIME:
-    sims = 500
-    for _ in range(sims):
+    start = time.time()
+    sims = 0
+    while time.time() - start < THINK_TIME:
+        # for _ in range(250):
         leaf = mcts.find_leaf(gs)
         v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
         v = v.cpu().numpy()
         pi = pi.cpu().numpy()
         mcts.process_result(gs, v, pi, False)
+        sims += 1
+    print(f'\tRan {sims} simulations in {round(time.time()-start, 3)} seconds')
     # print('Press enter for ai analysis')
     # input()
     v, pi = agent.predict(torch.from_numpy(gs.canonicalized()))
     v = v.cpu().numpy()
     pi = pi.cpu().numpy()
     print(f'\tRaw Score: {v}')
-    thing = {x[0]: pi[x[0]] for x in np.argwhere(pi > 0.05)}
-    print(f'\tRaw Probs: {thing}')
+    thing = {x: round(100*pi[x], 1) for x in reversed(np.argsort(pi)[-10:])}
+    print(f'\tRaw Top Probs: {thing}')
     print(f'\tRaw Best: {np.argmax(pi)}')
     print(f'\tRaw Rand: {np.random.choice(pi.shape[0], p=pi)}')
 
     print(f'\tMCTS Value Current Player: {mcts.root_value()}')
-    # counts = mcts.counts()
-    # thing = {x[0]: counts[x[0]] for x in np.argwhere(counts > 0.05*sims)}
-    # print(f'\tMCTS Counts: {thing}')
-    probs = mcts.probs(TEMP)
-    thing = {x[0]: probs[x[0]] for x in np.argwhere(probs > 0.05)}
-    print(f'\tMCTS Probs: {thing}')
+    counts = mcts.counts()
+    thing = {x: counts[x] for x in reversed(np.argsort(counts)[-10:])}
+    print(f'\tMCTS Top Counts: {thing}')
+    probs = mcts.probs(calc_temp(gs.current_turn()))
+    thing = {x: round(100*probs[x], 1)
+             for x in reversed(np.argsort(probs)[-10:])}
+    print(f'\tMCTS Top Probs: {thing}')
     print(f'\tMCTS Best: {np.argmax(probs)}')
     rand = np.random.choice(probs.shape[0], p=probs)
     print(f'\tMCTS Rand: {rand}')
@@ -194,7 +209,7 @@ if __name__ == '__main__':
                 return (from_h * WIDTH + from_w) * (WIDTH + HEIGHT) + WIDTH + to_loc
             return (from_h * WIDTH + from_w) * (WIDTH + HEIGHT) + to_loc
 
-        move = -1
+        # move = -1
         # while not valid:
         #     try:
         #         print('Enter Move(-1 is undo, -2 human input): ', end='')

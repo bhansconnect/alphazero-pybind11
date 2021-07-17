@@ -434,7 +434,8 @@ void BrandubhGS::play_move(uint32_t move) {
 
 [[nodiscard]] std::string BrandubhGS::dump() const noexcept {
   auto out = "Current Player: " + std::to_string(player_) + '\n';
-  out += "Current Turn: " + std::to_string(turn_) + '\n';
+  out += "Current Turn: " + std::to_string(turn_) + " out of " +
+         std::to_string(max_turns_) + '\n';
   out +=
       "Current Repetition Count: " + std::to_string(current_repetition_count_) +
       '\n';

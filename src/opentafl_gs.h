@@ -30,8 +30,9 @@ constexpr const int NUM_MOVES = WIDTH * HEIGHT * (WIDTH + HEIGHT);
 constexpr const int NUM_PLAYERS = 2;
 constexpr const std::array<int, 3> BOARD_SHAPE = {3, HEIGHT, WIDTH};
 // 3 for board, 2 for current player, 2 for current repetition count.
+// 1 for turn/max_turns.
 // May want to add some historical positions.
-constexpr const std::array<int, 3> CANONICAL_SHAPE = {7, HEIGHT, WIDTH};
+constexpr const std::array<int, 3> CANONICAL_SHAPE = {8, HEIGHT, WIDTH};
 
 using BoardTensor =
     SizedTensor<int8_t,

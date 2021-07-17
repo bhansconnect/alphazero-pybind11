@@ -471,12 +471,20 @@ void OpenTaflGS::play_move(uint32_t move) {
     }
   }
 
+  // Current turn.
+  for (auto h = 0; h < HEIGHT; ++h) {
+    for (auto w = 0; w < WIDTH; ++w) {
+      out(7, h, w) = static_cast<float>(turn_) / static_cast<float>(max_turns_);
+    }
+  }
+
   return out;
 }
 
 [[nodiscard]] std::string OpenTaflGS::dump() const noexcept {
   auto out = "Current Player: " + std::to_string(player_) + '\n';
-  out += "Current Turn: " + std::to_string(turn_) + '\n';
+  out += "Current Turn: " + std::to_string(turn_) + " out of " +
+         std::to_string(max_turns_) + '\n';
   out +=
       "Current Repetition Count: " + std::to_string(current_repetition_count_) +
       '\n';

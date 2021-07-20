@@ -250,6 +250,21 @@ WINDOW_SIZE_SCALAR = 6  # This ends up being approximately first time history do
 RESULT_WORKERS = 2
 
 
+bootstrap_iters = 1
+start = 0
+iters = 200
+depth = 2
+channels = 16
+nn_selfplay_mcts_depth = 500
+nn_selfplay_fast_mcts_depth = 100
+nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
+compare_past = 20
+gating_percent = 0.52
+lr_milestone = 150
+run_name = f'c_{channels}_d_{depth}'
+Game = alphazero.OpenTaflGS
+
+
 def base_params(Game, start_temp, bs, cb):
     params = alphazero.PlayParams()
     params.max_cache_size = MAX_CACHE_SIZE
@@ -569,23 +584,11 @@ if __name__ == '__main__':
             past_elo[new_agent] += mean_update*32
         return past_elo
 
-    bootstrap_iters = 0
-    start = 0
-    iters = 200
-    depth = 4
-    channels = 32
-    nn_selfplay_mcts_depth = 250
-    nn_selfplay_fast_mcts_depth = 50
-    nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
-    compare_past = 20
-    gating_percent = 0.52
     total_agents = iters+1  # + base
 
-    run_name = f'c_{channels}_d_{depth}'
     writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
-        num_channels=channels, depth=depth, lr_milestone=150)
-    Game = alphazero.Connect4GS
+        num_channels=channels, depth=depth, lr_milestone=lr_milestone)
 
     if start == 0:
         create_init_net(Game, nnargs,)
@@ -593,6 +596,8 @@ if __name__ == '__main__':
         wr[:] = np.NAN
         elo = np.zeros(total_agents)
         current_best = 0
+        np.savetxt("data/elo.csv", elo, delimiter=",")
+        np.savetxt("data/win_rate.csv", wr, delimiter=",")
     else:
         tmp_wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
         wr = np.full_like(tmp_wr, np.NAN)

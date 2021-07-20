@@ -250,19 +250,19 @@ WINDOW_SIZE_SCALAR = 6  # This ends up being approximately first time history do
 RESULT_WORKERS = 2
 
 
-bootstrap_iters = 1
+bootstrap_iters = 0
 start = 0
 iters = 200
 depth = 2
 channels = 16
-nn_selfplay_mcts_depth = 500
-nn_selfplay_fast_mcts_depth = 100
+nn_selfplay_mcts_depth = 250
+nn_selfplay_fast_mcts_depth = 50
 nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 gating_percent = 0.52
 lr_milestone = 150
 run_name = f'c_{channels}_d_{depth}'
-Game = alphazero.OpenTaflGS
+Game = alphazero.Connect4GS
 
 
 def base_params(Game, start_temp, bs, cb):

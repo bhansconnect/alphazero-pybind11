@@ -43,7 +43,7 @@ def eval_position(gs, agent):
     start = time.time()
     sims = 0
     while time.time() - start < THINK_TIME:
-        # for _ in range(250):
+        # for _ in range(500):
         leaf = mcts.find_leaf(gs)
         v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
         v = v.cpu().numpy()

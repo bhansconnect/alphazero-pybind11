@@ -255,8 +255,8 @@ start = 0
 iters = 200
 depth = 2
 channels = 16
-nn_selfplay_mcts_depth = 250
-nn_selfplay_fast_mcts_depth = 50
+nn_selfplay_mcts_depth = 500
+nn_selfplay_fast_mcts_depth = 100
 nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 gating_percent = 0.52
@@ -424,9 +424,9 @@ if __name__ == '__main__':
         return v_loss, pi_loss
 
     def self_play(Game, nnargs, best, iteration, depth, fast_depth):
-        bs = 512
+        bs = 512*4
         cb = Game.NUM_PLAYERS()*2
-        n = bs*cb*12
+        n = bs*cb*3
         params = base_params(Game, SELF_PLAY_TEMP, bs, cb)
         params.games_to_play = n
         params.mcts_depth = [depth] * Game.NUM_PLAYERS()

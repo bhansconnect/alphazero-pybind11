@@ -253,8 +253,8 @@ RESULT_WORKERS = 2
 bootstrap_iters = 0
 start = 0
 iters = 200
-depth = 2
-channels = 16
+depth = 4
+channels = 32
 nn_selfplay_mcts_depth = 500
 nn_selfplay_fast_mcts_depth = 100
 nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
@@ -424,9 +424,9 @@ if __name__ == '__main__':
         return v_loss, pi_loss
 
     def self_play(Game, nnargs, best, iteration, depth, fast_depth):
-        bs = 512*4
+        bs = 1024
         cb = Game.NUM_PLAYERS()*2
-        n = bs*cb*3
+        n = bs*cb*6
         params = base_params(Game, SELF_PLAY_TEMP, bs, cb)
         params.games_to_play = n
         params.mcts_depth = [depth] * Game.NUM_PLAYERS()
@@ -436,13 +436,21 @@ if __name__ == '__main__':
         params.playout_cap_randomization = True
         params.playout_cap_depth = fast_depth
         params.playout_cap_percent = 0.75
-        pm = alphazero.PlayManager(Game(), params)
 
+        # Just use a random agent when generating data with network zero.
+        # They are equivalent.
+        if iteration == 0:
+            nn = RandPlayer(Game, bs)
+            params.max_cache_size = 0
+        else:
+            nn = neural_net.NNWrapper(Game, nnargs)
+            nn.load_checkpoint(
+                'data/checkpoint', f'{best:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
+
+        pm = alphazero.PlayManager(Game(), params)
         grargs = GRArgs(title='Self Play', game=Game, iteration=iteration,
                         max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
-        nn = neural_net.NNWrapper(Game, nnargs)
-        nn.load_checkpoint(
-            'data/checkpoint', f'{best:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
+
         players = []
         for _ in range(Game.NUM_PLAYERS()):
             players.append(nn)

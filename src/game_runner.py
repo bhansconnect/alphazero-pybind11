@@ -439,7 +439,7 @@ if __name__ == '__main__':
 
         # Just use a random agent when generating data with network zero.
         # They are equivalent.
-        if iteration == 0:
+        if best == 0:
             nn = RandPlayer(Game, bs)
             params.max_cache_size = 0
         else:

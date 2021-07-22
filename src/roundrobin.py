@@ -22,8 +22,6 @@ def pit_agents(Game, players, mcts_depths, bs, name):
     np = Game.NUM_PLAYERS()
     win_rates = [0]*np
     for i in tqdm.trange(np, leave=False, desc=name):
-        params = alphazero.PlayParams()
-        params.fpu_reduction = 0.2
         cb = Game.NUM_PLAYERS()
         n = bs*cb
         ordered_players = [None]*np
@@ -33,6 +31,8 @@ def pit_agents(Game, players, mcts_depths, bs, name):
             ordered_depths[j] = mcts_depths[(j+i) % np]
 
         params = base_params(Game, 0.5, bs, cb)
+        # Disable the cache because it does not work well in arena.
+        params.max_cache_size = 0
         params.games_to_play = n
         params.mcts_depth = ordered_depths
         pm = alphazero.PlayManager(Game(), params)

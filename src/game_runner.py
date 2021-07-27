@@ -241,6 +241,7 @@ TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
 FINAL_TEMP = 0.2
 FPU_REDUCTION = 0.25
 MAX_CACHE_SIZE = 200000
+SAMPLE_RATE = 4
 
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
 WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
@@ -261,7 +262,7 @@ nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 gating_percent = 0.52
 lr_milestone = 150
-run_name = f'c_{channels}_d_{depth}'
+run_name = f'{depth}d-{channels}c-{nn_selfplay_mcts_depth}sims'
 Game = alphazero.Connect4GS
 
 
@@ -391,6 +392,7 @@ if __name__ == '__main__':
         nn.load_checkpoint(
             'data/checkpoint', f'{iteration:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
 
+        total_size = 0
         datasets = []
         for i in range(max(0, iteration - hist_size), iteration + 1):
             c = sorted(glob.glob(f'{HIST_LOCATION}/{i:04d}-*-canonical-*.pt'))
@@ -398,6 +400,7 @@ if __name__ == '__main__':
             p = sorted(glob.glob(f'{HIST_LOCATION}/{i:04d}-*-pi-*.pt'))
             for j in range(len(c)):
                 size = int(c[j].split('-')[-1].split('.')[0])
+                total_size += size
                 cs = Game.CANONICAL_SHAPE()
                 c_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
                     c[j], shared=False, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
@@ -410,11 +413,14 @@ if __name__ == '__main__':
                 del v_tensor
                 del p_tensor
 
+        bs = 512
         dataset = ConcatDataset(datasets)
-        dataloader = DataLoader(dataset, batch_size=512,
+        dataloader = DataLoader(dataset, batch_size=bs,
                                 shuffle=True, num_workers=11)
 
-        v_loss, pi_loss = nn.train(dataloader, 250*4)
+        average_generation = total_size/min(hist_size, iteration+1)
+        v_loss, pi_loss = nn.train(
+            dataloader, int(math.ceil(average_generation/bs*SAMPLE_RATE)))
         nn.save_checkpoint(
             'data/checkpoint', f'{iteration+1:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
         del datasets[:]
@@ -604,8 +610,9 @@ if __name__ == '__main__':
         wr[:] = np.NAN
         elo = np.zeros(total_agents)
         current_best = 0
-        np.savetxt("data/elo.csv", elo, delimiter=",")
-        np.savetxt("data/win_rate.csv", wr, delimiter=",")
+        if bootstrap_iters == 0:
+            np.savetxt("data/elo.csv", elo, delimiter=",")
+            np.savetxt("data/win_rate.csv", wr, delimiter=",")
     else:
         tmp_wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
         wr = np.full_like(tmp_wr, np.NAN)

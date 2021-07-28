@@ -49,7 +49,7 @@ class MCTS {
   [[nodiscard]] float root_value() const {
     float q = -1;
     for (const auto& c : root_.children) {
-      if (c.q > q) {
+      if (c.n > 0 && c.q > q) {
         q = c.q;
       }
     }

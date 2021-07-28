@@ -241,7 +241,13 @@ TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
 FINAL_TEMP = 0.2
 FPU_REDUCTION = 0.25
 MAX_CACHE_SIZE = 200000
-SAMPLE_RATE = 4
+
+# Total games per iteration is batch size * num players * 2 * chunks
+SELF_PLAY_BATCH_SIZE = 1024
+SELF_PLAY_CHUNKS = 4
+
+TRAIN_BATCH_SIZE = 1024
+TRAIN_SAMPLE_RATE = 4
 
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
 WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
@@ -413,14 +419,14 @@ if __name__ == '__main__':
                 del v_tensor
                 del p_tensor
 
-        bs = 512
+        bs = TRAIN_BATCH_SIZE
         dataset = ConcatDataset(datasets)
         dataloader = DataLoader(dataset, batch_size=bs,
                                 shuffle=True, num_workers=11)
 
         average_generation = total_size/min(hist_size, iteration+1)
         v_loss, pi_loss = nn.train(
-            dataloader, int(math.ceil(average_generation/bs*SAMPLE_RATE)))
+            dataloader, int(math.ceil(average_generation/bs*TRAIN_SAMPLE_RATE)))
         nn.save_checkpoint(
             'data/checkpoint', f'{iteration+1:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
         del datasets[:]
@@ -430,9 +436,9 @@ if __name__ == '__main__':
         return v_loss, pi_loss
 
     def self_play(Game, nnargs, best, iteration, depth, fast_depth):
-        bs = 1024
+        bs = SELF_PLAY_BATCH_SIZE
         cb = Game.NUM_PLAYERS()*2
-        n = bs*cb*6
+        n = bs*cb*SELF_PLAY_CHUNKS
         params = base_params(Game, SELF_PLAY_TEMP, bs, cb)
         params.games_to_play = n
         params.mcts_depth = [depth] * Game.NUM_PLAYERS()

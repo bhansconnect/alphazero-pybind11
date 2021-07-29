@@ -114,6 +114,8 @@ if __name__ == '__main__':
 
     if args.game.lower() == 'computer-brandubh':
         Game = alphazero.BrandubhGS
+    elif args.game.lower() == 'computer-tawlbwrdd':
+        Game = alphazero.TawlbwrddGS
     elif args.game.lower() == 'computer-fetlar':
         Game = alphazero.OpenTaflGS
     else:

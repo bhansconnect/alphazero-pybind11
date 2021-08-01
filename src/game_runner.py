@@ -146,6 +146,7 @@ class GameRunner:
         total = hits + self.pm.cache_misses()
         if total > 0:
             hr = hits/total
+        completed = self.pm.games_completed()
         scores = self.pm.scores()
         win_rates = [0] * len(scores)
         for i in range(len(scores)):
@@ -283,6 +284,29 @@ def base_params(Game, start_temp, bs, cb):
     params.concurrent_games = bs * cb
     params.fpu_reduction = FPU_REDUCTION
     return params
+
+
+def elo_prob(r1, r2):
+    return 1.0 / (1 + 1.0 * math.pow(10, 1.0 * (r1-r2) / 400))
+
+
+def get_elo(past_elo, win_rates, new_agent):
+    # Everything but the newest agent is anchored for consitency.
+    # Start with the assumption it is equal to the agent before it.
+    if new_agent != 0:
+        past_elo[new_agent] = past_elo[new_agent-1]
+    iters = 5000
+    for _ in tqdm.trange(iters, leave=False):
+        mean_update = 0
+        for j in range(past_elo.shape[0]):
+            if not math.isnan(win_rates[new_agent, j]):
+                rate = win_rates[new_agent, j]
+                rate = max(0.001, rate)
+                rate = min(0.999, rate)
+                mean_update += rate - \
+                    elo_prob(past_elo[j], past_elo[new_agent])
+        past_elo[new_agent] += mean_update*32
+    return past_elo
 
 
 if __name__ == '__main__':
@@ -585,24 +609,6 @@ if __name__ == '__main__':
         del nn
         del nn_past
         return nn_rate, draw_rate, hr, agl
-
-    def elo_prob(r1, r2):
-        return 1.0 / (1 + 1.0 * math.pow(10, 1.0 * (r1-r2) / 400))
-
-    def get_elo(past_elo, win_rates, new_agent):
-        # Everything but the newest agent is anchored for consitency.
-        # Start with the assumption it is equal to the agent before it.
-        if new_agent != 0:
-            past_elo[new_agent] = past_elo[new_agent-1]
-        iters = 5000
-        for _ in tqdm.trange(iters, leave=False):
-            mean_update = 0
-            for j in range(past_elo.shape[0]):
-                if not math.isnan(wr[new_agent, j]):
-                    mean_update += wr[new_agent, j] - \
-                        elo_prob(past_elo[j], past_elo[new_agent])
-            past_elo[new_agent] += mean_update*32
-        return past_elo
 
     total_agents = iters+1  # + base
 

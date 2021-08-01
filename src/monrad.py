@@ -96,16 +96,13 @@ if __name__ == '__main__':
     print(agents)
     win_matrix = np.full((count, count), np.NAN)
     elo = np.zeros(count)
-    # initial seeding is bottom half vs top half.
-    rankings = []
-    for i in range(count//2):
-        rankings.append(i)
-        rankings.append(i+count//2)
-    # rankings = list(range(count))
+    rankings = list(range(count))
     rounds = int(np.ceil(np.log2(count)))
+    dist = count
     for r in range(rounds):
         print(f'Round {r+1}')
-        with tqdm.trange(count//2, desc='Games', leave=False) as pbar:
+        dist = math.ceil(dist/2)
+        with tqdm.trange(count//2, desc='Games') as pbar:
             current = len(rankings) - 1
             played = [False]*count
             while current >= 0:
@@ -113,18 +110,19 @@ if __name__ == '__main__':
                     current -= 1
                     continue
                 played[rankings[current]] = True
-                offset = 1
+                offset = dist
                 while (current-offset >= 0 and (played[rankings[current-offset]] or not math.isnan(win_matrix[rankings[current], rankings[current-offset]]))):
                     offset += 1
                 if current-offset < 0:
                     print('No one to play? Relaxing constraints')
-                    offset = 1
+                    offset = dist
                     while not math.isnan(win_matrix[rankings[current], rankings[current-offset]]):
                         offset += 1
                 played[rankings[current-offset]] = True
 
                 i = rankings[current]
                 j = rankings[current-offset]
+                # print(f'Pairing {current} vs {current-offset} -> {i} vs {j}')
                 if agents[i] == 'dummy':
                     win_matrix[i, j] = 0.0
                     win_matrix[j, i] = 1.0

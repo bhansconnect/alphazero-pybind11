@@ -241,7 +241,7 @@ EVAL_TEMP = 0.5
 TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
 FINAL_TEMP = 0.2
 FPU_REDUCTION = 0.25
-MAX_CACHE_SIZE = 400000
+MAX_CACHE_SIZE = 200000
 
 # Concurrent games played is batch size * num player * concurrent batch mult
 # Total games per iteration is batch size * num players * concurrent batch mult * chunks

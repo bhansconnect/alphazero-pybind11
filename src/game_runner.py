@@ -241,11 +241,13 @@ EVAL_TEMP = 0.5
 TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
 FINAL_TEMP = 0.2
 FPU_REDUCTION = 0.25
-MAX_CACHE_SIZE = 200000
+MAX_CACHE_SIZE = 400000
 
-# Total games per iteration is batch size * num players * 2 * chunks
-SELF_PLAY_BATCH_SIZE = 1024
-SELF_PLAY_CHUNKS = 4
+# Concurrent games played is batch size * num player * concurrent batch mult
+# Total games per iteration is batch size * num players * concurrent batch mult * chunks
+SELF_PLAY_BATCH_SIZE = 512
+SELF_PLAY_CONCURRENT_BATCH_MULT = 2
+SELF_PLAY_CHUNKS = 2
 
 TRAIN_BATCH_SIZE = 1024
 TRAIN_SAMPLE_RATE = 4
@@ -461,7 +463,7 @@ if __name__ == '__main__':
 
     def self_play(Game, nnargs, best, iteration, depth, fast_depth):
         bs = SELF_PLAY_BATCH_SIZE
-        cb = Game.NUM_PLAYERS()*2
+        cb = Game.NUM_PLAYERS()*SELF_PLAY_CONCURRENT_BATCH_MULT
         n = bs*cb*SELF_PLAY_CHUNKS
         params = base_params(Game, SELF_PLAY_TEMP, bs, cb)
         params.games_to_play = n
@@ -661,7 +663,7 @@ if __name__ == '__main__':
             writer.add_scalar(
                 f'Misc/Current Best', current_best, i)
             past_iter = max(0, i - compare_past)
-            if past_iter != current_best:
+            if past_iter != current_best and i != start:
                 nn_rate, draw_rate, hit_rate, game_length = play_past(
                     Game, nnargs, nn_compare_mcts_depth,  i, past_iter)
                 wr[i, past_iter] = (nn_rate + draw_rate/Game.NUM_PLAYERS())

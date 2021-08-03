@@ -13,7 +13,7 @@
 
 namespace alphazero::opentafl_gs {
 
-constexpr const uint16_t DEFAULT_MAX_TURNS = 800;
+constexpr const uint16_t DEFAULT_MAX_TURNS = 400;
 
 constexpr const int KING_LAYER = 0;
 constexpr const int DEF_LAYER = 1;

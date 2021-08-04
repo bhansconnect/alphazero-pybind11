@@ -67,12 +67,8 @@ if __name__ == '__main__':
                 p1 = RandPlayer(Game, bs)
                 d1 = agents[i]
             else:
-                _, depth, channels, dense = os.path.splitext(
-                    agents[i])[0].split('-')[:4]
-                nnargs = neural_net.NNArgs(
-                    num_channels=int(channels), depth=int(depth), dense_net=dense == 'dense')
-                p1 = neural_net.NNWrapper(Game, nnargs)
-                p1.load_checkpoint('data/bench', agents[i])
+                p1 = neural_net.NNWrapper.load_checkpoint(
+                    'data/bench', agents[i])
                 d1 = nn_mtcs_depth
             for j in range(i+1, count):
                 p2 = None
@@ -81,12 +77,8 @@ if __name__ == '__main__':
                     p2 = RandPlayer(Game, bs)
                     d2 = agents[j]
                 else:
-                    _, depth, channels, dense = os.path.splitext(agents[j])[
-                        0].split('-')[:4]
-                    nnargs = neural_net.NNArgs(
-                        num_channels=int(channels), depth=int(depth), dense_net=dense == 'dense')
-                    p2 = neural_net.NNWrapper(Game, nnargs)
-                    p2.load_checkpoint('data/bench', agents[j])
+                    p2 = neural_net.NNWrapper.load_checkpoint(
+                        'data/bench', agents[j])
                     d2 = nn_mtcs_depth
                 players = [p2] * Game.NUM_PLAYERS()
                 depths = [d2] * Game.NUM_PLAYERS()

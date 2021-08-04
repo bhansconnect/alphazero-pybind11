@@ -311,21 +311,19 @@ if __name__ == '__main__':
 
     def create_init_net(Game, nnargs):
         nn = neural_net.NNWrapper(Game, nnargs)
-        nn.save_checkpoint('data/checkpoint',
-                           f'0000-{nnargs.depth:04d}-{nnargs.num_channels:04d}-{"dense" if nnargs.dense_net else "res"}.pt')
+        nn.save_checkpoint('data/checkpoint', f'0000-{run_name}.pt')
 
     def calc_hist_size(i):
         return int(WINDOW_SIZE_SCALAR*(1 + WINDOW_SIZE_BETA*(((i+1)/WINDOW_SIZE_SCALAR)**WINDOW_SIZE_ALPHA-1)/WINDOW_SIZE_ALPHA))
 
-    def resample_by_surprise(Game, nnargs, iteration):
+    def resample_by_surprise(Game, iteration):
         # Used to resample the latest iteration by how surprising each sample is.
         # Each sample is given 0.5 weight as a base.
         # The other half of the weight is distributed based on the sample loss.
         # The sample is then added to the dataset floor(weight) times.
         # It is also added an extra time with the probability of weight - floor(weight)
-        nn = neural_net.NNWrapper(Game, nnargs)
-        nn.load_checkpoint(
-            'data/checkpoint', f'{iteration:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
+        nn = neural_net.NNWrapper.load_checkpoint(
+            'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
 
         c = sorted(
             glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-canonical-*.pt'))
@@ -413,10 +411,9 @@ if __name__ == '__main__':
         for fn in glob.glob(f'{TMP_HIST_LOCATION}/*'):
             os.remove(fn)
 
-    def train(Game, nnargs, iteration, hist_size):
-        nn = neural_net.NNWrapper(Game, nnargs)
-        nn.load_checkpoint(
-            'data/checkpoint', f'{iteration:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
+    def train(Game, iteration, hist_size):
+        nn = neural_net.NNWrapper.load_checkpoint(
+            'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
 
         total_size = 0
         datasets = []
@@ -447,15 +444,15 @@ if __name__ == '__main__':
         average_generation = total_size/min(hist_size, iteration+1)
         v_loss, pi_loss = nn.train(
             dataloader, int(math.ceil(average_generation/bs*TRAIN_SAMPLE_RATE)))
-        nn.save_checkpoint(
-            'data/checkpoint', f'{iteration+1:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}-{"dense" if nnargs.dense_net else "res"}.pt')
+        nn.save_checkpoint('data/checkpoint',
+                           f'{iteration+1:04d}-{run_name}.pt')
         del datasets[:]
         del dataset
         del dataloader
         del nn
         return v_loss, pi_loss
 
-    def self_play(Game, nnargs, best, iteration, depth, fast_depth):
+    def self_play(Game, best, iteration, depth, fast_depth):
         bs = SELF_PLAY_BATCH_SIZE
         cb = Game.NUM_PLAYERS()*SELF_PLAY_CONCURRENT_BATCH_MULT
         n = bs*cb*SELF_PLAY_CHUNKS
@@ -475,9 +472,8 @@ if __name__ == '__main__':
             nn = RandPlayer(Game, bs)
             params.max_cache_size = 0
         else:
-            nn = neural_net.NNWrapper(Game, nnargs)
-            nn.load_checkpoint(
-                'data/checkpoint', f'{best:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
+            nn = neural_net.NNWrapper.load_checkpoint(
+                'data/checkpoint', f'{best:04d}-{run_name}.pt')
 
         pm = alphazero.PlayManager(Game(), params)
         grargs = GRArgs(title='Self Play', game=Game, iteration=iteration,
@@ -502,17 +498,15 @@ if __name__ == '__main__':
         del nn
         return win_rates, hr, agl
 
-    def play_past(Game, nnargs, depth, iteration, past_iter):
+    def play_past(Game, depth, iteration, past_iter):
         nn_rate = 0
         draw_rate = 0
         hr = 0
         agl = 0
-        nn = neural_net.NNWrapper(Game, nnargs)
-        nn.load_checkpoint(
-            'data/checkpoint', f'{iteration:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
-        nn_past = neural_net.NNWrapper(Game, nnargs)
-        nn_past.load_checkpoint(
-            'data/checkpoint', f'{past_iter:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
+        nn = neural_net.NNWrapper.load_checkpoint(
+            'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
+        nn_past = neural_net.NNWrapper.load_checkpoint(
+            'data/checkpoint', f'{past_iter:04d}-{run_name}.pt')
         cb = Game.NUM_PLAYERS()
         if Game.NUM_PLAYERS() > 2:
             bs = 16
@@ -613,7 +607,7 @@ if __name__ == '__main__':
         num_channels=channels, depth=depth, lr_milestone=lr_milestone, dense_net=dense_net)
 
     if start == 0:
-        create_init_net(Game, nnargs,)
+        create_init_net(Game, nnargs)
         wr = np.empty((total_agents, total_agents))
         wr[:] = np.NAN
         elo = np.zeros(total_agents)
@@ -640,7 +634,7 @@ if __name__ == '__main__':
                 elo[i] = prev_elo[i]
                 wr[i][:bootstrap_iters] = prev_wr[i][:bootstrap_iters]
                 hist_size = calc_hist_size(i)
-                v_loss, pi_loss = train(Game, nnargs, i, hist_size)
+                v_loss, pi_loss = train(Game, i, hist_size)
                 writer.add_scalar('Loss/V', v_loss, i)
                 writer.add_scalar('Loss/Pi', pi_loss, i)
                 writer.add_scalar('Loss/Total', v_loss+pi_loss, i)
@@ -659,7 +653,7 @@ if __name__ == '__main__':
             past_iter = max(0, i - compare_past)
             if past_iter != current_best and i != start:
                 nn_rate, draw_rate, hit_rate, game_length = play_past(
-                    Game, nnargs, nn_compare_mcts_depth,  i, past_iter)
+                    Game, nn_compare_mcts_depth,  i, past_iter)
                 wr[i, past_iter] = (nn_rate + draw_rate/Game.NUM_PLAYERS())
                 wr[past_iter, i] = 1-(nn_rate + draw_rate/Game.NUM_PLAYERS())
                 writer.add_scalar(
@@ -694,7 +688,7 @@ if __name__ == '__main__':
             np.savetxt("data/elo.csv", elo, delimiter=",")
 
             win_rates, hit_rate, game_length = self_play(
-                Game, nnargs, current_best, i, nn_selfplay_mcts_depth, nn_selfplay_fast_mcts_depth)
+                Game, current_best, i, nn_selfplay_mcts_depth, nn_selfplay_fast_mcts_depth)
             for j in range(len(win_rates)-1):
                 writer.add_scalar(
                     f'Win Rate/Self Play P{j+1}', win_rates[j], i)
@@ -706,12 +700,12 @@ if __name__ == '__main__':
             pbar.set_postfix(postfix)
             gc.collect()
 
-            resample_by_surprise(Game, nnargs, i)
+            resample_by_surprise(Game, i)
             gc.collect()
 
             hist_size = calc_hist_size(i)
             writer.add_scalar('Misc/History Size', hist_size, i)
-            v_loss, pi_loss = train(Game, nnargs, i, hist_size)
+            v_loss, pi_loss = train(Game, i, hist_size)
             writer.add_scalar('Loss/V', v_loss, i)
             writer.add_scalar('Loss/Pi', pi_loss, i)
             writer.add_scalar('Loss/Total', v_loss+pi_loss, i)
@@ -723,7 +717,7 @@ if __name__ == '__main__':
             # Eval for gating
             next_net = i + 1
             nn_rate, draw_rate, hit_rate, game_length = play_past(
-                Game, nnargs, nn_compare_mcts_depth, next_net, current_best)
+                Game, nn_compare_mcts_depth, next_net, current_best)
             wr[next_net, current_best] = (
                 nn_rate + draw_rate/Game.NUM_PLAYERS())
             wr[current_best, next_net] = 1 - \

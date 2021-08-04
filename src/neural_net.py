@@ -150,6 +150,8 @@ class NNArch(nn.Module):
 
 class NNWrapper:
     def __init__(self, game, args):
+        self.game = game
+        self.args = args
         self.nnet = NNArch(game, args)
         self.optimizer = optim.SGD(
             self.nnet.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-3)
@@ -202,7 +204,7 @@ class NNWrapper:
         past_states = []
         while current_step < train_steps:
             for batch in batches:
-                if current_step % (train_steps//4) == 0 and current_step != 0:
+                if train_steps//4 > 0 and current_step % (train_steps//4) == 0 and current_step != 0:
                     # Snapshot model weights
                     past_states.append(dict(self.nnet.named_parameters()))
                 if current_step == train_steps:
@@ -278,10 +280,13 @@ class NNWrapper:
         torch.save({
             'state_dict': self.nnet.state_dict(),
             'opt_state': self.optimizer.state_dict(),
-            'sch_state': self.scheduler.state_dict()
+            'sch_state': self.scheduler.state_dict(),
+            'args': self.args,
+            'game': self.game
         }, filepath)
 
-    def load_checkpoint(self, folder='data/checkpoint', filename='checkpoint.pt'):
+    @staticmethod
+    def load_checkpoint(folder='data/checkpoint', filename='checkpoint.pt'):
         if folder != '':
             filepath = os.path.join(folder, filename)
         else:
@@ -289,9 +294,11 @@ class NNWrapper:
         if not os.path.exists(filepath):
             raise Exception(f"No model in path {filepath}")
         checkpoint = torch.load(filepath)
-        self.nnet.load_state_dict(checkpoint['state_dict'])
-        self.optimizer.load_state_dict(checkpoint['opt_state'])
-        self.scheduler.load_state_dict(checkpoint['sch_state'])
+        net = NNWrapper(checkpoint['game'], checkpoint['args'])
+        net.nnet.load_state_dict(checkpoint['state_dict'])
+        net.optimizer.load_state_dict(checkpoint['opt_state'])
+        net.scheduler.load_state_dict(checkpoint['sch_state'])
+        return net
 
 
 def bench_network():

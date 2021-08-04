@@ -654,7 +654,7 @@ if __name__ == '__main__':
             writer.add_scalar(
                 f'Misc/Current Best', current_best, i)
             past_iter = max(0, i - compare_past)
-            if math.isnan(wr[i, past_iter]):
+            if past_iter != i and math.isnan(wr[i, past_iter]):
                 nn_rate, draw_rate, hit_rate, game_length = play_past(
                     Game, nn_compare_mcts_depth,  i, past_iter)
                 wr[i, past_iter] = (nn_rate + draw_rate/Game.NUM_PLAYERS())

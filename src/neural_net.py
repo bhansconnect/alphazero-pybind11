@@ -297,8 +297,6 @@ def bench_network():
     total_time = 0
     with torch.no_grad():
         for rep in range(repetitions):
-            starter, ender = torch.cuda.Event(
-                enable_timing=True),          torch.cuda.Event(enable_timing=True)
             starter.record()
             _ = nn.process(dummy_input)
             ender.record()

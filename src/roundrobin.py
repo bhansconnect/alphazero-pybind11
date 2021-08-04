@@ -47,7 +47,7 @@ def pit_agents(Game, players, mcts_depths, bs, name):
 
 if __name__ == '__main__':
     nn_agents = [os.path.basename(x) for x in sorted(
-        glob.glob('data/roundrobin/*.pt'), reverse=False)]
+        glob.glob('data/bench/*.pt'), reverse=False)]
     rand_agents = [5000]
     # rand_agents = []
     agents = rand_agents + nn_agents
@@ -72,7 +72,7 @@ if __name__ == '__main__':
                 nnargs = neural_net.NNArgs(
                     num_channels=int(channels), depth=int(depth))
                 p1 = neural_net.NNWrapper(Game, nnargs)
-                p1.load_checkpoint('data/roundrobin', agents[i])
+                p1.load_checkpoint('data/bench', agents[i])
                 d1 = nn_mtcs_depth
             for j in range(i+1, count):
                 p2 = None
@@ -86,7 +86,7 @@ if __name__ == '__main__':
                     nnargs = neural_net.NNArgs(
                         num_channels=int(channels), depth=int(depth))
                     p2 = neural_net.NNWrapper(Game, nnargs)
-                    p2.load_checkpoint('data/roundrobin', agents[j])
+                    p2.load_checkpoint('data/bench', agents[j])
                     d2 = nn_mtcs_depth
                 players = [p2] * Game.NUM_PLAYERS()
                 depths = [d2] * Game.NUM_PLAYERS()

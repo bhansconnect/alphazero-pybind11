@@ -505,8 +505,11 @@ if __name__ == '__main__':
         agl = 0
         nn = neural_net.NNWrapper.load_checkpoint(
             'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
-        nn_past = neural_net.NNWrapper.load_checkpoint(
-            'data/checkpoint', f'{past_iter:04d}-{run_name}.pt')
+        if past_iter == 0:
+            nn_past = RandPlayer(Game, bs)
+        else:
+            nn_past = neural_net.NNWrapper.load_checkpoint(
+                'data/checkpoint', f'{past_iter:04d}-{run_name}.pt')
         cb = Game.NUM_PLAYERS()
         if Game.NUM_PLAYERS() > 2:
             bs = 16
@@ -651,7 +654,7 @@ if __name__ == '__main__':
             writer.add_scalar(
                 f'Misc/Current Best', current_best, i)
             past_iter = max(0, i - compare_past)
-            if past_iter != current_best and i != start:
+            if math.isnan(wr[i, past_iter]):
                 nn_rate, draw_rate, hit_rate, game_length = play_past(
                     Game, nn_compare_mcts_depth,  i, past_iter)
                 wr[i, past_iter] = (nn_rate + draw_rate/Game.NUM_PLAYERS())

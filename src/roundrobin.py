@@ -48,8 +48,8 @@ def pit_agents(Game, players, mcts_depths, bs, name):
 if __name__ == '__main__':
     nn_agents = [os.path.basename(x) for x in sorted(
         glob.glob('data/bench/*.pt'), reverse=False)]
-    rand_agents = [5000]
-    # rand_agents = []
+    # rand_agents = [5000]
+    rand_agents = []
     agents = rand_agents + nn_agents
 
     Game = alphazero.Connect4GS

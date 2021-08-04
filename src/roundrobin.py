@@ -68,7 +68,7 @@ if __name__ == '__main__':
                 d1 = agents[i]
             else:
                 p1 = neural_net.NNWrapper.load_checkpoint(
-                    'data/bench', agents[i])
+                    Game, 'data/bench', agents[i])
                 d1 = nn_mtcs_depth
             for j in range(i+1, count):
                 p2 = None
@@ -78,7 +78,7 @@ if __name__ == '__main__':
                     d2 = agents[j]
                 else:
                     p2 = neural_net.NNWrapper.load_checkpoint(
-                        'data/bench', agents[j])
+                        Game, 'data/bench', agents[j])
                     d2 = nn_mtcs_depth
                 players = [p2] * Game.NUM_PLAYERS()
                 depths = [d2] * Game.NUM_PLAYERS()

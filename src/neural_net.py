@@ -286,7 +286,7 @@ class NNWrapper:
         }, filepath)
 
     @staticmethod
-    def load_checkpoint(folder='data/checkpoint', filename='checkpoint.pt'):
+    def load_checkpoint(Game, folder='data/checkpoint', filename='checkpoint.pt'):
         if folder != '':
             filepath = os.path.join(folder, filename)
         else:
@@ -294,6 +294,8 @@ class NNWrapper:
         if not os.path.exists(filepath):
             raise Exception(f"No model in path {filepath}")
         checkpoint = torch.load(filepath)
+        assert checkpoint[
+            'game'] == Game, f'Mismatching game type when loading model: got: {checkpoint["game"].__name__} want: {Game.__name__}'
         net = NNWrapper(checkpoint['game'], checkpoint['args'])
         net.nnet.load_state_dict(checkpoint['state_dict'])
         net.optimizer.load_state_dict(checkpoint['opt_state'])

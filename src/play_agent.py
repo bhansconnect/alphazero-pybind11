@@ -80,7 +80,7 @@ if __name__ == '__main__':
         sorted(glob.glob(os.path.join(nn_folder, '*.pt')))[-1])
 
     print(f'Using network: {nn_file}')
-    nn = neural_net.NNWrapper.load_checkpoint(nn_folder, nn_file)
+    nn = neural_net.NNWrapper.load_checkpoint(Game, nn_folder, nn_file)
     gs = Game()
     pc = 0
     hist = []

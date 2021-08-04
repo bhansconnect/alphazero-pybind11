@@ -120,7 +120,7 @@ if __name__ == '__main__':
     print(
         f'status Loading network at {os.path.abspath(args.network)}')
     try:
-        nn = neural_net.NNWrapper.load_checkpoint(args.network)
+        nn = neural_net.NNWrapper.load_checkpoint(Game, args.network)
     except Exception as e:
         print(f'status Failed to load network: {e}')
         print('error -1')

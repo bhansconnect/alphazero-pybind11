@@ -323,7 +323,7 @@ if __name__ == '__main__':
         # The sample is then added to the dataset floor(weight) times.
         # It is also added an extra time with the probability of weight - floor(weight)
         nn = neural_net.NNWrapper.load_checkpoint(
-            'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
+            Game, 'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
 
         c = sorted(
             glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-canonical-*.pt'))
@@ -413,7 +413,7 @@ if __name__ == '__main__':
 
     def train(Game, iteration, hist_size):
         nn = neural_net.NNWrapper.load_checkpoint(
-            'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
+            Game, 'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
 
         total_size = 0
         datasets = []
@@ -473,7 +473,7 @@ if __name__ == '__main__':
             params.max_cache_size = 0
         else:
             nn = neural_net.NNWrapper.load_checkpoint(
-                'data/checkpoint', f'{best:04d}-{run_name}.pt')
+                Game, 'data/checkpoint', f'{best:04d}-{run_name}.pt')
 
         pm = alphazero.PlayManager(Game(), params)
         grargs = GRArgs(title='Self Play', game=Game, iteration=iteration,
@@ -504,12 +504,12 @@ if __name__ == '__main__':
         hr = 0
         agl = 0
         nn = neural_net.NNWrapper.load_checkpoint(
-            'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
+            Game, 'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
         if past_iter == 0:
             nn_past = RandPlayer(Game, 64)
         else:
             nn_past = neural_net.NNWrapper.load_checkpoint(
-                'data/checkpoint', f'{past_iter:04d}-{run_name}.pt')
+                Game, 'data/checkpoint', f'{past_iter:04d}-{run_name}.pt')
         cb = Game.NUM_PLAYERS()
         if Game.NUM_PLAYERS() > 2:
             bs = 16

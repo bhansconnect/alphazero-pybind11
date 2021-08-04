@@ -506,7 +506,7 @@ if __name__ == '__main__':
         nn = neural_net.NNWrapper.load_checkpoint(
             'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
         if past_iter == 0:
-            nn_past = RandPlayer(Game, bs)
+            nn_past = RandPlayer(Game, 64)
         else:
             nn_past = neural_net.NNWrapper.load_checkpoint(
                 'data/checkpoint', f'{past_iter:04d}-{run_name}.pt')

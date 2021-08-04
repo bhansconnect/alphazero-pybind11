@@ -107,10 +107,15 @@ if __name__ == '__main__':
                 while (current-offset >= 0 and (played[rankings[current-offset]] or not math.isnan(win_matrix[rankings[current], rankings[current-offset]]))):
                     offset += 1
                 if current-offset < 0:
-                    print('No one to play? Relaxing constraints')
-                    offset = dist
-                    while not math.isnan(win_matrix[rankings[current], rankings[current-offset]]):
+                    print('Falling back to shorter distances games')
+                    offset = 1
+                    while (current-offset >= 0 and (played[rankings[current-offset]] or not math.isnan(win_matrix[rankings[current], rankings[current-offset]]))):
                         offset += 1
+                    if current-offset < 0:
+                        print('No one to play? Relaxing constraints')
+                        offset = 1
+                        while not math.isnan(win_matrix[rankings[current], rankings[current-offset]]):
+                            offset += 1
                 played[rankings[current-offset]] = True
 
                 i = rankings[current]

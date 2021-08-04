@@ -8,8 +8,8 @@ from tqdm import tqdm
 import numpy as np
 from load_lib import load_alphazero
 
-NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'lr_milestone',
-                               'lr', 'cv', 'cuda'], defaults=(40, 0.01, 1.5, torch.cuda.is_available()))
+NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'lr_milestone', 'dense_net',
+                               'lr', 'cv', 'cuda'], defaults=(40, False, 0.01, 1.5, torch.cuda.is_available()))
 
 
 def conv1x1(in_channels, out_channels, stride=1):
@@ -20,6 +20,27 @@ def conv1x1(in_channels, out_channels, stride=1):
 def conv3x3(in_channels, out_channels, stride=1):
     return nn.Conv2d(in_channels, out_channels, kernel_size=3,
                      stride=stride, padding=1, bias=False)
+
+
+class DenseBlock(nn.Module):
+    def __init__(self, in_channels, growth_rate, bn_size=4):
+        super(DenseBlock, self).__init__()
+        self.bn1 = nn.BatchNorm2d(in_channels)
+        self.relu1 = nn.ReLU(inplace=True)
+        self.conv1 = conv1x1(in_channels, growth_rate*bn_size, 1)
+        self.bn2 = nn.BatchNorm2d(growth_rate*bn_size)
+        self.relu2 = nn.ReLU(inplace=True)
+        self.conv2 = conv3x3(growth_rate*bn_size, growth_rate)
+
+    def forward(self, x):
+        out = self.bn1(x)
+        out = self.relu1(out)
+        out = self.conv1(out)
+        out = self.bn2(out)
+        out = self.relu2(out)
+        out = self.conv2(out)
+        out = torch.cat([x, out], 1)
+        return out
 
 
 class ResidualBlock(nn.Module):
@@ -59,17 +80,30 @@ class NNArch(nn.Module):
         super(NNArch, self).__init__()
         # game params
         in_channels, in_x, in_y = game.CANONICAL_SHAPE()
+        self.dense_net = args.dense_net
 
-        self.conv1 = conv3x3(in_channels, args.num_channels)
-        self.bn1 = nn.BatchNorm2d(args.num_channels)
+        if not self.dense_net:
+            self.conv1 = conv3x3(in_channels, args.num_channels)
+            self.bn1 = nn.BatchNorm2d(args.num_channels)
 
-        self.res_layers = []
-        for _ in range(args.depth):
-            self.res_layers.append(ResidualBlock(
-                args.num_channels, args.num_channels))
-        self.resnet = nn.Sequential(*self.res_layers)
+        self.layers = []
+        for i in range(args.depth):
+            if self.dense_net:
+                self.layers.append(DenseBlock(
+                    in_channels + args.num_channels*i, args.num_channels))
+            else:
+                self.layers.append(ResidualBlock(
+                    args.num_channels, args.num_channels))
+        self.conv_layers = nn.Sequential(*self.layers)
 
-        self.v_conv = conv1x1(args.num_channels, 32)
+        if self.dense_net:
+            final_size = in_channels + args.num_channels * args.depth
+            self.v_conv = conv1x1(final_size, 32)
+            self.pi_conv = conv1x1(final_size, 32)
+        else:
+            self.v_conv = conv1x1(args.num_channels, 32)
+            self.pi_conv = conv1x1(args.num_channels, 32)
+
         self.v_bn = nn.BatchNorm2d(32)
         self.v_relu = nn.ReLU(inplace=True)
         self.v_flatten = nn.Flatten()
@@ -79,7 +113,6 @@ class NNArch(nn.Module):
         self.v_fc2 = nn.Linear(256, game.NUM_PLAYERS()+1)
         self.v_softmax = nn.LogSoftmax(1)
 
-        self.pi_conv = conv1x1(args.num_channels, 32)
         self.pi_bn = nn.BatchNorm2d(32)
         self.pi_relu = nn.ReLU(inplace=True)
         self.pi_flatten = nn.Flatten()
@@ -88,9 +121,11 @@ class NNArch(nn.Module):
 
     def forward(self, s):
         # s: batch_size x num_channels x board_x x board_y
-        with profiler.record_function("resnet"):
-            s = self.bn1(self.conv1(s))
-            s = self.resnet(s)
+        with profiler.record_function("conv-layers"):
+            if not self.dense_net:
+                s = self.conv1(s)
+                s = self.bn1(s)
+            s = self.conv_layers(s)
 
         with profiler.record_function("v-head"):
             v = self.v_conv(s)
@@ -263,10 +298,11 @@ def bench_network():
     alphazero = load_alphazero()
 
     Game = alphazero.OpenTaflGS
-    depth = 8
-    channels = 32
+    depth = 4
+    channels = 12
+    dense_net = True
     batch_size = 1024
-    nnargs = NNArgs(num_channels=channels, depth=depth)
+    nnargs = NNArgs(num_channels=channels, depth=depth, dense_net=dense_net)
 
     nn = NNWrapper(Game, nnargs)
 
@@ -305,6 +341,10 @@ def bench_network():
             total_time += curr_time
     throughput = (repetitions*batch_size)/total_time
     print(f'Throughput: {throughput:0.3f} samples/s')
+
+    # with torch.profiler.profile() as prof:
+    #     _ = nn.process(dummy_input)
+    # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
 
 
 if __name__ == '__main__':

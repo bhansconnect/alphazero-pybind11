@@ -257,7 +257,8 @@ bootstrap_iters = 0
 start = 0
 iters = 200
 depth = 4
-channels = 32
+channels = 12
+dense_net = True
 nn_selfplay_mcts_depth = 500
 nn_selfplay_fast_mcts_depth = 100
 nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
@@ -311,7 +312,7 @@ if __name__ == '__main__':
     def create_init_net(Game, nnargs):
         nn = neural_net.NNWrapper(Game, nnargs)
         nn.save_checkpoint('data/checkpoint',
-                           f'0000-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
+                           f'0000-{nnargs.depth:04d}-{nnargs.num_channels:04d}-{"dense" if nnargs.dense_net else "res"}.pt')
 
     def calc_hist_size(i):
         return int(WINDOW_SIZE_SCALAR*(1 + WINDOW_SIZE_BETA*(((i+1)/WINDOW_SIZE_SCALAR)**WINDOW_SIZE_ALPHA-1)/WINDOW_SIZE_ALPHA))
@@ -447,7 +448,7 @@ if __name__ == '__main__':
         v_loss, pi_loss = nn.train(
             dataloader, int(math.ceil(average_generation/bs*TRAIN_SAMPLE_RATE)))
         nn.save_checkpoint(
-            'data/checkpoint', f'{iteration+1:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}.pt')
+            'data/checkpoint', f'{iteration+1:04d}-{nnargs.depth:04d}-{nnargs.num_channels:04d}-{"dense" if nnargs.dense_net else "res"}.pt')
         del datasets[:]
         del dataset
         del dataloader
@@ -609,7 +610,7 @@ if __name__ == '__main__':
 
     writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
-        num_channels=channels, depth=depth, lr_milestone=lr_milestone)
+        num_channels=channels, depth=depth, lr_milestone=lr_milestone, dense_net=dense_net)
 
     if start == 0:
         create_init_net(Game, nnargs,)

@@ -1,22 +1,15 @@
+from load_lib import load_alphazero
 import neural_net
 from game_runner import GameRunner, GRArgs, RandPlayer, base_params, elo_prob
 import glob
-import importlib.util
 import os
 import math
 import numpy as np
 import gc
 import tqdm
+
 np.set_printoptions(precision=3, suppress=True)
-
-src_path = os.path.dirname(os.path.realpath(__file__))
-build_path = os.path.join(os.path.dirname(src_path), 'build/src')
-lib_path = glob.glob(os.path.join(build_path, 'alphazero*.so'))[0]
-
-spec = importlib.util.spec_from_file_location(
-    'alphazero', lib_path)
-alphazero = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(alphazero)
+alphazero = load_alphazero()
 
 
 def calc_elo(past_elo, win_rates):

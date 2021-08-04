@@ -6,16 +6,10 @@ import os
 import numpy as np
 import gc
 import tqdm
+from load_lib import load_alphazero
+
 np.set_printoptions(precision=3, suppress=True)
-
-src_path = os.path.dirname(os.path.realpath(__file__))
-build_path = os.path.join(os.path.dirname(src_path), 'build/src')
-lib_path = glob.glob(os.path.join(build_path, 'alphazero*.so'))[0]
-
-spec = importlib.util.spec_from_file_location(
-    'alphazero', lib_path)
-alphazero = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(alphazero)
+alphazero = load_alphazero()
 
 
 def pit_agents(Game, players, mcts_depths, bs, name):

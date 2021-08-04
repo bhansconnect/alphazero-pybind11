@@ -1,25 +1,18 @@
 # Used to enable the network to play against other AI in OpenTafl.
 # Long term it may want to be moved to ONNX(probably in C++)
 
+from load_lib import load_alphazero
 import argparse
 import game_runner
 import neural_net
 import time
 import glob
-import importlib.util
 import os
 import torch
 import numpy as np
+
 np.set_printoptions(precision=3, suppress=True)
-
-src_path = os.path.dirname(os.path.realpath(__file__))
-build_path = os.path.join(os.path.dirname(src_path), 'build/src')
-lib_path = glob.glob(os.path.join(build_path, 'alphazero*.so'))[0]
-
-spec = importlib.util.spec_from_file_location(
-    'alphazero', lib_path)
-alphazero = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(alphazero)
+alphazero = load_alphazero()
 
 
 def calc_temp(start_temp, end_temp, decay, turn):

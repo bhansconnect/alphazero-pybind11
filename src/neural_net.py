@@ -6,6 +6,7 @@ from torch.autograd import profiler
 from torch.optim.swa_utils import AveragedModel
 from tqdm import tqdm
 import numpy as np
+from load_lib import load_alphazero
 
 NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'lr_milestone',
                                'lr', 'cv', 'cuda'], defaults=(40, 0.01, 1.5, torch.cuda.is_available()))
@@ -256,3 +257,57 @@ class NNWrapper:
         self.nnet.load_state_dict(checkpoint['state_dict'])
         self.optimizer.load_state_dict(checkpoint['opt_state'])
         self.scheduler.load_state_dict(checkpoint['sch_state'])
+
+
+def bench_network():
+    alphazero = load_alphazero()
+
+    Game = alphazero.OpenTaflGS
+    depth = 8
+    channels = 32
+    batch_size = 1024
+    nnargs = NNArgs(num_channels=channels, depth=depth)
+
+    nn = NNWrapper(Game, nnargs)
+
+    cs = Game.CANONICAL_SHAPE()
+    dummy_input = torch.randn(
+        batch_size, cs[0], cs[1], cs[2], dtype=torch.float)
+    if nnargs.cuda:
+        dummy_input = dummy_input.contiguous().cuda()
+
+    starter, ender = torch.cuda.Event(
+        enable_timing=True), torch.cuda.Event(enable_timing=True)
+    repetitions = 300
+    timings = np.zeros((repetitions, 1))
+    # Warm up.
+    for _ in range(50):
+        _ = nn.process(dummy_input)
+    with torch.no_grad():
+        for rep in range(repetitions):
+            starter.record()
+            _ = nn.process(dummy_input)
+            ender.record()
+            torch.cuda.synchronize()
+            curr_time = starter.elapsed_time(ender)
+            timings[rep] = curr_time
+        latency = np.sum(timings) / repetitions
+        print(f'Inference Time: {latency:0.3f} ms')
+
+    total_time = 0
+    with torch.no_grad():
+        for rep in range(repetitions):
+            starter, ender = torch.cuda.Event(
+                enable_timing=True),          torch.cuda.Event(enable_timing=True)
+            starter.record()
+            _ = nn.process(dummy_input)
+            ender.record()
+            torch.cuda.synchronize()
+            curr_time = starter.elapsed_time(ender)/1000
+            total_time += curr_time
+    throughput = (repetitions*batch_size)/total_time
+    print(f'Throughput: {throughput:0.3f} samples/s')
+
+
+if __name__ == '__main__':
+    bench_network()

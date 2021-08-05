@@ -753,9 +753,9 @@ if __name__ == '__main__':
                 f'Draw Rate/vs Panel', panel_draw_rate, next_net)
             writer.add_scalar(
                 f'Average Game Length/vs Panel', panel_game_length, next_net)
-            postfix['vs best'] = (
-                nn_rate + draw_rate/Game.NUM_PLAYERS())
-            if (panel_nn_rate + panel_draw_rate/Game.NUM_PLAYERS()) > GATING_PANEL_WIN_RATE and best_win_rate > GATING_BEST_WIN_RATE:
+            panel_win_rate = panel_nn_rate + panel_draw_rate/Game.NUM_PLAYERS()
+            postfix['vs panel'] = panel_win_rate
+            if panel_win_rate > GATING_PANEL_WIN_RATE and best_win_rate > GATING_BEST_WIN_RATE:
                 current_best = next_net
                 postfix['best'] = current_best
                 pbar.set_postfix(postfix)

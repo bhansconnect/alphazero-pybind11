@@ -229,7 +229,7 @@ class RandPlayer:
 
 EXPECTED_OPENING_LENGTH = 10
 CPUCT = 1.0
-SELF_PLAY_TEMP = 1
+SELF_PLAY_TEMP = 0.8
 EVAL_TEMP = 0.5
 TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
 FINAL_TEMP = 0.2
@@ -238,8 +238,8 @@ MAX_CACHE_SIZE = 200000
 
 # Concurrent games played is batch size * num player * concurrent batch mult
 # Total games per iteration is batch size * num players * concurrent batch mult * chunks
-SELF_PLAY_BATCH_SIZE = 512
-SELF_PLAY_CONCURRENT_BATCH_MULT = 2
+SELF_PLAY_BATCH_SIZE = 1024
+SELF_PLAY_CONCURRENT_BATCH_MULT = 4
 SELF_PLAY_CHUNKS = 2
 
 TRAIN_BATCH_SIZE = 1024
@@ -252,6 +252,12 @@ WINDOW_SIZE_SCALAR = 6  # This ends up being approximately first time history do
 
 RESULT_WORKERS = 2
 
+# Panel based gating has the network play against multiple previous best agents before being promoted.
+# This is muhch more imortant with games where the draw rate is high betwen new networks and the best.
+# It is also important in grame that lead to rock-paper-scissor type network oscillations.
+GATING_PANEL_SIZE = 1
+GATING_WIN_RATE = 0.52
+
 
 bootstrap_iters = 0
 start = 0
@@ -259,11 +265,10 @@ iters = 200
 depth = 4
 channels = 12
 dense_net = True
-nn_selfplay_mcts_depth = 500
-nn_selfplay_fast_mcts_depth = 100
+nn_selfplay_mcts_depth = 150
+nn_selfplay_fast_mcts_depth = 25
 nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
-gating_percent = 0.52
 lr_milestone = 150
 run_name = f'{depth}d-{channels}c-{nn_selfplay_mcts_depth}sims'
 Game = alphazero.Connect4GS
@@ -649,33 +654,24 @@ if __name__ == '__main__':
         start = bootstrap_iters
         postfix['best'] = current_best
 
+    panel = [current_best]
+
     with tqdm.trange(start, iters, desc='Build Amazing Network') as pbar:
         for i in pbar:
             writer.add_scalar(
                 f'Misc/Current Best', current_best, i)
             past_iter = max(0, i - compare_past)
             if past_iter != i and math.isnan(wr[i, past_iter]):
-                nn_rate, draw_rate, hit_rate, game_length = play_past(
+                nn_rate, draw_rate, _, game_length = play_past(
                     Game, nn_compare_mcts_depth,  i, past_iter)
                 wr[i, past_iter] = (nn_rate + draw_rate/Game.NUM_PLAYERS())
                 wr[past_iter, i] = 1-(nn_rate + draw_rate/Game.NUM_PLAYERS())
                 writer.add_scalar(
-                    f'Win Rate/NN vs -{compare_past}', nn_rate, i)
+                    f'Win Rate/vs -{compare_past}', nn_rate, i)
                 writer.add_scalar(
-                    f'Draw Rate/NN vs -{compare_past}', draw_rate, i)
+                    f'Draw Rate/vs -{compare_past}', draw_rate, i)
                 writer.add_scalar(
-                    f'Cache Hit Rate/NN vs -{compare_past}', hit_rate, i)
-                writer.add_scalar(
-                    f'Average Game Length/NN vs -{compare_past}', game_length, i)
-                if i == current_best:
-                    writer.add_scalar(
-                        f'Win Rate/Best vs -{compare_past}', nn_rate, i)
-                    writer.add_scalar(
-                        f'Draw Rate/Best vs -{compare_past}', draw_rate, i)
-                    writer.add_scalar(
-                        f'Cache Hit Rate/Best vs -{compare_past}', hit_rate, i)
-                    writer.add_scalar(
-                        f'Average Game Length/Best vs -{compare_past}', game_length, i)
+                    f'Average Game Length/vs -{compare_past}', game_length, i)
                 postfix[f'vs -{compare_past}'] = (nn_rate +
                                                   draw_rate/Game.NUM_PLAYERS())
                 gc.collect()
@@ -719,27 +715,45 @@ if __name__ == '__main__':
 
             # Eval for gating
             next_net = i + 1
-            nn_rate, draw_rate, hit_rate, game_length = play_past(
-                Game, nn_compare_mcts_depth, next_net, current_best)
-            wr[next_net, current_best] = (
+            panel_nn_rate = 0
+            panel_draw_rate = 0
+            panel_game_length = 0
+            for gate_net in tqdm.tqdm(panel, desc=f'Pitting against Panel {panel}', leave=False):
+                nn_rate, draw_rate, _, game_length = play_past(
+                    Game, nn_compare_mcts_depth, next_net, gate_net)
+                panel_nn_rate += nn_rate
+                panel_draw_rate += draw_rate
+                panel_game_length += game_length
+                wr[next_net, gate_net] = (
+                    nn_rate + draw_rate/Game.NUM_PLAYERS())
+                wr[gate_net, next_net] = 1 - \
+                    (nn_rate + draw_rate/Game.NUM_PLAYERS())
+                gc.collect()
+                if gate_net == current_best:
+                    writer.add_scalar(
+                        f'Win Rate/vs Best', nn_rate, next_net)
+                    writer.add_scalar(
+                        f'Draw Rate/vs Best', draw_rate, next_net)
+                    writer.add_scalar(
+                        f'Average Game Length/vs Best', game_length, next_net)
+                    postfix['vs best'] = (
+                        nn_rate + draw_rate/Game.NUM_PLAYERS())
+                    pbar.set_postfix(postfix)
+            writer.add_scalar(
+                f'Win Rate/vs Panel', panel_nn_rate, next_net)
+            writer.add_scalar(
+                f'Draw Rate/vs Panel', panel_draw_rate, next_net)
+            writer.add_scalar(
+                f'Average Game Length/vs Panel', panel_game_length, next_net)
+            postfix['vs best'] = (
                 nn_rate + draw_rate/Game.NUM_PLAYERS())
-            wr[current_best, next_net] = 1 - \
-                (nn_rate + draw_rate/Game.NUM_PLAYERS())
-            writer.add_scalar(
-                f'Win Rate/NN vs Best', nn_rate, next_net)
-            writer.add_scalar(
-                f'Draw Rate/NN vs Best', draw_rate, next_net)
-            writer.add_scalar(
-                f'Cache Hit Rate/NN vs Best', hit_rate, next_net)
-            writer.add_scalar(
-                f'Average Game Length/NN vs Best', game_length, next_net)
-            postfix['vs best'] = (nn_rate + draw_rate/Game.NUM_PLAYERS())
-            pbar.set_postfix(postfix)
-            if (nn_rate + draw_rate/Game.NUM_PLAYERS()) > gating_percent:
+            if (panel_nn_rate + panel_draw_rate/Game.NUM_PLAYERS()) > GATING_WIN_RATE:
                 current_best = next_net
                 postfix['best'] = current_best
                 pbar.set_postfix(postfix)
-            gc.collect()
+                panel.append(current_best)
+                while len(panel) > GATING_PANEL_SIZE:
+                    panel = panel[1:]
             np.savetxt("data/win_rate.csv", wr, delimiter=",")
 
     writer.close()

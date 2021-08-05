@@ -92,7 +92,9 @@ void PlayManager::play() {
             while (!game.partial_history.empty()) {
               auto ph = game.partial_history.back();
               ph.v = scores.value();
-              history_.push(ph);
+              for (auto hist : game.gs->symmetries(ph)) {
+                history_.push(ph);
+              }
               game.partial_history.pop_back();
             }
           }

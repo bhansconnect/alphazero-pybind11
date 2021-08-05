@@ -562,6 +562,12 @@ class PhotosynthesisGS : public GameState {
     return t;
   }
 
+  // Returns an list of all symetrical game states (including the base state).
+  [[nodiscard]] std::vector<PlayHistory> symmetries(
+      PlayHistory base) const noexcept override {
+    return std::vector<PlayHistory>{base};
+  }
+
   // Returns nullopt if the game isn't over.
   // Returns a one hot encode result of the game.
   // The first num player positions are set to 1 if that player won and 0

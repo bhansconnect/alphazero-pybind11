@@ -6,8 +6,8 @@ namespace alphazero::connect4_gs {
   return std::make_unique<Connect4GS>(board_, player_, turn_);
 }
 
-[[nodiscard]] bool Connect4GS::operator==(const GameState& other) const
-    noexcept {
+[[nodiscard]] bool Connect4GS::operator==(
+    const GameState& other) const noexcept {
   const auto* other_cs = dynamic_cast<const Connect4GS*>(&other);
   if (other_cs == nullptr) {
     return false;
@@ -140,6 +140,27 @@ void Connect4GS::play_move(uint32_t move) {
     }
   }
   return out;
+}
+
+[[nodiscard]] std::vector<PlayHistory> Connect4GS::symmetries(
+    PlayHistory base) const noexcept {
+  std::vector<PlayHistory> syms{base};
+  PlayHistory mirror;
+  mirror.v = base.v;
+  mirror.canonical = CanonicalTensor{};
+  for (auto f = 0; f < CANONICAL_SHAPE[0]; ++f) {
+    for (auto h = 0; h < HEIGHT; ++h) {
+      for (auto w = 0; w < WIDTH; ++w) {
+        mirror.canonical(f, h, w) = base.canonical(f, h, (WIDTH - 1) - w);
+      }
+    }
+  }
+  mirror.pi = Vector<float>{WIDTH};
+  for (auto w = 0; w < WIDTH; ++w) {
+    mirror.pi(w) = base.pi((WIDTH - 1) - w);
+  }
+  syms.push_back(mirror);
+  return syms;
 }
 
 [[nodiscard]] std::string Connect4GS::dump() const noexcept {

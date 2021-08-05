@@ -10,6 +10,12 @@
 
 namespace alphazero {
 
+struct PlayHistory {
+  Tensor<float, 3> canonical;
+  Vector<float> v;
+  Vector<float> pi;
+};
+
 // GameState is the core class to represent games to be played by AlphaZero. It
 // creates the basic api needed by the MCTS. It uses Eigen to represent the
 // interface in order to avoid copying to and from Python. Pybind11 already has
@@ -63,6 +69,10 @@ class GameState {
 
   // Returns the canonicalized form of the board, ready for feeding to a NN.
   [[nodiscard]] virtual Tensor<float, 3> canonicalized() const noexcept = 0;
+
+  // Returns an list of all symetrical game states (including the base state).
+  [[nodiscard]] virtual std::vector<PlayHistory> symmetries(
+      PlayHistory base) const noexcept = 0;
 
   // Returns a string representation of the game state.
   [[nodiscard]] virtual std::string dump() const noexcept = 0;

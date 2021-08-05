@@ -145,6 +145,10 @@ class BrandubhGS : public GameState {
   // Returns the canonicalized form of the board, ready for feeding to a NN.
   [[nodiscard]] Tensor<float, 3> canonicalized() const noexcept override;
 
+  // Returns an list of all symetrical game states (including the base state).
+  [[nodiscard]] std::vector<PlayHistory> symmetries(
+      PlayHistory base) const noexcept override;
+
   // Returns a string representation of the game state.
   [[nodiscard]] std::string dump() const noexcept override;
 

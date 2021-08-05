@@ -483,6 +483,11 @@ void OpenTaflGS::play_move(uint32_t move) {
   return out;
 }
 
+[[nodiscard]] std::vector<PlayHistory> OpenTaflGS::symmetries(
+    PlayHistory base) const noexcept {
+  return std::vector<PlayHistory>{base};
+}
+
 [[nodiscard]] std::string OpenTaflGS::dump() const noexcept {
   auto out = "Current Player: " + std::to_string(player_) + '\n';
   out += "Current Turn: " + std::to_string(turn_) + " out of " +

@@ -22,12 +22,6 @@ using namespace std::chrono_literals;
 
 constexpr const auto MAX_WAIT = 10ms;
 
-struct PlayHistory {
-  Tensor<float, 3> canonical;
-  Vector<float> v;
-  Vector<float> pi;
-};
-
 struct GameData {
   std::unique_ptr<GameState> gs;
   std::shared_ptr<GameState> leaf;

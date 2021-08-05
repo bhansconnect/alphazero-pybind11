@@ -255,8 +255,12 @@ RESULT_WORKERS = 2
 # Panel based gating has the network play against multiple previous best agents before being promoted.
 # This is muhch more imortant with games where the draw rate is high betwen new networks and the best.
 # It is also important in grame that lead to rock-paper-scissor type network oscillations.
-GATING_PANEL_SIZE = 1
-GATING_WIN_RATE = 0.52
+GATING_PANEL_SIZE = 3
+# Ensure it is at least this good against the entire panel of networks.
+GATING_PANEL_WIN_RATE = 0.60
+# Ensure it is at least this good against the best network.
+# Generally it is ok to be slightly worse than the best if you crush the panel. Especially in high draw games.
+GATING_BEST_WIN_RATE = 0.50
 
 
 bootstrap_iters = 0
@@ -718,6 +722,7 @@ if __name__ == '__main__':
             panel_nn_rate = 0
             panel_draw_rate = 0
             panel_game_length = 0
+            best_win_rate = 0
             for gate_net in tqdm.tqdm(panel, desc=f'Pitting against Panel {panel}', leave=False):
                 nn_rate, draw_rate, _, game_length = play_past(
                     Game, nn_compare_mcts_depth, next_net, gate_net)
@@ -736,8 +741,8 @@ if __name__ == '__main__':
                         f'Draw Rate/vs Best', draw_rate, next_net)
                     writer.add_scalar(
                         f'Average Game Length/vs Best', game_length, next_net)
-                    postfix['vs best'] = (
-                        nn_rate + draw_rate/Game.NUM_PLAYERS())
+                    best_win_rate = nn_rate + draw_rate/Game.NUM_PLAYERS()
+                    postfix['vs best'] = best_win_rate
                     pbar.set_postfix(postfix)
             panel_nn_rate /= len(panel)
             panel_draw_rate /= len(panel)
@@ -750,7 +755,7 @@ if __name__ == '__main__':
                 f'Average Game Length/vs Panel', panel_game_length, next_net)
             postfix['vs best'] = (
                 nn_rate + draw_rate/Game.NUM_PLAYERS())
-            if (panel_nn_rate + panel_draw_rate/Game.NUM_PLAYERS()) > GATING_WIN_RATE:
+            if (panel_nn_rate + panel_draw_rate/Game.NUM_PLAYERS()) > GATING_PANEL_WIN_RATE and best_win_rate > GATING_BEST_WIN_RATE:
                 current_best = next_net
                 postfix['best'] = current_best
                 pbar.set_postfix(postfix)

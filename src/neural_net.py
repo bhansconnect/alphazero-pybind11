@@ -240,7 +240,7 @@ class NNWrapper:
         for state in past_states[1:]:
             for k in merged_states.keys():
                 merged_states[k].data = merged_states[k].data * \
-                    0.25 + state[k].data * 0.75
+                    0.75 + state[k].data * 0.25
         nnet_dict = self.nnet.state_dict()
         nnet_dict.update(merged_states)
         self.nnet.load_state_dict(nnet_dict)

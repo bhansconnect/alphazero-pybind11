@@ -135,7 +135,7 @@ if __name__ == '__main__':
                     d1 = agents[i]
                 else:
                     p1 = neural_net.NNWrapper.load_checkpoint(
-                        'Game, data/bench', agents[i])
+                        Game, 'data/bench', agents[i])
                     d1 = nn_mtcs_depth
                 if agents[j] in rand_agents:
                     p2 = RandPlayer(Game, bs)

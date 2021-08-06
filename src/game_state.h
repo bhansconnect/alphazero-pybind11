@@ -72,7 +72,7 @@ class GameState {
 
   // Returns an list of all symetrical game states (including the base state).
   [[nodiscard]] virtual std::vector<PlayHistory> symmetries(
-      PlayHistory base) const noexcept = 0;
+      const PlayHistory& base) const noexcept = 0;
 
   // Returns a string representation of the game state.
   [[nodiscard]] virtual std::string dump() const noexcept = 0;

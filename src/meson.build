@@ -15,6 +15,14 @@ gtest_proj = subproject('gtest')
 gtest_dep = gtest_proj.get_variable('gtest_main_dep')
 
 
+tafl_helper_test = executable(
+  'tafl_helper_test',
+  'tafl_helper_test.cc',
+  dependencies: [gtest_dep, eigen_dep, absl_hash_dep, absl_container_dep],
+  link_with: [],
+)
+test('gtest tests', tafl_helper_test)
+
 brandubh_gs = library(
     'brandubh_gs',
     'brandubh_gs.cc',

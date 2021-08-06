@@ -1,6 +1,7 @@
 #include "brandubh_gs.h"
 
 #include "color.h"
+#include "tafl_helper.h"
 
 namespace alphazero::brandubh_gs {
 
@@ -433,8 +434,8 @@ void BrandubhGS::play_move(uint32_t move) {
 }
 
 [[nodiscard]] std::vector<PlayHistory> BrandubhGS::symmetries(
-    PlayHistory base) const noexcept {
-  return std::vector<PlayHistory>{base};
+    const PlayHistory& base) const noexcept {
+  return tafl_helper::eightSym(base);
 }
 
 [[nodiscard]] std::string BrandubhGS::dump() const noexcept {

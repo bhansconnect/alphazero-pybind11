@@ -3,6 +3,7 @@
 #include <deque>
 
 #include "color.h"
+#include "tafl_helper.h"
 
 namespace alphazero::opentafl_gs {
 
@@ -484,8 +485,8 @@ void OpenTaflGS::play_move(uint32_t move) {
 }
 
 [[nodiscard]] std::vector<PlayHistory> OpenTaflGS::symmetries(
-    PlayHistory base) const noexcept {
-  return std::vector<PlayHistory>{base};
+    const PlayHistory& base) const noexcept {
+  return tafl_helper::eightSym(base);
 }
 
 [[nodiscard]] std::string OpenTaflGS::dump() const noexcept {

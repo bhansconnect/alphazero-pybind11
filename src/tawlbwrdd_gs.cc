@@ -1,5 +1,7 @@
 #include "tawlbwrdd_gs.h"
 
+#include "tafl_helper.h"
+
 namespace alphazero::tawlbwrdd_gs {
 
 [[nodiscard]] std::unique_ptr<GameState> TawlbwrddGS::copy() const noexcept {
@@ -353,8 +355,8 @@ void TawlbwrddGS::play_move(uint32_t move) {
 }
 
 [[nodiscard]] std::vector<PlayHistory> TawlbwrddGS::symmetries(
-    PlayHistory base) const noexcept {
-  return std::vector<PlayHistory>{base};
+    const PlayHistory& base) const noexcept {
+  return tafl_helper::eightSym(base);
 }
 
 [[nodiscard]] std::string TawlbwrddGS::dump() const noexcept {

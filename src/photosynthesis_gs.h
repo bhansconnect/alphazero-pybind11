@@ -564,7 +564,7 @@ class PhotosynthesisGS : public GameState {
 
   // Returns an list of all symetrical game states (including the base state).
   [[nodiscard]] std::vector<PlayHistory> symmetries(
-      PlayHistory base) const noexcept override {
+      const PlayHistory& base) const noexcept override {
     return std::vector<PlayHistory>{base};
   }
 

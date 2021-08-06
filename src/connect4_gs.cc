@@ -143,7 +143,7 @@ void Connect4GS::play_move(uint32_t move) {
 }
 
 [[nodiscard]] std::vector<PlayHistory> Connect4GS::symmetries(
-    PlayHistory base) const noexcept {
+    const PlayHistory& base) const noexcept {
   std::vector<PlayHistory> syms{base};
   PlayHistory mirror;
   mirror.v = base.v;

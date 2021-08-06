@@ -67,7 +67,7 @@ class Connect4GS : public GameState {
 
   // Returns an list of all symetrical game states (including the base state).
   [[nodiscard]] std::vector<PlayHistory> symmetries(
-      PlayHistory base) const noexcept override;
+      const PlayHistory& base) const noexcept override;
 
   // Returns a string representation of the game state.
   [[nodiscard]] std::string dump() const noexcept override;

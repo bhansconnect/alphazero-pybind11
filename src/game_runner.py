@@ -331,9 +331,6 @@ if __name__ == '__main__':
         # The other half of the weight is distributed based on the sample loss.
         # The sample is then added to the dataset floor(weight) times.
         # It is also added an extra time with the probability of weight - floor(weight)
-        nn = neural_net.NNWrapper.load_checkpoint(
-            Game, 'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
-
         c = sorted(
             glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-canonical-*.pt'))
         v = sorted(glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-v-*.pt'))
@@ -356,8 +353,11 @@ if __name__ == '__main__':
 
         dataset = ConcatDataset(datasets)
         sample_count = len(dataset)
-        dataloader = DataLoader(dataset, batch_size=512,
+        dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE,
                                 shuffle=False, num_workers=11)
+
+        nn = neural_net.NNWrapper.load_checkpoint(
+            Game, 'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
         loss = nn.sample_loss(dataloader, sample_count)
         total_loss = np.sum(loss)
 
@@ -420,10 +420,42 @@ if __name__ == '__main__':
         for fn in glob.glob(f'{TMP_HIST_LOCATION}/*'):
             os.remove(fn)
 
-    def train(Game, iteration, hist_size):
+    def iteration_loss(Game, iteration):
+        datasets = []
+        c = sorted(
+            glob.glob(f'{HIST_LOCATION}/{iteration:04d}-*-canonical-*.pt'))
+        v = sorted(glob.glob(f'{HIST_LOCATION}/{iteration:04d}-*-v-*.pt'))
+        p = sorted(glob.glob(f'{HIST_LOCATION}/{iteration:04d}-*-pi-*.pt'))
+        for j in range(len(c)):
+            size = int(c[j].split('-')[-1].split('.')[0])
+            cs = Game.CANONICAL_SHAPE()
+            c_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                c[j], shared=False, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
+            v_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                v[j], shared=False, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
+            p_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                p[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+            datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
+            del c_tensor
+            del v_tensor
+            del p_tensor
+
+        dataset = ConcatDataset(datasets)
+        dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE,
+                                shuffle=True, num_workers=11)
+
         nn = neural_net.NNWrapper.load_checkpoint(
             Game, 'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
+        v_loss, pi_loss = nn.losses(dataloader)
 
+        del datasets[:]
+        del dataset
+        del dataloader
+        del nn
+
+        return v_loss, pi_loss
+
+    def train(Game, iteration, hist_size):
         total_size = 0
         datasets = []
         for i in range(max(0, iteration - hist_size), iteration + 1):
@@ -451,6 +483,9 @@ if __name__ == '__main__':
                                 shuffle=True, num_workers=11)
 
         average_generation = total_size/min(hist_size, iteration+1)
+
+        nn = neural_net.NNWrapper.load_checkpoint(
+            Game, 'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
         v_loss, pi_loss = nn.train(
             dataloader, int(math.ceil(average_generation/bs*TRAIN_SAMPLE_RATE)))
         nn.save_checkpoint('data/checkpoint',
@@ -646,6 +681,12 @@ if __name__ == '__main__':
                 elo[i] = prev_elo[i]
                 wr[i][:bootstrap_iters] = prev_wr[i][:bootstrap_iters]
                 hist_size = calc_hist_size(i)
+                starting_v_loss, starting_pi_loss = iteration_loss(Game, i)
+                writer.add_scalar('Loss/Init V', starting_v_loss, i)
+                writer.add_scalar('Loss/Init Pi', starting_pi_loss, i)
+                writer.add_scalar('Loss/Init Total',
+                                  starting_v_loss+starting_pi_loss, i)
+                gc.collect()
                 v_loss, pi_loss = train(Game, i, hist_size)
                 writer.add_scalar('Loss/V', v_loss, i)
                 writer.add_scalar('Loss/Pi', pi_loss, i)
@@ -681,11 +722,8 @@ if __name__ == '__main__':
                 gc.collect()
 
             elo = get_elo(elo, wr, i)
-            writer.add_scalar(
-                f'Elo/NN', elo[i], i)
-            if i == current_best:
-                writer.add_scalar(
-                    f'Elo/Best', elo[i], i)
+            writer.add_scalar('Elo/NN', elo[i], i)
+            writer.add_scalar('Elo/Best', elo[current_best], i)
             postfix['elo'] = int(elo[i])
             pbar.set_postfix(postfix)
             np.savetxt("data/elo.csv", elo, delimiter=",")
@@ -704,6 +742,13 @@ if __name__ == '__main__':
             gc.collect()
 
             resample_by_surprise(Game, i)
+            gc.collect()
+
+            starting_v_loss, starting_pi_loss = iteration_loss(Game, i)
+            writer.add_scalar('Loss/Init V', starting_v_loss, i)
+            writer.add_scalar('Loss/Init Pi', starting_pi_loss, i)
+            writer.add_scalar('Loss/Init Total',
+                              starting_v_loss+starting_pi_loss, i)
             gc.collect()
 
             hist_size = calc_hist_size(i)

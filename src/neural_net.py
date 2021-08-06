@@ -173,6 +173,22 @@ class NNWrapper:
         if self.cuda:
             self.nnet.cuda()
 
+    def losses(self, dataset):
+        self.nnet.eval()
+        l_v = 0
+        l_pi = 0
+        for batch in tqdm(dataset, desc='Calculating Sample Loss', leave=False):
+            canonical, target_vs, target_pis = batch
+            if self.cuda:
+                canonical = canonical.contiguous().cuda()
+                target_vs = target_vs.contiguous().cuda()
+                target_pis = target_pis.contiguous().cuda()
+
+            out_v, out_pi = self.nnet(canonical)
+            l_v += self.loss_v(target_vs, out_v).item()
+            l_pi += self.loss_pi(target_pis, out_pi).item()
+        return l_v/len(dataset), l_pi/len(dataset)
+
     def sample_loss(self, dataset, size):
         loss = np.zeros(size)
         self.nnet.eval()

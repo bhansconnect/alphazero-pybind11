@@ -386,7 +386,7 @@ if __name__ == '__main__':
                 return True
             return False
 
-        for i in range(sample_count):
+        for i in tqdm.trange(sample_count, desc='Resampling Data', leave=False):
             sample_weight = 0.5 + (loss[i]/total_loss) * 0.5 * sample_count
             for _ in range(math.floor(sample_weight)):
                 c, v, pi = dataset[i]

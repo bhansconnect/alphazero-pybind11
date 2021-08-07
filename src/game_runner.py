@@ -228,7 +228,7 @@ class RandPlayer:
 
 
 EXPECTED_OPENING_LENGTH = 10
-CPUCT = 1.0
+CPUCT = 1.25
 SELF_PLAY_TEMP = 1.0
 EVAL_TEMP = 0.5
 TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
@@ -243,7 +243,7 @@ SELF_PLAY_CONCURRENT_BATCH_MULT = 4
 SELF_PLAY_CHUNKS = 2
 
 TRAIN_BATCH_SIZE = 1024
-TRAIN_SAMPLE_RATE = 1
+TRAIN_SAMPLE_RATE = 4
 
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
 WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max

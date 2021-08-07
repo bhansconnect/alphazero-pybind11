@@ -13,6 +13,8 @@ START_TEMP = 0.5
 END_TEMP = 0.2
 TEMP_DECAY_HALF_LIFE = 10
 
+Game = alphazero.Connect4GS
+
 bf = 0
 bfc = 0
 
@@ -74,7 +76,6 @@ if __name__ == '__main__':
     import game_runner
 
     np.set_printoptions(precision=3, suppress=True)
-    Game = alphazero.Connect4GS
     nn_folder = 'data/checkpoint'
     nn_file = os.path.basename(
         sorted(glob.glob(os.path.join(nn_folder, '*.pt')))[-1])

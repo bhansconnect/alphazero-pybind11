@@ -243,7 +243,7 @@ SELF_PLAY_CONCURRENT_BATCH_MULT = 4
 SELF_PLAY_CHUNKS = 2
 
 TRAIN_BATCH_SIZE = 1024
-TRAIN_SAMPLE_RATE = 4
+TRAIN_SAMPLE_RATE = 1
 
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
 WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
@@ -482,7 +482,9 @@ if __name__ == '__main__':
         dataloader = DataLoader(dataset, batch_size=bs,
                                 shuffle=True, num_workers=11)
 
-        average_generation = total_size/min(hist_size, iteration+1)
+        # Training too much when there is not yet a lot of data really messes up the network.
+        # To combat this overfitting, train on at most 1/10th of the samples.
+        average_generation = total_size/max(min(hist_size, iteration+1), 10)
 
         nn = neural_net.NNWrapper.load_checkpoint(
             Game, 'data/checkpoint', f'{iteration:04d}-{run_name}.pt')

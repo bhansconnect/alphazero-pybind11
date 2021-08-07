@@ -46,6 +46,7 @@ struct PlayParams {
   float temp_decay_half_life = 0;
   bool history_enabled = false;
   bool self_play = false;
+  bool tree_reuse = true;
   bool add_noise = false;
   float epsilon = 0.25;
   float mcts_root_temp = 1.4;

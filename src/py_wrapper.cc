@@ -106,6 +106,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("final_temp", &PlayParams::final_temp)
       .def_readwrite("temp_decay_half_life", &PlayParams::temp_decay_half_life)
       .def_readwrite("history_enabled", &PlayParams::history_enabled)
+      .def_readwrite("tree_reuse", &PlayParams::tree_reuse)
       .def_readwrite("self_play", &PlayParams::self_play)
       .def_readwrite("add_noise", &PlayParams::add_noise)
       .def_readwrite("epsilon", &PlayParams::epsilon)

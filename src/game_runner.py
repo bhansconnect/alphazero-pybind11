@@ -505,6 +505,7 @@ if __name__ == '__main__':
         params = base_params(Game, SELF_PLAY_TEMP, bs, cb)
         params.games_to_play = n
         params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+        params.tree_reuse = False
         params.self_play = True
         params.history_enabled = True
         params.add_noise = True

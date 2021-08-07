@@ -128,14 +128,11 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
     auto v = value(parent->player);
     // Add draws.
     v += value(num_players_) / num_players_;
-    // Rescale to be from -1 to 1.
-    v = v * 2 - 1;
     current_->q = (current_->q * static_cast<float>(current_->n) + v) /
                   static_cast<float>(current_->n + 1);
     if (current_->n == 0) {
       auto leaf_v =
           value(current_->player) + value(num_players_) / num_players_;
-      leaf_v = leaf_v * 2 - 1;
       current_->v = leaf_v;
     }
     ++current_->n;

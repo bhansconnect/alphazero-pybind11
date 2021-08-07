@@ -53,7 +53,7 @@ class MCTS {
         q = c.q;
       }
     }
-    return (q + 1.0) / 2.0;
+    return q;
   }
   [[nodiscard]] Vector<uint32_t> counts() const noexcept;
   [[nodiscard]] Vector<float> probs(float temp) const noexcept;

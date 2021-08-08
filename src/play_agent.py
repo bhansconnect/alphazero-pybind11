@@ -8,8 +8,8 @@ from load_lib import load_alphazero
 alphazero = load_alphazero()
 
 THINK_TIME = 9.5
-CPUCT = 2
-START_TEMP = 0.5
+CPUCT = 1.25
+START_TEMP = 1
 END_TEMP = 0.2
 TEMP_DECAY_HALF_LIFE = 10
 

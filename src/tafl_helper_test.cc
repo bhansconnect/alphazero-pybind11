@@ -1,6 +1,8 @@
 
 #include "tafl_helper.h"
 
+#include <iostream>
+
 #include "gtest/gtest.h"
 
 namespace alphazero::tafl_helper {
@@ -173,6 +175,35 @@ TEST(TaflHelper, Rot90) {
   for (int i = 0; i < 3; ++i) {
     EXPECT_EQ(rot.v(i), base.v(i));
   }
+}
+
+TEST(TaflHelper, EightSym) {
+  int width = 2;
+  int height = 2;
+  PlayHistory base;
+  base.v = Vector<float>{3};
+  base.v.setRandom();
+  base.pi = Vector<float>{width * height * (width + height)};
+  base.pi.setZero();
+  base.canonical = Tensor<float, 3>{3, height, width};
+  base.canonical.setZero();
+
+  base.canonical(0, 0, 0) = 1;
+  base.canonical(0, 0, 1) = 2;
+  base.canonical(0, 1, 0) = 3;
+  base.canonical(0, 1, 1) = 4;
+
+  std::vector<PlayHistory> syms = eightSym(base);
+
+  std::cout << syms.size() << '\n';
+  for (auto& sym : syms) {
+    std::cout << sym.canonical(0, 0, 0) << ',' << sym.canonical(0, 0, 1)
+              << '\n';
+    std::cout << sym.canonical(0, 1, 0) << ',' << sym.canonical(0, 1, 1)
+              << '\n';
+    std::cout << '\n';
+  }
+  EXPECT_TRUE(true);
 }
 
 }  // namespace

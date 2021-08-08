@@ -78,8 +78,10 @@ PlayHistory rot90Clockwise(const PlayHistory& base) noexcept {
         out.canonical(c, w, height - 1 - h) = base.canonical(c, h, w);
       }
     }
-    out.canonical(c, height / 2, width / 2) =
-        base.canonical(c, height / 2, width / 2);
+    if (height % 2 == 1) {
+      out.canonical(c, height / 2, width / 2) =
+          base.canonical(c, height / 2, width / 2);
+    }
   }
 
   for (int base_h = 0; base_h < height / 2; ++base_h) {
@@ -120,14 +122,17 @@ PlayHistory rot90Clockwise(const PlayHistory& base) noexcept {
       }
     }
   }
-  for (int w = 0; w < width; ++w) {
-    out.pi(policyLocation(width, height, height / 2, width / 2, false, w)) =
-        base.pi(policyLocation(width, height, height / 2, width / 2, true,
-                               width - 1 - w));
-  }
-  for (int h = 0; h < height; ++h) {
-    out.pi(policyLocation(width, height, height / 2, width / 2, true, h)) =
-        base.pi(policyLocation(width, height, height / 2, width / 2, false, h));
+  if (height % 2 == 1) {
+    for (int w = 0; w < width; ++w) {
+      out.pi(policyLocation(width, height, height / 2, width / 2, false, w)) =
+          base.pi(policyLocation(width, height, height / 2, width / 2, true,
+                                 width - 1 - w));
+    }
+    for (int h = 0; h < height; ++h) {
+      out.pi(policyLocation(width, height, height / 2, width / 2, true, h)) =
+          base.pi(
+              policyLocation(width, height, height / 2, width / 2, false, h));
+    }
   }
   return out;
 }
@@ -138,7 +143,7 @@ PlayHistory rot90Clockwise(const PlayHistory& base) noexcept {
   for (int i = 0; i < 3; ++i) {
     out.push_back(rot90Clockwise(out[i]));
   }
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < 4; ++i) {
     out.push_back(mirrorWidth(out[i]));
   }
   return out;

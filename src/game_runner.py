@@ -269,8 +269,8 @@ iters = 200
 depth = 4
 channels = 12
 dense_net = True
-nn_selfplay_mcts_depth = 150
-nn_selfplay_fast_mcts_depth = 25
+nn_selfplay_mcts_depth = 450
+nn_selfplay_fast_mcts_depth = 75
 nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 lr_milestone = 150
@@ -482,10 +482,7 @@ if __name__ == '__main__':
         dataloader = DataLoader(dataset, batch_size=bs,
                                 shuffle=True, num_workers=11)
 
-        # Training too much when there is not yet a lot of data really messes up the network.
-        # To combat this overfitting, train on at most 1/10th of the samples.
-        average_generation = total_size/max(min(hist_size, iteration+1), 10)
-
+        average_generation = total_size/min(hist_size, iteration+1)
         nn = neural_net.NNWrapper.load_checkpoint(
             Game, 'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
         v_loss, pi_loss = nn.train(

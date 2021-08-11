@@ -234,7 +234,7 @@ EVAL_TEMP = 0.5
 TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
 FINAL_TEMP = 0.2
 FPU_REDUCTION = 0.25
-MAX_CACHE_SIZE = 200000
+MAX_CACHE_SIZE = 200_000
 
 # Concurrent games played is batch size * num player * concurrent batch mult
 # Total games per iteration is batch size * num players * concurrent batch mult * chunks
@@ -270,8 +270,8 @@ iters = 200
 depth = 4
 channels = 12
 dense_net = True
-nn_selfplay_mcts_depth = 150
-nn_selfplay_fast_mcts_depth = 25
+nn_selfplay_mcts_depth = 450
+nn_selfplay_fast_mcts_depth = 75
 nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 lr_milestone = 150

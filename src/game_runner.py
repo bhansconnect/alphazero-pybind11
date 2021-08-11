@@ -239,8 +239,8 @@ MAX_CACHE_SIZE = 200_000
 # Concurrent games played is batch size * num player * concurrent batch mult
 # Total games per iteration is batch size * num players * concurrent batch mult * chunks
 SELF_PLAY_BATCH_SIZE = 1024
-SELF_PLAY_CONCURRENT_BATCH_MULT = 4
-SELF_PLAY_CHUNKS = 2
+SELF_PLAY_CONCURRENT_BATCH_MULT = 2
+SELF_PLAY_CHUNKS = 4
 
 TRAIN_BATCH_SIZE = 1024
 # Note: If the game has a high number of symetries generated, this number should likely get lowered.

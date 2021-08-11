@@ -70,6 +70,9 @@ class GameState {
   // Returns the canonicalized form of the board, ready for feeding to a NN.
   [[nodiscard]] virtual Tensor<float, 3> canonicalized() const noexcept = 0;
 
+  // Returns the number of symmetries the game has.
+  [[nodiscard]] virtual uint8_t num_symmetries() const noexcept = 0;
+
   // Returns an list of all symetrical game states (including the base state).
   [[nodiscard]] virtual std::vector<PlayHistory> symmetries(
       const PlayHistory& base) const noexcept = 0;

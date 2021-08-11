@@ -16,7 +16,7 @@ from load_lib import load_alphazero
 
 alphazero = load_alphazero()
 
-HIST_SIZE = 30000
+HIST_SIZE = 30_000
 HIST_LOCATION = 'data/history'
 TMP_HIST_LOCATION = 'data/tmp_history'
 GRArgs = namedtuple(
@@ -243,7 +243,8 @@ SELF_PLAY_CONCURRENT_BATCH_MULT = 4
 SELF_PLAY_CHUNKS = 2
 
 TRAIN_BATCH_SIZE = 1024
-TRAIN_SAMPLE_RATE = 4
+# Note: If the game has a high number of symetries generated, this number should likely get lowered.
+TRAIN_SAMPLE_RATE = 1
 
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
 WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
@@ -269,8 +270,8 @@ iters = 200
 depth = 4
 channels = 12
 dense_net = True
-nn_selfplay_mcts_depth = 450
-nn_selfplay_fast_mcts_depth = 75
+nn_selfplay_mcts_depth = 150
+nn_selfplay_fast_mcts_depth = 25
 nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 lr_milestone = 150
@@ -325,27 +326,111 @@ if __name__ == '__main__':
     def calc_hist_size(i):
         return int(WINDOW_SIZE_SCALAR*(1 + WINDOW_SIZE_BETA*(((i+1)/WINDOW_SIZE_SCALAR)**WINDOW_SIZE_ALPHA-1)/WINDOW_SIZE_ALPHA))
 
+    def maybe_save(Game, c, v, p, size, batch, iteration, location=HIST_LOCATION, name='', force=False):
+        cs = Game.CANONICAL_SHAPE()
+        if size == HIST_SIZE or (force and size > 0):
+            c_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                f'{location}/{iteration:04d}-{batch:04d}{name}-canonical-{size}.pt', shared=True, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
+            v_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                f'{location}/{iteration:04d}-{batch:04d}{name}-v-{size}.pt', shared=True, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
+            p_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                f'{location}/{iteration:04d}-{batch:04d}{name}-pi-{size}.pt', shared=True, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+            c_tensor[:] = c[:size]
+            v_tensor[:] = v[:size]
+            p_tensor[:] = p[:size]
+            return True
+        return False
+
+    def exploit_symmetries(Game, iteration):
+        # In games with symmetries, create symmetric samples of the data.
+        if Game.NUM_SYMMETRIES() <= 1:
+            return
+
+        c_names = sorted(
+            glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-canonical-*.pt'))
+        v_names = sorted(
+            glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-v-*.pt'))
+        p_names = sorted(
+            glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-pi-*.pt'))
+
+        datasets = []
+        for j in range(len(c_names)):
+            size = int(c_names[j].split('-')[-1].split('.')[0])
+            cs = Game.CANONICAL_SHAPE()
+            c_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                c_names[j], shared=False, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
+            v_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                v_names[j], shared=False, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
+            p_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
+                p_names[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+            datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
+            del c_tensor
+            del v_tensor
+            del p_tensor
+
+        dataset = ConcatDataset(datasets)
+        sample_count = len(dataset)
+        dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE,
+                                shuffle=False, num_workers=11)
+
+        i_out = 0
+        batch_out = 0
+        cs = Game.CANONICAL_SHAPE()
+        c_out = torch.zeros(
+            HIST_SIZE, cs[0], cs[1], cs[2])
+        v_out = torch.zeros(
+            HIST_SIZE, Game.NUM_PLAYERS()+1)
+        p_out = torch.zeros(
+            HIST_SIZE, Game.NUM_MOVES())
+
+        for i in tqdm.trange(sample_count, desc='Creating Symmetric Samples', leave=False):
+            c, v, pi = dataset[i]
+            ph = alphazero.PlayHistory(c, v, pi)
+            syms = Game().symmetries(ph)
+            for sym in syms:
+                c_out[i_out] = torch.from_numpy(np.array(sym.canonical()))
+                v_out[i_out] = torch.from_numpy(np.array(sym.v()))
+                p_out[i_out] = torch.from_numpy(np.array(sym.pi()))
+                i_out += 1
+                if maybe_save(Game, c_out, v_out, p_out, i_out, batch_out, iteration, location=TMP_HIST_LOCATION, name='syms'):
+                    i_out = 0
+                    batch_out += 1
+        maybe_save(Game, c_out, v_out, p_out, i_out,
+                   batch_out, iteration, location=TMP_HIST_LOCATION, name='syms', force=True)
+
+        del datasets[:]
+        del dataset
+        del dataloader
+        del c_out
+        del v_out
+        del p_out
+
+        for fn in c_names + v_names + p_names:
+            os.remove(fn)
+
     def resample_by_surprise(Game, iteration):
         # Used to resample the latest iteration by how surprising each sample is.
         # Each sample is given 0.5 weight as a base.
         # The other half of the weight is distributed based on the sample loss.
         # The sample is then added to the dataset floor(weight) times.
         # It is also added an extra time with the probability of weight - floor(weight)
-        c = sorted(
+        c_names = sorted(
             glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-canonical-*.pt'))
-        v = sorted(glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-v-*.pt'))
-        p = sorted(glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-pi-*.pt'))
+        v_names = sorted(
+            glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-v-*.pt'))
+        p_names = sorted(
+            glob.glob(f'{TMP_HIST_LOCATION}/{iteration:04d}-*-pi-*.pt'))
 
         datasets = []
-        for j in range(len(c)):
-            size = int(c[j].split('-')[-1].split('.')[0])
+        for j in range(len(c_names)):
+            size = int(c_names[j].split('-')[-1].split('.')[0])
             cs = Game.CANONICAL_SHAPE()
             c_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
-                c[j], shared=False, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
+                c_names[j], shared=False, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
             v_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
-                v[j], shared=False, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
+                v_names[j], shared=False, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
             p_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
-                p[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+                p_names[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
             datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
             del c_tensor
             del v_tensor
@@ -372,20 +457,6 @@ if __name__ == '__main__':
             HIST_SIZE, Game.NUM_MOVES())
         os.makedirs(HIST_LOCATION, exist_ok=True)
 
-        def maybe_save(c, v, p, size, batch, force=False):
-            if size == HIST_SIZE or (force and size > 0):
-                c_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
-                    f'{HIST_LOCATION}/{iteration:04d}-{batch:04d}-canonical-{size}.pt', shared=True, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
-                v_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
-                    f'{HIST_LOCATION}/{iteration:04d}-{batch:04d}-v-{size}.pt', shared=True, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
-                p_tensor = torch.FloatTensor(torch.FloatStorage().from_file(
-                    f'{HIST_LOCATION}/{iteration:04d}-{batch:04d}-pi-{size}.pt', shared=True, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
-                c_tensor[:] = c[:size]
-                v_tensor[:] = v[:size]
-                p_tensor[:] = p[:size]
-                return True
-            return False
-
         for i in tqdm.trange(sample_count, desc='Resampling Data', leave=False):
             sample_weight = 0.5 + (loss[i]/total_loss) * 0.5 * sample_count
             for _ in range(math.floor(sample_weight)):
@@ -394,7 +465,7 @@ if __name__ == '__main__':
                 v_out[i_out] = v
                 p_out[i_out] = pi
                 i_out += 1
-                if maybe_save(c_out, v_out, p_out, i_out, batch_out):
+                if maybe_save(Game, c_out, v_out, p_out, i_out, batch_out, iteration):
                     i_out = 0
                     batch_out += 1
             if random.random() < sample_weight - math.floor(sample_weight):
@@ -403,11 +474,12 @@ if __name__ == '__main__':
                 v_out[i_out] = v
                 p_out[i_out] = pi
                 i_out += 1
-                if maybe_save(c_out, v_out, p_out, i_out, batch_out):
+                if maybe_save(Game, c_out, v_out, p_out, i_out, batch_out, iteration):
                     i_out = 0
                     batch_out += 1
 
-        maybe_save(c_out, v_out, p_out, i_out, batch_out, force=True)
+        maybe_save(Game, c_out, v_out, p_out, i_out,
+                   batch_out, iteration, force=True)
 
         del datasets[:]
         del dataset
@@ -739,6 +811,9 @@ if __name__ == '__main__':
                 'Average Game Length/Self Play', game_length, i)
             postfix['win_rates'] = list(map(lambda x: f'{x:0.3f}', win_rates))
             pbar.set_postfix(postfix)
+            gc.collect()
+
+            exploit_symmetries(Game, i)
             gc.collect()
 
             resample_by_surprise(Game, i)

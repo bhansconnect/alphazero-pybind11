@@ -27,6 +27,51 @@ using tawlbwrdd_gs::TawlbwrddGS;
 PYBIND11_MODULE(alphazero, m) {
   m.doc() = "the c++ parts of an alphazero implementation";
 
+  py::class_<PlayHistory>(m, "PlayHistory")
+      .def(py::init([](py::array_t<float>& canonical, py::array_t<float>& v,
+                       py::array_t<float>& pi) {
+             PlayHistory ph;
+             ph.canonical = Tensor<float, 3>(
+                 canonical.shape(0), canonical.shape(1), canonical.shape(2));
+             ph.v = Vector<float>(v.shape(0));
+             ph.pi = Vector<float>(pi.shape(0));
+
+             auto rc = canonical.mutable_unchecked<3>();
+             auto rv = v.mutable_unchecked<1>();
+             auto rpi = pi.mutable_unchecked<1>();
+             for (auto i = 0L; i < canonical.shape(0); ++i) {
+               for (auto j = 0L; j < canonical.shape(1); ++j) {
+                 for (auto k = 0L; k < canonical.shape(2); ++k) {
+                   ph.canonical(i, j, k) = rc(i, j, k);
+                 }
+               }
+             }
+             for (auto i = 0L; i < v.shape(0); ++i) {
+               ph.v(i) = rv(i);
+             }
+             for (auto i = 0L; i < pi.shape(0); ++i) {
+               ph.pi(i) = rpi(i);
+             }
+             return ph;
+           }),
+           py::arg().none(false), py::arg().none(false), py::arg().none(false))
+      .def(
+          "v", [](PlayHistory& ph) { return &ph.v; },
+          py::return_value_policy::reference_internal)
+      .def(
+          "pi", [](PlayHistory& ph) { return &ph.pi; },
+          py::return_value_policy::reference_internal)
+      .def(
+          "canonical",
+          [](PlayHistory& ph) {
+            const auto dims = ph.canonical.dimensions();
+            const auto size = sizeof(float);
+            return py::memoryview::from_buffer(
+                ph.canonical.data(), dims,
+                {size * dims[1] * dims[2], size * dims[2], size});
+          },
+          py::return_value_policy::reference_internal);
+
   py::class_<GameState>(m, "GameState")
       .def("copy", &GameState::copy, py::call_guard<py::gil_scoped_release>())
       .def("__eq__", &GameState::operator==,
@@ -37,6 +82,9 @@ PYBIND11_MODULE(alphazero, m) {
       .def("current_player", &GameState::current_player)
       .def("num_players", &GameState::num_players)
       .def("num_moves", &GameState::num_moves)
+      .def("num_symmetries", &GameState::num_symmetries)
+      .def("symmetries", &GameState::symmetries,
+           py::call_guard<py::gil_scoped_release>())
       .def("valid_moves", &GameState::valid_moves,
            py::call_guard<py::gil_scoped_release>())
       .def("play_move", &GameState::play_move,
@@ -222,6 +270,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def(py::init<uint16_t>())
       .def_static("NUM_PLAYERS", [] { return brandubh_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return brandubh_gs::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return brandubh_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return brandubh_gs::CANONICAL_SHAPE; });
 
@@ -230,6 +279,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def(py::init<uint16_t>())
       .def_static("NUM_PLAYERS", [] { return opentafl_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return opentafl_gs::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return opentafl_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return opentafl_gs::CANONICAL_SHAPE; });
 
@@ -238,6 +288,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def(py::init<uint16_t>())
       .def_static("NUM_PLAYERS", [] { return tawlbwrdd_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return tawlbwrdd_gs::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return tawlbwrdd_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return tawlbwrdd_gs::CANONICAL_SHAPE; });
 
@@ -264,6 +315,7 @@ PYBIND11_MODULE(alphazero, m) {
           }))
       .def_static("NUM_PLAYERS", [] { return connect4_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return connect4_gs::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return connect4_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return connect4_gs::CANONICAL_SHAPE; });
 
@@ -271,6 +323,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def(py::init<>())
       .def_static("NUM_PLAYERS", [] { return 2; })
       .def_static("NUM_MOVES", [] { return photosynthesis_gs::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES",
+                  [] { return photosynthesis_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return PhotosynthesisGS<2>::CANONICAL_SHAPE; });
 
@@ -278,6 +332,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def(py::init<>())
       .def_static("NUM_PLAYERS", [] { return 3; })
       .def_static("NUM_MOVES", [] { return photosynthesis_gs::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES",
+                  [] { return photosynthesis_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return PhotosynthesisGS<3>::CANONICAL_SHAPE; });
 
@@ -285,6 +341,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def(py::init<>())
       .def_static("NUM_PLAYERS", [] { return 4; })
       .def_static("NUM_MOVES", [] { return photosynthesis_gs::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES",
+                  [] { return photosynthesis_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return PhotosynthesisGS<4>::CANONICAL_SHAPE; });
 }

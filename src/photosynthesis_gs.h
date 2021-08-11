@@ -10,6 +10,7 @@ namespace alphazero::photosynthesis_gs {
 constexpr const int WIDTH = 7;
 constexpr const int HEIGHT = 7;
 constexpr const int NUM_MOVES = 1 + 4 + (WIDTH * HEIGHT + 1) * (WIDTH * HEIGHT);
+constexpr const int NUM_SYMMETRIES = 1;
 const std::array<color::Modifier, 7> PLAYER_COLOR = {
     color::Modifier{color::FG_RED},     color::Modifier{color::FG_GREEN},
     color::Modifier{color::FG_BLUE},    color::Modifier{color::FG_YELLOW},
@@ -560,6 +561,11 @@ class PhotosynthesisGS : public GameState {
     assert(offset == t.dimension(0));
 
     return t;
+  }
+
+  // Returns the number of symmetries the game has.
+  [[nodiscard]] uint8_t num_symmetries() const noexcept override {
+    return NUM_SYMMETRIES;
   }
 
   // Returns an list of all symetrical game states (including the base state).

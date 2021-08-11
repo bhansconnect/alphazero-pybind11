@@ -8,6 +8,7 @@ constexpr const int WIDTH = 7;
 constexpr const int HEIGHT = 6;
 constexpr const int NUM_MOVES = WIDTH;
 constexpr const int NUM_PLAYERS = 2;
+constexpr const int NUM_SYMMETRIES = 2;
 constexpr const std::array<int, 3> BOARD_SHAPE = {2, HEIGHT, WIDTH};
 constexpr const std::array<int, 3> CANONICAL_SHAPE = {4, HEIGHT, WIDTH};
 
@@ -64,6 +65,11 @@ class Connect4GS : public GameState {
 
   // Returns the canonicalized form of the board, ready for feeding to a NN.
   [[nodiscard]] Tensor<float, 3> canonicalized() const noexcept override;
+
+  // Returns the number of symmetries the game has.
+  [[nodiscard]] uint8_t num_symmetries() const noexcept override {
+    return NUM_SYMMETRIES;
+  }
 
   // Returns an list of all symetrical game states (including the base state).
   [[nodiscard]] std::vector<PlayHistory> symmetries(

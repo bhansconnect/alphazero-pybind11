@@ -26,6 +26,7 @@ constexpr const int WIDTH = 11;
 constexpr const int HEIGHT = 11;
 constexpr const int NUM_MOVES = WIDTH * HEIGHT * (WIDTH + HEIGHT);
 constexpr const int NUM_PLAYERS = 2;
+constexpr const int NUM_SYMMETRIES = 8;
 constexpr const std::array<int, 3> BOARD_SHAPE = {3, HEIGHT, WIDTH};
 // 3 for board, 2 for current player, 2 for current repetition count.
 // May want to add some historical positions.
@@ -168,6 +169,11 @@ class TawlbwrddGS : public GameState {
 
   // Returns the canonicalized form of the board, ready for feeding to a NN.
   [[nodiscard]] Tensor<float, 3> canonicalized() const noexcept override;
+
+  // Returns the number of symmetries the game has.
+  [[nodiscard]] uint8_t num_symmetries() const noexcept override {
+    return NUM_SYMMETRIES;
+  }
 
   // Returns an list of all symetrical game states (including the base state).
   [[nodiscard]] std::vector<PlayHistory> symmetries(

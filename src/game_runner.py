@@ -584,7 +584,8 @@ if __name__ == '__main__':
 
         # Just use a random agent when generating data with network zero.
         # They are equivalent.
-        if best == 0:
+        use_rand = best == 0
+        if use_rand:
             nn = RandPlayer(Game, bs)
             params.max_cache_size = 0
         else:
@@ -593,11 +594,12 @@ if __name__ == '__main__':
 
         pm = alphazero.PlayManager(Game(), params)
         grargs = GRArgs(title='Self Play', game=Game, iteration=iteration,
-                        max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
+                        max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS, cuda=not use_rand)
 
         players = []
         for _ in range(Game.NUM_PLAYERS()):
             players.append(nn)
+
         gr = GameRunner(players, pm, grargs)
         gr.run()
         scores = pm.scores()

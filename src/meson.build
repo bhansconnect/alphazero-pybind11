@@ -14,6 +14,7 @@ eigen_dep = eigen_proj.get_variable('eigen_dep')
 gtest_proj = subproject('gtest')
 gtest_dep = gtest_proj.get_variable('gtest_main_dep')
 
+thread_dep = dependency('threads')
 
 tafl_helper_test = executable(
   'tafl_helper_test',
@@ -119,7 +120,7 @@ test('gtest tests', lru_cache_test)
 play_manager = library(
   'play_manager',
   'play_manager.cc',
-  dependencies: [eigen_dep, absl_container_dep, absl_hash_dep],
+  dependencies: [eigen_dep, absl_container_dep, absl_hash_dep, thread_dep],
   link_with: [mcts],
 )
 

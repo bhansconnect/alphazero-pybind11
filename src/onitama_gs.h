@@ -8,9 +8,10 @@ constexpr const uint16_t DEFAULT_MAX_TURNS = 150;
 
 constexpr const int P0_MASTER_LAYER = 0;
 constexpr const int P0_PAWN_LAYER = 1;
-constexpr const int P1_MASTER_LAYER = 3;
-constexpr const int P1_PAWN_LAYER = 4;
+constexpr const int P1_MASTER_LAYER = 2;
+constexpr const int P1_PAWN_LAYER = 3;
 
+constexpr const int PIECE_TYPES = 4;
 constexpr const int WIDTH = 5;
 constexpr const int HEIGHT = 5;
 // Move from square 1 to square 2 with card 0 or 1. Also no moves just pass card
@@ -18,7 +19,7 @@ constexpr const int HEIGHT = 5;
 constexpr const int NUM_MOVES = 2 * WIDTH * HEIGHT * WIDTH * HEIGHT + 2;
 constexpr const int NUM_PLAYERS = 2;
 constexpr const int NUM_SYMMETRIES = 1;  // Eventually add these and make it 8.
-constexpr const std::array<int, 3> BOARD_SHAPE = {4, HEIGHT, WIDTH};
+constexpr const std::array<int, 3> BOARD_SHAPE = {PIECE_TYPES, HEIGHT, WIDTH};
 constexpr const std::array<int, 3> CANONICAL_SHAPE = {11, HEIGHT, WIDTH};
 
 // TODO define card array.

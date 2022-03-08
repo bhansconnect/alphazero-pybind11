@@ -14,7 +14,7 @@ namespace alphazero::onitama_gs {
   if (other_cs == nullptr) {
     return false;
   }
-  for (auto p = 0; p < 4; ++p) {
+  for (auto p = 0; p < PIECE_TYPES; ++p) {
     for (auto h = 0; h < HEIGHT; ++h) {
       for (auto w = 0; w < WIDTH; ++w) {
         if (other_cs->board_(p, h, w) != board_(p, h, w)) {
@@ -126,7 +126,7 @@ void OnitamaGS::play_move(uint32_t move) {
   int8_t from_w = actual_move % WIDTH;
   int8_t from_h = actual_move / WIDTH;
 
-  for (int p = 0; p < 4; ++p) {
+  for (int p = 0; p < PIECE_TYPES; ++p) {
     board_(p, to_h, to_w) = board_(p, from_h, from_w);
     board_(p, from_h, from_w) = 0;
   }
@@ -172,7 +172,7 @@ void OnitamaGS::play_move(uint32_t move) {
 
 [[nodiscard]] Tensor<float, 3> OnitamaGS::canonicalized() const noexcept {
   auto out = CanonicalTensor{};
-  for (auto p = 0; p < 4; ++p) {
+  for (auto p = 0; p < PIECE_TYPES; ++p) {
     for (auto h = 0; h < HEIGHT; ++h) {
       for (auto w = 0; w < WIDTH; ++w) {
         out(p, h, w) = board_(p, h, w);
@@ -222,7 +222,7 @@ void OnitamaGS::play_move(uint32_t move) {
     for (auto w = 0; w < WIDTH; ++w) {
       if (board_(P0_MASTER_LAYER, h, w) == 1) {
         out += 'X';
-      } else if (board_(P0_MASTER_LAYER, h, w) == 1) {
+      } else if (board_(P0_PAWN_LAYER, h, w) == 1) {
         out += 'x';
       } else if (board_(P1_MASTER_LAYER, h, w) == 1) {
         out += 'O';

@@ -188,7 +188,17 @@ void OnitamaGS::play_move(uint32_t move) {
     }
   }
 
-  // TODO: add cards.
+  // TOOD: Investigate if cards should be viewed with player perspective or if
+  // the board should rotated.
+  int offset = 6;
+  for (const auto& card_index :
+       {p0_card0_, p0_card1_, waiting_card_, p1_card0_, p1_card1_}) {
+    const auto& card = CARDS[card_index];
+    for (const auto& move : card.movements) {
+      out(offset, WIDTH / 2 + move.first, HEIGHT / 2 + move.second) = 1;
+    }
+    ++offset;
+  }
 
   return out;
 }

@@ -37,6 +37,15 @@ void OnitamaGS::hash(absl::HashState h) const {
                            p1_card0_, p1_card1_, waiting_card_);
 }
 
+[[nodiscard]] std::pair<const int8_t*, const int8_t*> OnitamaGS::player_cards(
+    int wanted_player) const noexcept {
+  if (wanted_player == 0) {
+    return std::make_pair(&p0_card0_, &p0_card1_);
+  } else {
+    return std::make_pair(&p1_card0_, &p1_card1_);
+  }
+}
+
 [[nodiscard]] std::pair<int8_t*, int8_t*> OnitamaGS::player_cards(
     int wanted_player) noexcept {
   if (wanted_player == 0) {
@@ -84,9 +93,6 @@ void OnitamaGS::hash(absl::HashState h) const {
       }
     }
   }
-  // TODO for all squares if contains player pieces, add a move for each card
-  // applied to that square.
-  // cannot move into own pieces. Can move anywhere else on the board.
 
   if (!has_move) {
     valids(NUM_MOVES - 2) = 1;

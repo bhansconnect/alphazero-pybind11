@@ -231,6 +231,8 @@ class OnitamaGS : public GameState {
   // Returns a reference the the carders for the specified player.
   [[nodiscard]] std::pair<int8_t*, int8_t*> player_cards(
       int wanted_player) noexcept;
+  [[nodiscard]] std::pair<const int8_t*, const int8_t*> player_cards(
+      int wanted_player) const noexcept;
 
  private:
   // Board contains a layer for each player.

@@ -28,6 +28,8 @@ def calc_temp(turn):
     return temp
 
 
+ANALYZE = True
+ANALYSIS_GAMES = 5
 MAX_ANALYSIS_PLAYOUTS = 5000
 ANALYSIS_GROUPING = 25
 assert MAX_ANALYSIS_PLAYOUTS % ANALYSIS_GROUPING == 0
@@ -200,7 +202,7 @@ if __name__ == '__main__':
 
     print(f'Using network: {nn_file}')
     nn = neural_net.NNWrapper.load_checkpoint(Game, nn_folder, nn_file)
-    for _ in range(5):
+    for _ in range(ANALYSIS_GAMES if ANALYZE else 1):
         gs = Game()
         pc = 0
         hist = []
@@ -209,8 +211,10 @@ if __name__ == '__main__':
             print()
             print()
             print(gs)
-            rand = eval_position(gs, nn)
-            # rand = playout_analysis(gs, nn)
+            if ANALYZE:
+                rand = playout_analysis(gs, nn)
+            else:
+                rand = eval_position(gs, nn)
             print()
             valids = gs.valid_moves()
             valid = False
@@ -364,8 +368,10 @@ if __name__ == '__main__':
             gs.play_move(rand)
         print(gs)
         print(gs.scores())
-    # print('Passes:', pc)
-    # print('BranchFactor:', bf/bfc)
-    # print(bf)
-    # print(bfc)
-    finalize_analysis(nn_file)
+    if ANALYZE:
+        finalize_analysis(nn_file)
+    else:
+        print('Passes:', pc)
+        print('BranchFactor:', bf/bfc)
+        print(bf)
+        print(bfc)

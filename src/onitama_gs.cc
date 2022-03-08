@@ -179,18 +179,29 @@ void OnitamaGS::play_move(uint32_t move) {
       }
     }
   }
-  auto p = player_ + 4;
-  auto op = (player_ + 1) % 2 + 4;
+
+  int offset = PIECE_TYPES;
+  auto p = player_ + offset;
+  auto op = (player_ + 1) % 2 + offset;
   for (auto h = 0; h < HEIGHT; ++h) {
     for (auto w = 0; w < WIDTH; ++w) {
       out(p, h, w) = 1;
       out(op, h, w) = 0;
     }
   }
+  offset += 2;
+
+  // Zero card planes before setting specific indices.
+  for (auto i = 0; i < 5; ++i) {
+    for (auto h = 0; h < HEIGHT; ++h) {
+      for (auto w = 0; w < WIDTH; ++w) {
+        out(offset + i, h, w) = 0;
+      }
+    }
+  }
 
   // TOOD: Investigate if cards should be viewed with player perspective or if
   // the board should rotated.
-  int offset = 6;
   for (const auto& card_index :
        {p0_card0_, p0_card1_, waiting_card_, p1_card0_, p1_card1_}) {
     const auto& card = CARDS[card_index];

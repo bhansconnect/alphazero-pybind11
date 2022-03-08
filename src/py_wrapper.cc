@@ -2,6 +2,7 @@
 
 #include "brandubh_gs.h"
 #include "connect4_gs.h"
+#include "onitami_gs.h"
 #include "opentafl_gs.h"
 #include "photosynthesis_gs.h"
 #include "play_manager.h"
@@ -19,6 +20,7 @@ namespace alphazero {
 namespace py = pybind11;
 using brandubh_gs::BrandubhGS;
 using connect4_gs::Connect4GS;
+using onitami_gs::OnitamiGS;
 using opentafl_gs::OpenTaflGS;
 using photosynthesis_gs::PhotosynthesisGS;
 using tawlbwrdd_gs::TawlbwrddGS;
@@ -264,6 +266,15 @@ PYBIND11_MODULE(alphazero, m) {
             return out;
           },
           py::call_guard<py::gil_scoped_release>());
+
+  py::class_<OnitamiGS, GameState>(m, "OnitamiGS")
+      .def(py::init<>())
+      // .def(py::init<uint16_t>()) TODO: add constructor with turn limit?
+      .def_static("NUM_PLAYERS", [] { return onitami_gs::NUM_PLAYERS; })
+      .def_static("NUM_MOVES", [] { return onitami_gs::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return onitami_gs::NUM_SYMMETRIES; })
+      .def_static("CANONICAL_SHAPE",
+                  [] { return onitami_gs::CANONICAL_SHAPE; });
 
   py::class_<BrandubhGS, GameState>(m, "BrandubhGS")
       .def(py::init<>())

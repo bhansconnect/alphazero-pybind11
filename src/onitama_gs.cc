@@ -48,8 +48,42 @@ void OnitamaGS::hash(absl::HashState h) const {
 
 [[nodiscard]] Vector<uint8_t> OnitamaGS::valid_moves() const noexcept {
   auto valids = Vector<uint8_t>{NUM_MOVES};
+  valids.setZero();
 
   bool has_move = false;
+  auto [card0, card1] = player_cards(player_);
+  int8_t master_layer = (player_ == 0) ? P0_MASTER_LAYER : P1_MASTER_LAYER;
+  int8_t pawn_layer = (player_ == 0) ? P0_PAWN_LAYER : P1_PAWN_LAYER;
+  int move_mult = (player_ == 0) ? 1 : -1;
+  for (int ci = 0; ci < 2; ++ci) {
+    const auto& card = (ci == 0) ? CARDS[*card0] : CARDS[*card1];
+    for (int from_h = 0; from_h < HEIGHT; ++from_h) {
+      for (int from_w = 0; from_w < WIDTH; ++from_w) {
+        if (board_(master_layer, from_h, from_w) == 1 ||
+            board_(pawn_layer, from_h, from_w) == 1) {
+          for (const auto& move : card.movements) {
+            int to_h = from_h + move.first * move_mult;
+            int to_w = from_w + move.second * move_mult;
+            if (to_h < 0 || to_h >= HEIGHT) {
+              continue;
+            }
+            if (to_w < 0 || to_w >= WIDTH) {
+              continue;
+            }
+            if (board_(master_layer, to_h, to_w) == 1 ||
+                board_(pawn_layer, to_h, to_w) == 1) {
+              continue;
+            }
+            has_move = true;
+            int index = ci * (WIDTH * HEIGHT * WIDTH * HEIGHT) +
+                        from_h * (WIDTH * HEIGHT * WIDTH) +
+                        from_w * (WIDTH * HEIGHT) + to_h * WIDTH + to_w;
+            valids(index) = 1;
+          }
+        }
+      }
+    }
+  }
   // TODO for all squares if contains player pieces, add a move for each card
   // applied to that square.
   // cannot move into own pieces. Can move anywhere else on the board.

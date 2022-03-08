@@ -17,7 +17,7 @@ constexpr const int HEIGHT = 5;
 // 0 or 1.
 constexpr const int NUM_MOVES = 2 * WIDTH * HEIGHT * WIDTH * HEIGHT + 2;
 constexpr const int NUM_PLAYERS = 2;
-constexpr const int NUM_SYMMETRIES = 8;
+constexpr const int NUM_SYMMETRIES = 1;  // Eventually add these and make it 8.
 constexpr const std::array<int, 3> BOARD_SHAPE = {4, HEIGHT, WIDTH};
 constexpr const std::array<int, 3> CANONICAL_SHAPE = {11, HEIGHT, WIDTH};
 

@@ -155,23 +155,8 @@ void OnitamaGS::play_move(uint32_t move) {
 
 [[nodiscard]] std::vector<PlayHistory> OnitamaGS::symmetries(
     const PlayHistory& base) const noexcept {
-  // TODO
+  // TODO: Eventually add symmetries.
   std::vector<PlayHistory> syms{base};
-  PlayHistory mirror;
-  mirror.v = base.v;
-  mirror.canonical = CanonicalTensor{};
-  for (auto f = 0; f < CANONICAL_SHAPE[0]; ++f) {
-    for (auto h = 0; h < HEIGHT; ++h) {
-      for (auto w = 0; w < WIDTH; ++w) {
-        mirror.canonical(f, h, w) = base.canonical(f, h, (WIDTH - 1) - w);
-      }
-    }
-  }
-  mirror.pi = Vector<float>{WIDTH};
-  for (auto w = 0; w < WIDTH; ++w) {
-    mirror.pi(w) = base.pi((WIDTH - 1) - w);
-  }
-  syms.push_back(mirror);
   return syms;
 }
 
@@ -182,7 +167,7 @@ void OnitamaGS::play_move(uint32_t move) {
   out += "Wainting Card: " + CARDS[waiting_card_].name + '\n';
   out += "Player 1 Cards: " + CARDS[p1_card0_].name + ", " +
          CARDS[p1_card1_].name + '\n';
-  // TODO: add cards here.
+  // TODO: add option to display cards here.
   for (auto h = 0; h < HEIGHT; ++h) {
     for (auto w = 0; w < WIDTH; ++w) {
       if (board_(P0_MASTER_LAYER, h, w) == 1) {

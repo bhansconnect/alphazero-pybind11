@@ -28,7 +28,8 @@ def calc_temp(turn):
     return temp
 
 
-ANALYZE = True
+ANALYZE = False
+PLAY_GAMES = 1
 ANALYSIS_GAMES = 5
 MAX_ANALYSIS_PLAYOUTS = 5000
 ANALYSIS_GROUPING = 25
@@ -202,7 +203,7 @@ if __name__ == '__main__':
 
     print(f'Using network: {nn_file}')
     nn = neural_net.NNWrapper.load_checkpoint(Game, nn_folder, nn_file)
-    for _ in range(ANALYSIS_GAMES if ANALYZE else 1):
+    for _ in range(ANALYSIS_GAMES if ANALYZE else PLAY_GAMES):
         gs = Game()
         pc = 0
         hist = []

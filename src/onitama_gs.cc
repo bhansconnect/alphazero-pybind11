@@ -227,7 +227,7 @@ void OnitamaGS::play_move(uint32_t move) {
          '\n';
   out += "Player 0 Cards: " + CARDS[p0_card0_].name + ", " +
          CARDS[p0_card1_].name + '\n';
-  out += "Wainting Card: " + CARDS[waiting_card_].name + '\n';
+  out += "Waiting Card: " + CARDS[waiting_card_].name + '\n';
   out += "Player 1 Cards: " + CARDS[p1_card0_].name + ", " +
          CARDS[p1_card1_].name + '\n';
   // TODO: add option to display cards here.

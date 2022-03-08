@@ -131,24 +131,7 @@ class OnitamaGS : public GameState {
     board_(P1_PAWN_LAYER, 4, 3) = 1;
     board_(P1_PAWN_LAYER, 4, 4) = 1;
 
-    // Randomly select 5 cards to play with.
-    std::array<int8_t, NUM_CARDS> permutation;
-    for (int i = 0; i < NUM_CARDS; ++i) {
-      permutation[i] = i;
-    }
-
-    std::random_device rd;
-    std::mt19937 g(rd());
-
-    std::shuffle(permutation.begin(), permutation.end(), g);
-
-    p0_card0_ = permutation[0];
-    p0_card1_ = permutation[1];
-    p1_card0_ = permutation[2];
-    p1_card1_ = permutation[3];
-    waiting_card_ = permutation[4];
-
-    player_ = CARDS[waiting_card_].starting_player;
+    randomize_start();
   }
   OnitamaGS(BoardTensor board, int8_t player, int8_t p0_card1, int8_t p0_card2,
             int8_t p1_card1, int8_t p1_card2, int8_t waiting_card,
@@ -172,6 +155,27 @@ class OnitamaGS : public GameState {
         p1_card0_(p1_card1),
         p1_card1_(p1_card2),
         waiting_card_(waiting_card) {}
+
+  void randomize_start() noexcept override {
+    // Randomly select 5 cards to play with.
+    std::array<int8_t, NUM_CARDS> permutation;
+    for (int i = 0; i < NUM_CARDS; ++i) {
+      permutation[i] = i;
+    }
+
+    std::random_device rd;
+    std::mt19937 g(rd());
+
+    std::shuffle(permutation.begin(), permutation.end(), g);
+
+    p0_card0_ = permutation[0];
+    p0_card1_ = permutation[1];
+    p1_card0_ = permutation[2];
+    p1_card1_ = permutation[3];
+    waiting_card_ = permutation[4];
+
+    player_ = CARDS[waiting_card_].starting_player;
+  }
 
   [[nodiscard]] std::unique_ptr<GameState> copy() const noexcept override;
   [[nodiscard]] bool operator==(const GameState& other) const noexcept override;

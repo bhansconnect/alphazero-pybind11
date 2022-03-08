@@ -32,13 +32,16 @@ class GameState {
   // Equality and Hash should only compare things as the neural network sees
   // things. I.E. if the network doesn't know the exact score, don't compare the
   // exact score or hash it. This enables use in the LRU cache correctly.
-  [[nodiscard]] virtual bool operator==(
-      const GameState& other) const noexcept = 0;
+  [[nodiscard]] virtual bool operator==(const GameState& other) const
+      noexcept = 0;
   [[nodiscard]] bool operator!=(const GameState& other) const noexcept {
     return !(*this == other);
   }
 
   void virtual hash(absl::HashState h) const = 0;
+
+  // Randomize the start state of a game. For most games this does nothing.
+  virtual void randomize_start() noexcept {};
 
   // Returns the current player. Players must be 0 indexed.
   [[nodiscard]] virtual uint8_t current_player() const noexcept = 0;
@@ -64,8 +67,8 @@ class GameState {
   // The first num player positions are set to 1 if that player won and 0
   // otherwise. The last position is set to 1 if the game was a draw and 0
   // otherwise.
-  [[nodiscard]] virtual std::optional<Vector<float>> scores()
-      const noexcept = 0;
+  [[nodiscard]] virtual std::optional<Vector<float>> scores() const
+      noexcept = 0;
 
   // Returns the canonicalized form of the board, ready for feeding to a NN.
   [[nodiscard]] virtual Tensor<float, 3> canonicalized() const noexcept = 0;

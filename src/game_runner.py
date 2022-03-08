@@ -276,7 +276,7 @@ nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 lr_milestone = 150
 run_name = f'{depth}d-{channels}c-{nn_selfplay_mcts_depth}sims'
-Game = alphazero.Connect4GS
+Game = alphazero.OnitamaGS
 
 
 def base_params(Game, start_temp, bs, cb):

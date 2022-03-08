@@ -15,6 +15,7 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
   for (auto i = 0U; i < params_.concurrent_games; ++i) {
     auto gd = GameData{};
     gd.gs = base_gs_->copy();
+    gd.gs->randomize_start();
     for (auto j = 0; j < base_gs_->num_players(); ++j) {
       gd.mcts.emplace_back(params_.cpuct, base_gs_->num_players(),
                            base_gs_->num_moves(), params_.epsilon,
@@ -110,6 +111,7 @@ void PlayManager::play() {
           }
           // Setup next game.
           game.gs = base_gs_->copy();
+          game.gs->randomize_start();
           for (auto& m : game.mcts) {
             m = MCTS{params_.cpuct,          base_gs_->num_players(),
                      base_gs_->num_moves(),  params_.epsilon,

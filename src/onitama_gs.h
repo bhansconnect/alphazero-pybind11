@@ -33,7 +33,7 @@ struct Card {
 };
 
 constexpr const int NUM_CARDS = 16;
-std::array<Card, NUM_CARDS> generate_cards() {
+const std::array<Card, NUM_CARDS> generate_cards() {
   std::array<Card, NUM_CARDS> cards;
   cards[0].name = "TIGER";
   cards[0].movements = {{2, 0}, {-1, 0}};
@@ -146,6 +146,8 @@ class OnitamaGS : public GameState {
     p1_card0_ = permutation[2];
     p1_card1_ = permutation[3];
     waiting_card_ = permutation[4];
+
+    player_ = CARDS[waiting_card_].starting_player;
   }
   OnitamaGS(BoardTensor board, int8_t player, int8_t p0_card1, int8_t p0_card2,
             int8_t p1_card1, int8_t p1_card2, int8_t waiting_card,

@@ -4,8 +4,8 @@ namespace alphazero::onitama_gs {
 
 [[nodiscard]] std::unique_ptr<GameState> OnitamaGS::copy() const noexcept {
   return std::make_unique<OnitamaGS>(board_, player_, p0_card0_, p0_card1_,
-                                     p1_card0_, p1_card1_, waiting_card_,
-                                     turn_);
+                                     p1_card0_, p1_card1_, waiting_card_, turn_,
+                                     max_turns_);
 }
 
 [[nodiscard]] bool OnitamaGS::operator==(const GameState& other) const
@@ -212,6 +212,8 @@ void OnitamaGS::play_move(uint32_t move) {
 
 [[nodiscard]] std::string OnitamaGS::dump() const noexcept {
   auto out = "Current Player: " + std::to_string(player_) + '\n';
+  out += "Turn: " + std::to_string(turn_) + " / " + std::to_string(max_turns_) +
+         '\n';
   out += "Player 0 Cards: " + CARDS[p0_card0_].name + ", " +
          CARDS[p0_card1_].name + '\n';
   out += "Wainting Card: " + CARDS[waiting_card_].name + '\n';

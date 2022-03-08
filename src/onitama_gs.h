@@ -135,9 +135,10 @@ class OnitamaGS : public GameState {
   }
   OnitamaGS(BoardTensor board, int8_t player, int8_t p0_card1, int8_t p0_card2,
             int8_t p1_card1, int8_t p1_card2, int8_t waiting_card,
-            uint16_t turn)
+            uint16_t turn, uint16_t max_turns)
       : board_(board),
         turn_(turn),
+        max_turns_(max_turns),
         player_(player),
         p0_card0_(p0_card1),
         p0_card1_(p0_card2),
@@ -146,9 +147,10 @@ class OnitamaGS : public GameState {
         waiting_card_(waiting_card) {}
   OnitamaGS(BoardTensor&& board, int8_t player, int8_t p0_card1,
             int8_t p0_card2, int8_t p1_card1, int8_t p1_card2,
-            int8_t waiting_card, uint16_t turn)
+            int8_t waiting_card, uint16_t turn, uint16_t max_turns)
       : board_(std::move(board)),
         turn_(turn),
+        max_turns_(max_turns),
         player_(player),
         p0_card0_(p0_card1),
         p0_card1_(p0_card2),
@@ -245,8 +247,8 @@ class OnitamaGS : public GameState {
   // Board contains a layer for each player.
   // A 0 means no piece, a 1 means a piece for that player.
   BoardTensor board_{};
-  uint16_t max_turns_;
   uint16_t turn_{0};
+  uint16_t max_turns_;
   int8_t player_;
   int8_t p0_card0_;
   int8_t p0_card1_;

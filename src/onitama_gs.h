@@ -4,6 +4,8 @@
 
 namespace alphazero::onitama_gs {
 
+constexpr const uint16_t DEFAULT_MAX_TURNS = 150;
+
 constexpr const int P0_MASTER_LAYER = 0;
 constexpr const int P0_PAWN_LAYER = 1;
 constexpr const int P1_MASTER_LAYER = 3;
@@ -112,7 +114,7 @@ using CanonicalTensor =
 
 class OnitamaGS : public GameState {
  public:
-  OnitamaGS() {
+  OnitamaGS(uint16_t max_turns = DEFAULT_MAX_TURNS) : max_turns_(max_turns) {
     board_.setZero();
 
     // Masters
@@ -234,6 +236,7 @@ class OnitamaGS : public GameState {
   // Board contains a layer for each player.
   // A 0 means no piece, a 1 means a piece for that player.
   BoardTensor board_{};
+  uint16_t max_turns_;
   uint16_t turn_{0};
   int8_t player_;
   int8_t p0_card0_;

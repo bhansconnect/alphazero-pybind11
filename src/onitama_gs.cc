@@ -55,8 +55,8 @@ void OnitamaGS::hash(absl::HashState h) const {
   // cannot move into own pieces. Can move anywhere else on the board.
 
   if (!has_move) {
-    valids[NUM_MOVES - 2] = 1;
-    valids[NUM_MOVES - 1] = 1;
+    valids(NUM_MOVES - 2) = 1;
+    valids(NUM_MOVES - 1) = 1;
   }
   return valids;
 }
@@ -93,95 +93,63 @@ void OnitamaGS::play_move(uint32_t move) {
 }
 
 [[nodiscard]] std::optional<Vector<float>> OnitamaGS::scores() const noexcept {
-  // TODO
   auto scores = SizedVector<float, 3>{};
   scores.setZero();
-  for (auto p = 0; p < 2; ++p) {
-    for (auto h = 0; h < HEIGHT; ++h) {
-      auto total = 0;
-      for (auto w = 0; w < WIDTH; ++w) {
-        if (board_(p, h, w) == 1) {
-          ++total;
-        } else {
-          total = 0;
-        }
-        if (total == 4) {
-          scores(p) = 1;
-          return scores;
-        }
-      }
-    }
+  // P0 has lower thrown.
+  if (board_(P0_MASTER_LAYER, 4, 2) == 1) {
+    scores(0) = 1;
+    return scores;
+  }
+  // P1 has upper thrown.
+  if (board_(P1_MASTER_LAYER, 0, 2) == 1) {
+    scores(1) = 1;
+    return scores;
+  }
+
+  int8_t p0_has_master = 0;
+  int8_t p1_has_master = 0;
+  for (auto h = 0; h < HEIGHT; ++h) {
     for (auto w = 0; w < WIDTH; ++w) {
-      auto total = 0;
-      for (auto h = 0; h < HEIGHT; ++h) {
-        if (board_(p, h, w) == 1) {
-          ++total;
-        } else {
-          total = 0;
-        }
-        if (total == 4) {
-          scores(p) = 1;
-          return scores;
-        }
-      }
-    }
-    for (auto h = 0; h < HEIGHT - 3; ++h) {
-      for (auto w = 0; w < WIDTH - 3; ++w) {
-        auto good = true;
-        for (auto x = 0; x < 4; ++x) {
-          if (board_(p, h + x, w + x) == 0) {
-            good = false;
-            break;
-          }
-        }
-        if (good) {
-          scores(p) = 1;
-          return scores;
-        }
-      }
-      for (auto w = WIDTH - 4; w < WIDTH; ++w) {
-        auto good = true;
-        for (auto x = 0; x < 4; ++x) {
-          if (board_(p, h + x, w - x) == 0) {
-            good = false;
-            break;
-          }
-        }
-        if (good) {
-          scores(p) = 1;
-          return scores;
-        }
-      }
+      p0_has_master += board_(P0_MASTER_LAYER, h, w);
+      p1_has_master += board_(P1_MASTER_LAYER, h, w);
     }
   }
-  auto valids = valid_moves();
-  for (auto w = 0; w < WIDTH; ++w) {
-    if (valids(w) == 1) {
-      return std::nullopt;
-    }
+  if (p0_has_master == 0) {
+    scores(1) = 1;
+    return scores;
   }
-  scores(2) = 1;
-  return scores;
+  if (p1_has_master == 0) {
+    scores(0) = 1;
+    return scores;
+  }
+
+  if (turn_ >= max_turns_) {
+    scores(2) = 1;
+    return scores;
+  }
+  return std::nullopt;
 }
 
 [[nodiscard]] Tensor<float, 3> OnitamaGS::canonicalized() const noexcept {
-  // TODO
   auto out = CanonicalTensor{};
-  for (auto p = 0; p < 2; ++p) {
+  for (auto p = 0; p < 4; ++p) {
     for (auto h = 0; h < HEIGHT; ++h) {
       for (auto w = 0; w < WIDTH; ++w) {
         out(p, h, w) = board_(p, h, w);
       }
     }
   }
-  auto p = player_ + 2;
-  auto op = (player_ + 1) % 2 + 2;
+  auto p = player_ + 4;
+  auto op = (player_ + 1) % 2 + 4;
   for (auto h = 0; h < HEIGHT; ++h) {
     for (auto w = 0; w < WIDTH; ++w) {
       out(p, h, w) = 1;
       out(op, h, w) = 0;
     }
   }
+
+  // TODO: add cards.
+
   return out;
 }
 

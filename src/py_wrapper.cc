@@ -269,7 +269,7 @@ PYBIND11_MODULE(alphazero, m) {
 
   py::class_<OnitamaGS, GameState>(m, "OnitamaGS")
       .def(py::init<>())
-      // .def(py::init<uint16_t>()) TODO: add constructor with turn limit?
+      .def(py::init<uint16_t>())
       .def_static("NUM_PLAYERS", [] { return onitama_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return onitama_gs::NUM_MOVES; })
       .def_static("NUM_SYMMETRIES", [] { return onitama_gs::NUM_SYMMETRIES; })

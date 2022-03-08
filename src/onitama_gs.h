@@ -2,7 +2,7 @@
 
 #include "game_state.h"
 
-namespace alphazero::onitami_gs {
+namespace alphazero::onitama_gs {
 
 constexpr const int P0_MASTER_LAYER = 0;
 constexpr const int P0_PAWN_LAYER = 1;
@@ -11,7 +11,9 @@ constexpr const int P1_PAWN_LAYER = 4;
 
 constexpr const int WIDTH = 5;
 constexpr const int HEIGHT = 5;
-constexpr const int NUM_MOVES = WIDTH * HEIGHT * WIDTH * HEIGHT + 2;
+// Move from square 1 to square 2 with card 0 or 1. Also no moves just pass card
+// 0 or 1.
+constexpr const int NUM_MOVES = 2 * WIDTH * HEIGHT * WIDTH * HEIGHT + 2;
 constexpr const int NUM_PLAYERS = 2;
 constexpr const int NUM_SYMMETRIES = 8;
 constexpr const std::array<int, 3> BOARD_SHAPE = {4, HEIGHT, WIDTH};
@@ -108,9 +110,9 @@ using CanonicalTensor =
     SizedTensor<float, Eigen::Sizes<CANONICAL_SHAPE[0], CANONICAL_SHAPE[1],
                                     CANONICAL_SHAPE[2]>>;
 
-class OnitamiGS : public GameState {
+class OnitamaGS : public GameState {
  public:
-  OnitamiGS() {
+  OnitamaGS() {
     board_.setZero();
 
     // Masters
@@ -143,8 +145,9 @@ class OnitamiGS : public GameState {
     p1_card1_ = permutation[3];
     waiting_card_ = permutation[4];
   }
-  OnitamiGS(BoardTensor board, int8_t player, int8_t p0_card1, int8_t p0_card2,
-            int8_t p1_card1, int8_t p1_card2, int8_t waiting_card, int32_t turn)
+  OnitamaGS(BoardTensor board, int8_t player, int8_t p0_card1, int8_t p0_card2,
+            int8_t p1_card1, int8_t p1_card2, int8_t waiting_card,
+            uint16_t turn)
       : board_(board),
         turn_(turn),
         player_(player),
@@ -153,9 +156,9 @@ class OnitamiGS : public GameState {
         p1_card0_(p1_card1),
         p1_card1_(p1_card2),
         waiting_card_(waiting_card) {}
-  OnitamiGS(BoardTensor&& board, int8_t player, int8_t p0_card1,
+  OnitamaGS(BoardTensor&& board, int8_t player, int8_t p0_card1,
             int8_t p0_card2, int8_t p1_card1, int8_t p1_card2,
-            int8_t waiting_card, int32_t turn)
+            int8_t waiting_card, uint16_t turn)
       : board_(std::move(board)),
         turn_(turn),
         player_(player),
@@ -223,11 +226,15 @@ class OnitamiGS : public GameState {
   // This avoids wasting tons of space when caching states.
   void minimize_storage() override {}
 
+  // Returns a reference the the carders for the specified player.
+  [[nodiscard]] std::pair<int8_t*, int8_t*> player_cards(
+      int wanted_player) noexcept;
+
  private:
   // Board contains a layer for each player.
   // A 0 means no piece, a 1 means a piece for that player.
   BoardTensor board_{};
-  int32_t turn_{0};
+  uint16_t turn_{0};
   int8_t player_;
   int8_t p0_card0_;
   int8_t p0_card1_;
@@ -236,4 +243,4 @@ class OnitamiGS : public GameState {
   int8_t waiting_card_;
 };
 
-}  // namespace alphazero::onitami_gs
+}  // namespace alphazero::onitama_gs

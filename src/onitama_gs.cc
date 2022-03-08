@@ -1,16 +1,16 @@
-#include "onitami_gs.h"
+#include "onitama_gs.h"
 
-namespace alphazero::onitami_gs {
+namespace alphazero::onitama_gs {
 
-[[nodiscard]] std::unique_ptr<GameState> OnitamiGS::copy() const noexcept {
-  return std::make_unique<OnitamiGS>(board_, player_, p0_card0_, p0_card1_,
+[[nodiscard]] std::unique_ptr<GameState> OnitamaGS::copy() const noexcept {
+  return std::make_unique<OnitamaGS>(board_, player_, p0_card0_, p0_card1_,
                                      p1_card0_, p1_card1_, waiting_card_,
                                      turn_);
 }
 
-[[nodiscard]] bool OnitamiGS::operator==(
-    const GameState& other) const noexcept {
-  const auto* other_cs = dynamic_cast<const OnitamiGS*>(&other);
+[[nodiscard]] bool OnitamaGS::operator==(const GameState& other) const
+    noexcept {
+  const auto* other_cs = dynamic_cast<const OnitamaGS*>(&other);
   if (other_cs == nullptr) {
     return false;
   }
@@ -30,37 +30,69 @@ namespace alphazero::onitami_gs {
           other_cs->waiting_card_ == waiting_card_);
 }
 
-void OnitamiGS::hash(absl::HashState h) const {
+void OnitamaGS::hash(absl::HashState h) const {
   h = absl::HashState::combine_contiguous(std::move(h), board_.data(),
                                           board_.size());
   absl::HashState::combine(std::move(h), player_, p0_card0_, p0_card1_,
                            p1_card0_, p1_card1_, waiting_card_);
 }
 
-[[nodiscard]] Vector<uint8_t> OnitamiGS::valid_moves() const noexcept {
-  // TODO
-  auto valids = Vector<uint8_t>{WIDTH};
-  for (auto w = 0; w < WIDTH; ++w) {
-    valids(w) =
-        static_cast<uint8_t>(board_(0, 0, w) == 0 && board_(1, 0, w) == 0);
+[[nodiscard]] std::pair<int8_t*, int8_t*> OnitamaGS::player_cards(
+    int wanted_player) noexcept {
+  if (wanted_player == 0) {
+    return std::make_pair(&p0_card0_, &p0_card1_);
+  } else {
+    return std::make_pair(&p1_card0_, &p1_card1_);
+  }
+}
+
+[[nodiscard]] Vector<uint8_t> OnitamaGS::valid_moves() const noexcept {
+  auto valids = Vector<uint8_t>{NUM_MOVES};
+
+  bool has_move = false;
+  // TODO for all squares if contains player pieces, add a move for each card
+  // applied to that square.
+  // cannot move into own pieces. Can move anywhere else on the board.
+
+  if (!has_move) {
+    valids[NUM_MOVES - 2] = 1;
+    valids[NUM_MOVES - 1] = 1;
   }
   return valids;
 }
 
-void OnitamiGS::play_move(uint32_t move) {
-  // TODO
-  for (auto h = HEIGHT - 1; h >= 0; --h) {
-    if (board_(0, h, move) == 0 && board_(1, h, move) == 0) {
-      board_(player_, h, move) = 1;
-      player_ = (player_ + 1) % 2;
-      ++turn_;
-      return;
-    }
+void OnitamaGS::play_move(uint32_t move) {
+  if (move >= NUM_MOVES) {
+    throw std::runtime_error{"Invalid move: You have a bug in your code."};
   }
-  throw std::runtime_error{"Invalid move: You have a bug in your code."};
+  auto [card0, card1] = player_cards(player_);
+  auto* swap_card = card1;
+  if (move < WIDTH * HEIGHT * WIDTH * HEIGHT || move == NUM_MOVES - 2) {
+    swap_card = card0;
+  }
+  std::swap(waiting_card_, *swap_card);
+  player_ = (player_ + 1) % 2;
+  ++turn_;
+  if (move >= NUM_MOVES - 2) {
+    // No real move, just swap cards.
+    return;
+  }
+
+  uint32_t actual_move = move % (WIDTH * HEIGHT * WIDTH * HEIGHT);
+  int8_t to_w = actual_move % WIDTH;
+  actual_move /= WIDTH;
+  int8_t to_h = actual_move % HEIGHT;
+  actual_move /= HEIGHT;
+  int8_t from_w = actual_move % WIDTH;
+  int8_t from_h = actual_move / WIDTH;
+
+  for (int p = 0; p < 4; ++p) {
+    board_(p, to_h, to_w) = board_(p, from_h, from_w);
+    board_(p, from_h, from_w) = 0;
+  }
 }
 
-[[nodiscard]] std::optional<Vector<float>> OnitamiGS::scores() const noexcept {
+[[nodiscard]] std::optional<Vector<float>> OnitamaGS::scores() const noexcept {
   // TODO
   auto scores = SizedVector<float, 3>{};
   scores.setZero();
@@ -132,7 +164,7 @@ void OnitamiGS::play_move(uint32_t move) {
   return scores;
 }
 
-[[nodiscard]] Tensor<float, 3> OnitamiGS::canonicalized() const noexcept {
+[[nodiscard]] Tensor<float, 3> OnitamaGS::canonicalized() const noexcept {
   // TODO
   auto out = CanonicalTensor{};
   for (auto p = 0; p < 2; ++p) {
@@ -153,7 +185,7 @@ void OnitamiGS::play_move(uint32_t move) {
   return out;
 }
 
-[[nodiscard]] std::vector<PlayHistory> OnitamiGS::symmetries(
+[[nodiscard]] std::vector<PlayHistory> OnitamaGS::symmetries(
     const PlayHistory& base) const noexcept {
   // TODO
   std::vector<PlayHistory> syms{base};
@@ -175,8 +207,13 @@ void OnitamiGS::play_move(uint32_t move) {
   return syms;
 }
 
-[[nodiscard]] std::string OnitamiGS::dump() const noexcept {
+[[nodiscard]] std::string OnitamaGS::dump() const noexcept {
   auto out = "Current Player: " + std::to_string(player_) + '\n';
+  out += "Player 0 Cards: " + CARDS[p0_card0_].name + ", " +
+         CARDS[p0_card1_].name + '\n';
+  out += "Wainting Card: " + CARDS[waiting_card_].name + '\n';
+  out += "Player 1 Cards: " + CARDS[p1_card0_].name + ", " +
+         CARDS[p1_card1_].name + '\n';
   // TODO: add cards here.
   for (auto h = 0; h < HEIGHT; ++h) {
     for (auto w = 0; w < WIDTH; ++w) {
@@ -198,4 +235,4 @@ void OnitamiGS::play_move(uint32_t move) {
   return out;
 }
 
-}  // namespace alphazero::onitami_gs
+}  // namespace alphazero::onitama_gs

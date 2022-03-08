@@ -66,9 +66,9 @@ tawlbwrdd_gs_test = executable(
 )
 test('gtest tests', tawlbwrdd_gs_test)
 
-onitami_gs = library(
-    'onitami_gs',
-    'onitami_gs.cc',
+onitama_gs = library(
+    'onitama_gs',
+    'onitama_gs.cc',
     dependencies: [eigen_dep, absl_hash_dep, absl_container_dep],
 )
 
@@ -141,6 +141,6 @@ test('gtest tests', play_manager_test)
 py3_install.extension_module(
   'alphazero',
   sources: ['py_wrapper.cc'],
-  link_with: [connect4_gs, onitami_gs, brandubh_gs, opentafl_gs, tawlbwrdd_gs, play_manager],
+  link_with: [connect4_gs, onitama_gs, brandubh_gs, opentafl_gs, tawlbwrdd_gs, play_manager],
   dependencies : [pybind11_dep, py3_dep, eigen_dep, absl_container_dep, absl_hash_dep],
 )

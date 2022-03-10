@@ -13,8 +13,9 @@ NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'kernel_size', 'lr_miles
 
 
 def conv(in_channels, out_channels, stride=1, kernel_size=3):
+    assert kernel_size % 2 == 1, "kernel_size must be odd"
     return nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size,
-                     stride=stride, padding='same', bias=False)
+                     stride=stride, padding=kernel_size//2, bias=False)
 
 
 def conv1x1(in_channels, out_channels, stride=1):

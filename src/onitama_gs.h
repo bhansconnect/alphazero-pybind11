@@ -23,7 +23,6 @@ constexpr const int NUM_SYMMETRIES = 1;  // Eventually add these and make it 8.
 constexpr const std::array<int, 3> BOARD_SHAPE = {PIECE_TYPES, HEIGHT, WIDTH};
 constexpr const std::array<int, 3> CANONICAL_SHAPE = {11, HEIGHT, WIDTH};
 
-// TODO define card array.
 struct Card {
   std::string name;
   // movement relative to the piece that is valid in height, width format.
@@ -243,6 +242,12 @@ class OnitamaGS : public GameState {
       int wanted_player) noexcept;
   [[nodiscard]] std::pair<const int8_t*, const int8_t*> player_cards(
       int wanted_player) const noexcept;
+
+  [[nodiscard]] Card p0_card0() { return CARDS[p0_card0_]; }
+  [[nodiscard]] Card p0_card1() { return CARDS[p0_card1_]; }
+  [[nodiscard]] Card p1_card0() { return CARDS[p1_card0_]; }
+  [[nodiscard]] Card p1_card1() { return CARDS[p1_card1_]; }
+  [[nodiscard]] Card waiting_card() { return CARDS[waiting_card_]; }
 
  private:
   // Board contains a layer for each player.

@@ -226,16 +226,17 @@ if __name__ == '__main__':
                     try:
                         print(f'Enter {stuff}: ', end='')
                         selection = int(input())
-                        if selection == 0:
-                            return 0
-                        if 0 < selection <= max_stuff:
+                        if -1 <= selection <= max_stuff:
                             return selection
                         else:
                             raise Exception('Sad')
                     except KeyboardInterrupt:
                         exit()
                     except:
-                        print('You suck at typing numbers. Get Gut!')
+                        print('You suck at typing numbers. Get Gud!')
+
+            HEIGHT = Game.CANONICAL_SHAPE()[1]
+            WIDTH = Game.CANONICAL_SHAPE()[2]
 
             # def print_ref_board():
             #     for h in range(7):
@@ -255,6 +256,102 @@ if __name__ == '__main__':
             # # grow locaction
             # # seed from locaction
             # # seed to locaction
+
+            # Onitama
+            # while not valid:
+            #     P0_MASTER_LAYER = 0
+            #     P0_PAWN_LAYER = 1
+            #     P1_MASTER_LAYER = 2
+            #     P1_PAWN_LAYER = 3
+            #     p = gs.current_player()
+            #     if p == 0:
+            #         card0, card1 = gs.p0_card0(), gs.p0_card1()
+            #         master_layer, pawn_layer = P0_MASTER_LAYER, P0_PAWN_LAYER
+            #     else:
+            #         card0, card1 = gs.p1_card0(), gs.p1_card1()
+            #         master_layer, pawn_layer = P1_MASTER_LAYER, P1_PAWN_LAYER
+            #     choice = get_input_num(
+            #         f'0-undo, 1-{card0.name}, 2-{card1.name}, 3-wild card', 3)
+            #     if choice == 0:
+            #         if len(hist) == 1:
+            #             gs = hist[-1].copy()
+            #             hist = []
+            #         else:
+            #             gs = hist[-2].copy()
+            #             hist = hist[:-2]
+            #         move = -1
+            #         break
+            #     elif choice == 3:
+            #         move = get_input_num('anything(0-1252)', 1252)
+            #     else:
+            #         # Playing a card. Need to pick a piece.
+            #         if choice == 1:
+            #             card = card0
+            #         else:
+            #             card = card1
+            #         board = gs.canonicalized()
+            #         pieces = []
+            #         print()
+            #         for h in range(HEIGHT):
+            #             for w in range(WIDTH):
+            #                 if board[master_layer, h, w] or board[pawn_layer, h, w]:
+            #                     print(f'{len(pieces)}', end='')
+            #                     pieces.append((h, w))
+            #                 else:
+            #                     print('.', end='')
+            #             print()
+            #         piece = get_input_num(
+            #             f'select piece(0-{len(pieces)-1})', len(pieces)-1)
+            #         if piece == -1:
+            #             print()
+            #             print(gs)
+            #             continue
+            #         base = pieces[piece]
+            #         base_h, base_w = base
+            #         squares = []
+            #         for (h, w) in card.movements:
+            #             if p == 1:
+            #                 h *= -1
+            #                 w *= -1
+            #             h += base_h
+            #             w += base_w
+            #             if 0 <= h < HEIGHT and 0 <= w < WIDTH and board[master_layer, h, w] == 0 and board[pawn_layer, h, w] == 0:
+            #                 squares.append((h, w))
+            #         if len(squares) == 0:
+            #             print()
+            #             print("=== No valid moves with chosen card and piece ===")
+            #             print()
+            #             print(gs)
+            #             continue
+            #         print()
+            #         for h in range(HEIGHT):
+            #             for w in range(WIDTH):
+            #                 found = False
+            #                 for i, (to_h, to_w) in enumerate(squares):
+            #                     if h == to_h and w == to_w:
+            #                         print(f'{i}', end='')
+            #                         found = True
+            #                 if not found:
+            #                     print('.', end='')
+            #             print()
+            #         target = get_input_num(
+            #             f'select target(0-{len(squares)-1})', len(squares)-1)
+            #         if target == -1:
+            #             print()
+            #             print(gs)
+            #             continue
+            #         target_h, target_w = squares[target]
+            #         print(base)
+            #         print((target_h, target_w))
+            #         move = (choice-1) * (HEIGHT * WIDTH * HEIGHT * WIDTH) + base_h * (WIDTH *
+            #                                                                           HEIGHT * WIDTH) + base_w * (HEIGHT * WIDTH) + target_h * WIDTH + target_w
+            #     valid = valids[move]
+            #     if not valid:
+            #         print(f'Move {move} is not valid for some reason :(')
+            #         print()
+            #         print(gs)
+            # gs.play_move(move)
+            # continue
 
             # while not valid:
             #     choice = get_input_num(
@@ -317,13 +414,10 @@ if __name__ == '__main__':
             # if move != -1:
             #     gs.play_move(move)
 
-            HEIGHT = Game.CANONICAL_SHAPE()[1]
-            WIDTH = Game.CANONICAL_SHAPE()[2]
-
-            def gen_move(from_h, from_w, h_move, to_loc):
-                if h_move:
-                    return (from_h * WIDTH + from_w) * (WIDTH + HEIGHT) + WIDTH + to_loc
-                return (from_h * WIDTH + from_w) * (WIDTH + HEIGHT) + to_loc
+            # def gen_move(from_h, from_w, h_move, to_loc):
+            #     if h_move:
+            #         return (from_h * WIDTH + from_w) * (WIDTH + HEIGHT) + WIDTH + to_loc
+            #     return (from_h * WIDTH + from_w) * (WIDTH + HEIGHT) + to_loc
 
             # move = -1
             # while not valid:

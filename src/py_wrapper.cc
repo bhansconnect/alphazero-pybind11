@@ -267,9 +267,19 @@ PYBIND11_MODULE(alphazero, m) {
           },
           py::call_guard<py::gil_scoped_release>());
 
+  py::class_<onitama_gs::Card>(m, "OnitamaCard")
+      .def_readonly("name", &onitama_gs::Card::name)
+      .def_readonly("movements", &onitama_gs::Card::movements)
+      .def_readonly("starting_player", &onitama_gs::Card::starting_player);
+
   py::class_<OnitamaGS, GameState>(m, "OnitamaGS")
       .def(py::init<>())
       .def(py::init<uint16_t>())
+      .def("p0_card0", &onitama_gs::OnitamaGS::p0_card0)
+      .def("p0_card1", &onitama_gs::OnitamaGS::p0_card1)
+      .def("p1_card0", &onitama_gs::OnitamaGS::p1_card0)
+      .def("p1_card1", &onitama_gs::OnitamaGS::p1_card1)
+      .def("waiting_card", &onitama_gs::OnitamaGS::waiting_card)
       .def_static("NUM_PLAYERS", [] { return onitama_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return onitama_gs::NUM_MOVES; })
       .def_static("NUM_SYMMETRIES", [] { return onitama_gs::NUM_SYMMETRIES; })

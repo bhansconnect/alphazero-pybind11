@@ -269,13 +269,14 @@ start = 0
 iters = 200
 depth = 4
 channels = 12
+kernel_size = 5
 dense_net = True
 nn_selfplay_mcts_depth = 450
 nn_selfplay_fast_mcts_depth = 75
 nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 lr_milestone = 150
-run_name = f'{depth}d-{channels}c-{nn_selfplay_mcts_depth}sims'
+run_name = f'{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
 Game = alphazero.OnitamaGS
 
 
@@ -725,7 +726,7 @@ if __name__ == '__main__':
 
     writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
-        num_channels=channels, depth=depth, lr_milestone=lr_milestone, dense_net=dense_net)
+        num_channels=channels, depth=depth, lr_milestone=lr_milestone, dense_net=dense_net, kernel_size=kernel_size)
 
     if start == 0:
         create_init_net(Game, nnargs)

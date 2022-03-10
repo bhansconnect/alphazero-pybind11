@@ -8,29 +8,33 @@ from tqdm import tqdm
 import numpy as np
 from load_lib import load_alphazero
 
-NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'lr_milestone', 'dense_net',
+NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'kernel_size', 'lr_milestone', 'dense_net',
                                'lr', 'cv', 'cuda'], defaults=(40, False, 0.01, 1.5, torch.cuda.is_available()))
 
 
+def conv(in_channels, out_channels, stride=1, kernel_size=3):
+    return nn.Conv2d(in_channels, out_channels, kernel_size=3,
+                     stride=stride, padding='same', bias=False)
+
+
 def conv1x1(in_channels, out_channels, stride=1):
-    return nn.Conv2d(in_channels, out_channels, kernel_size=1,
-                     stride=stride, padding=0, bias=False)
+    return conv(in_channels, out_channels, stride, 1)
 
 
 def conv3x3(in_channels, out_channels, stride=1):
-    return nn.Conv2d(in_channels, out_channels, kernel_size=3,
-                     stride=stride, padding=1, bias=False)
+    return conv(in_channels, out_channels, stride, 3)
 
 
 class DenseBlock(nn.Module):
-    def __init__(self, in_channels, growth_rate, bn_size=4):
+    def __init__(self, in_channels, growth_rate, bn_size=4, kernel_size=3):
         super(DenseBlock, self).__init__()
         self.bn1 = nn.BatchNorm2d(in_channels)
         self.relu1 = nn.ReLU(inplace=True)
         self.conv1 = conv1x1(in_channels, growth_rate*bn_size, 1)
         self.bn2 = nn.BatchNorm2d(growth_rate*bn_size)
         self.relu2 = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3(growth_rate*bn_size, growth_rate)
+        self.conv2 = conv(growth_rate*bn_size, growth_rate,
+                          kernel_size=kernel_size)
 
     def forward(self, x):
         out = self.bn1(x)
@@ -44,7 +48,7 @@ class DenseBlock(nn.Module):
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, downsample=False):
+    def __init__(self, in_channels, out_channels, downsample=False, kernel_size=3):
         super(ResidualBlock, self).__init__()
         stride = 1
         if downsample:
@@ -54,10 +58,11 @@ class ResidualBlock(nn.Module):
         self.downsample = downsample
         self.bn1 = nn.BatchNorm2d(in_channels)
         self.relu1 = nn.ReLU(inplace=True)
-        self.conv1 = conv3x3(in_channels, out_channels, stride)
+        self.conv1 = conv(in_channels, out_channels,
+                          stride, kernel_size=kernel_size)
         self.bn2 = nn.BatchNorm2d(out_channels)
         self.relu2 = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3(out_channels, out_channels)
+        self.conv2 = conv(out_channels, out_channels, kernel_size=kernel_size)
 
     def forward(self, x):
         residual = x
@@ -83,17 +88,18 @@ class NNArch(nn.Module):
         self.dense_net = args.dense_net
 
         if not self.dense_net:
-            self.conv1 = conv3x3(in_channels, args.num_channels)
+            self.conv1 = conv(in_channels, args.num_channels,
+                              kernel_size=args.kernel_size)
             self.bn1 = nn.BatchNorm2d(args.num_channels)
 
         self.layers = []
         for i in range(args.depth):
             if self.dense_net:
                 self.layers.append(DenseBlock(
-                    in_channels + args.num_channels*i, args.num_channels))
+                    in_channels + args.num_channels*i, args.num_channels, kernel_size=args.kernel_size))
             else:
                 self.layers.append(ResidualBlock(
-                    args.num_channels, args.num_channels))
+                    args.num_channels, args.num_channels, kernel_size=args.kernel_size))
         self.conv_layers = nn.Sequential(*self.layers)
 
         if self.dense_net:

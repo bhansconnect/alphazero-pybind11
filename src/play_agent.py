@@ -350,6 +350,8 @@ if __name__ == '__main__':
             #         print(f'Move {move} is not valid for some reason :(')
             #         print()
             #         print(gs)
+            # if move == -1:
+            #     continue
             # gs.play_move(move)
             # continue
 

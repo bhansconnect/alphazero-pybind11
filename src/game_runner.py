@@ -878,7 +878,11 @@ if __name__ == '__main__':
                 f'Average Game Length/vs Panel', panel_game_length, next_net)
             panel_win_rate = panel_nn_rate + panel_draw_rate/Game.NUM_PLAYERS()
             postfix['vs panel'] = panel_win_rate
-            if panel_win_rate > GATING_PANEL_WIN_RATE and best_win_rate > GATING_BEST_WIN_RATE:
+            # If the panel is not full sized, accept only based on the best win rate.
+            wanted_panel_win_rate = GATING_PANEL_WIN_RATE
+            if len(panel) < GATING_PANEL_SIZE:
+                wanted_panel_win_rate = GATING_BEST_WIN_RATE
+            if panel_win_rate > wanted_panel_win_rate and best_win_rate > GATING_BEST_WIN_RATE:
                 current_best = next_net
                 postfix['best'] = current_best
                 pbar.set_postfix(postfix)

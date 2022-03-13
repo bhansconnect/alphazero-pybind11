@@ -5,7 +5,7 @@
 namespace alphazero::onitama_gs {
 
 // Hopefully this is large enough that it practically never gets hit.
-constexpr const uint16_t DEFAULT_MAX_TURNS = 400;
+constexpr const uint16_t DEFAULT_MAX_TURNS = 150;
 
 constexpr const int P0_MASTER_LAYER = 0;
 constexpr const int P0_PAWN_LAYER = 1;

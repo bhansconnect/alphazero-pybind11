@@ -52,9 +52,9 @@ if __name__ == '__main__':
     rand_agents = []
     agents = rand_agents + nn_agents
 
-    Game = alphazero.Connect4GS
+    Game = alphazero.OnitamaGS
     bs = 64
-    nn_mtcs_depth = 500
+    nn_mtcs_depth = 600
 
     count = len(agents)
     print(agents)

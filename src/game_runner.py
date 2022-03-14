@@ -880,7 +880,8 @@ if __name__ == '__main__':
             postfix['vs panel'] = panel_win_rate
             # Scale panel win rate based on size of the panel.
             panel_ratio = len(panel) / GATING_PANEL_SIZE
-            wanted_panel_win_rate = (GATING_PANEL_WIN_RATE * panel_ratio) + (GATING_BEST_WIN_RATE * (1.0 - panel_ratio))
+            wanted_panel_win_rate = (
+                GATING_PANEL_WIN_RATE * panel_ratio) + (GATING_BEST_WIN_RATE * (1.0 - panel_ratio))
             if panel_win_rate > wanted_panel_win_rate and best_win_rate > GATING_BEST_WIN_RATE:
                 current_best = next_net
                 postfix['best'] = current_best

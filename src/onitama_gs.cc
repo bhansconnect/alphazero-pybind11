@@ -8,8 +8,8 @@ namespace alphazero::onitama_gs {
                                      max_turns_);
 }
 
-[[nodiscard]] bool OnitamaGS::operator==(const GameState& other) const
-    noexcept {
+[[nodiscard]] bool OnitamaGS::operator==(
+    const GameState& other) const noexcept {
   const auto* other_cs = dynamic_cast<const OnitamaGS*>(&other);
   if (other_cs == nullptr) {
     return false;
@@ -192,7 +192,7 @@ void OnitamaGS::play_move(uint32_t move) {
   offset += 2;
 
   // Zero card planes before setting specific indices.
-  for (auto i = 0; i < 5; ++i) {
+  for (auto i = 0; i < 10; ++i) {
     for (auto h = 0; h < HEIGHT; ++h) {
       for (auto w = 0; w < WIDTH; ++w) {
         out(offset + i, h, w) = 0;
@@ -200,13 +200,13 @@ void OnitamaGS::play_move(uint32_t move) {
     }
   }
 
-  // TOOD: Investigate if cards should be viewed with player perspective or if
-  // the board should rotated.
   for (const auto& card_index :
        {p0_card0_, p0_card1_, waiting_card_, p1_card0_, p1_card1_}) {
     const auto& card = CARDS[card_index];
     for (const auto& move : card.movements) {
       out(offset, WIDTH / 2 + move.first, HEIGHT / 2 + move.second) = 1;
+      // Card from other player perspective.
+      out(offset + 5, WIDTH / 2 - move.first, HEIGHT / 2 - move.second) = 1;
     }
     ++offset;
   }
@@ -214,11 +214,103 @@ void OnitamaGS::play_move(uint32_t move) {
   return out;
 }
 
+[[nodiscard]] PlayHistory swap_cards(const PlayHistory& base,
+                                     uint8_t player) noexcept {
+  static_assert(CANONICAL_SHAPE[0] == 16,
+                "this function must be updated when dimensions change");
+  PlayHistory mirror;
+  mirror.v = base.v;
+  mirror.canonical = CanonicalTensor{};
+  for (auto p = 0; p < PIECE_TYPES; ++p) {
+    for (auto h = 0; h < HEIGHT; ++h) {
+      for (auto w = 0; w < WIDTH; ++w) {
+        mirror.canonical(p, h, w) = base.canonical(p, h, w);
+      }
+    }
+  }
+  int offset = PIECE_TYPES;
+  for (auto h = 0; h < HEIGHT; ++h) {
+    for (auto w = 0; w < WIDTH; ++w) {
+      mirror.canonical(offset, h, w) = base.canonical(offset, h, w);
+      mirror.canonical(offset + 1, h, w) = base.canonical(offset + 1, h, w);
+    }
+  }
+  uint8_t current_player = mirror.canonical(offset + 1, 0, 0);
+
+  offset += 2;
+  auto second_offset = offset + 5;
+  if (player == 0) {
+    // swap p0 cards, which is the first 2.
+    for (auto h = 0; h < HEIGHT; ++h) {
+      for (auto w = 0; w < WIDTH; ++w) {
+        mirror.canonical(offset, h, w) = base.canonical(offset + 1, h, w);
+        mirror.canonical(offset + 1, h, w) = base.canonical(offset, h, w);
+        mirror.canonical(offset + 2, h, w) = base.canonical(offset + 2, h, w);
+        mirror.canonical(offset + 3, h, w) = base.canonical(offset + 3, h, w);
+        mirror.canonical(offset + 4, h, w) = base.canonical(offset + 4, h, w);
+        // Also swap the second versions of the cards
+        mirror.canonical(second_offset, h, w) =
+            base.canonical(second_offset + 1, h, w);
+        mirror.canonical(second_offset + 1, h, w) =
+            base.canonical(second_offset, h, w);
+        mirror.canonical(second_offset + 2, h, w) =
+            base.canonical(second_offset + 2, h, w);
+        mirror.canonical(second_offset + 3, h, w) =
+            base.canonical(second_offset + 3, h, w);
+        mirror.canonical(second_offset + 4, h, w) =
+            base.canonical(second_offset + 4, h, w);
+      }
+    }
+  } else {
+    // swap p1 cards, which are the last 2.
+    for (auto h = 0; h < HEIGHT; ++h) {
+      for (auto w = 0; w < WIDTH; ++w) {
+        mirror.canonical(offset, h, w) = base.canonical(offset, h, w);
+        mirror.canonical(offset + 1, h, w) = base.canonical(offset + 1, h, w);
+        mirror.canonical(offset + 2, h, w) = base.canonical(offset + 2, h, w);
+        mirror.canonical(offset + 3, h, w) = base.canonical(offset + 4, h, w);
+        mirror.canonical(offset + 4, h, w) = base.canonical(offset + 3, h, w);
+        // Also swap the second versions of the cards
+        mirror.canonical(second_offset, h, w) =
+            base.canonical(second_offset, h, w);
+        mirror.canonical(second_offset + 1, h, w) =
+            base.canonical(second_offset + 1, h, w);
+        mirror.canonical(second_offset + 2, h, w) =
+            base.canonical(second_offset + 2, h, w);
+        mirror.canonical(second_offset + 3, h, w) =
+            base.canonical(second_offset + 4, h, w);
+        mirror.canonical(second_offset + 4, h, w) =
+            base.canonical(second_offset + 3, h, w);
+      }
+    }
+  }
+  mirror.pi = Vector<float>{NUM_MOVES};
+  if (current_player == player) {
+    // We need to update the actions do to swapping the current players cards.
+    // swap first and second WIDTH * HEIGHT * WIDTH * HEIGHT move
+    auto size = WIDTH * HEIGHT * WIDTH * HEIGHT;
+    for (auto i = 0; i < size; ++i) {
+      mirror.pi(i) = base.pi(i + size);
+      mirror.pi(i + size) = base.pi(i);
+    }
+    // Also swap last 2 moves.
+    mirror.pi(NUM_MOVES - 2) = base.pi(NUM_MOVES - 1);
+    mirror.pi(NUM_MOVES - 1) = base.pi(NUM_MOVES - 2);
+  } else {
+    // No need to update the action space.
+    for (auto i = 0; i < NUM_MOVES; ++i) {
+      mirror.pi(i) = base.pi(i);
+    }
+  }
+  return mirror;
+}
+
 [[nodiscard]] std::vector<PlayHistory> OnitamaGS::symmetries(
     const PlayHistory& base) const noexcept {
-  // TODO: Eventually add symmetries.
-  std::vector<PlayHistory> syms{base};
-  return syms;
+  PlayHistory p0_swap = swap_cards(base, 0);
+  PlayHistory p1_swap = swap_cards(base, 1);
+  PlayHistory both_swap = swap_cards(p0_swap, 1);
+  return {base, p0_swap, p1_swap, both_swap};
 }
 
 [[nodiscard]] std::string OnitamaGS::dump() const noexcept {

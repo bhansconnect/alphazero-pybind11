@@ -157,7 +157,9 @@ def main():
 
     np.set_printoptions(precision=3, suppress=True)
     nn_folder = 'data/checkpoint'
-    all_nn_paths = sorted(glob.glob(os.path.join(nn_folder, '*.pt')))
+    base_params = '4d-12c-5k'
+    all_nn_paths = sorted(
+        glob.glob(os.path.join(nn_folder, f'*-{base_params}-*.pt')))
     chunksize = max(len(all_nn_paths)//MODEL_COUNT, 1)
     selected_nn_paths = list(
         reversed(list(reversed(all_nn_paths))[::chunksize]))
@@ -176,9 +178,9 @@ def main():
         for i in range(ANALYSIS_GAMES):
             gs = Game()
             while gs.scores() is None:
-                print(f'Network: {agent_id + 1:3d}/{agent_count:3d}')
-                print(f'Game: {i+1:3d}/{ANALYSIS_GAMES:3d}')
                 print()
+                print(f'Network: {agent_id + 1:3d}/{agent_count:3d}')
+                print(f'Game:    {i+1:3d}/{ANALYSIS_GAMES:3d}')
                 print(gs)
                 rand = playout_analysis(gs, nn, agent_id)
                 print()

@@ -172,16 +172,12 @@ def main():
     move_count = np.zeros(agent_count)
 
     for agent_id, nn_file in enumerate(nn_files):
-        print(f'Using network: {nn_file}')
         nn = neural_net.NNWrapper.load_checkpoint(Game, nn_folder, nn_file)
         for i in range(ANALYSIS_GAMES):
-            print(f'========== Starting game: {i+1:2d} ==========')
             gs = Game()
-            pc = 0
-            hist = []
             while gs.scores() is None:
-                hist.append(gs.copy())
-                print()
+                print(f'Network: {agent_id + 1:3d}/{agent_count:3d}')
+                print(f'Game: {i+1:3d}/{ANALYSIS_GAMES:3d}')
                 print()
                 print(gs)
                 rand = playout_analysis(gs, nn, agent_id)

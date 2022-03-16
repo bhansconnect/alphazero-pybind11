@@ -74,7 +74,7 @@ def update_analysis(predictions, oracle_predictions, agent_id):
         best_move_change[agent_id, i] += 100 * \
             (pi[best_move] - predictions[0][best_move])
         if best_move != np.argmax(pi):
-            move_changed[agent_id, i] += 1
+            move_changed[agent_id, i] += 100
 
 
 def playout_analysis(gs, nn_folder, nn_files):
@@ -117,7 +117,7 @@ def finalize_analysis(nn_files):
     move_changed_per_visit = move_changed_per_visit[:,
                                                     0, np.newaxis] - move_changed_per_visit
     for agent_id in range(len(nn_files)):
-        for i in range(1, len(policy_loss)):
+        for i in range(1, len(policy_loss[agent_id])):
             loss_per_visit[agent_id, i] /= i*ANALYSIS_GROUPING
             if loss_per_visit[agent_id, i] < 0:
                 loss_per_visit[agent_id, i] = 0
@@ -137,18 +137,21 @@ def finalize_analysis(nn_files):
     plt.title('Loss change per one visits')
     for i, name in enumerate(nn_files):
         plt.plot(visits[1:], loss_per_visit[i, 1:], label=name)
+    plt.legend()
     plt.ylabel('loss change')
     plt.xlabel('visits')
     plt.subplot(223)
     plt.title('Best move change vs visits')
     for i, name in enumerate(nn_files):
         plt.plot(visits, best_move_change[i], label=name)
+    plt.legend()
     plt.ylabel('percent')
     plt.xlabel('visits')
     plt.subplot(224)
     plt.title('Best move change per one visits')
     for i, name in enumerate(nn_files):
         plt.plot(visits[1:], best_move_change_per_visit[i, 1:], label=name)
+    plt.legend()
     plt.ylabel('percent change')
     plt.xlabel('visits')
 
@@ -156,12 +159,14 @@ def finalize_analysis(nn_files):
     plt.subplot(211)
     for i, name in enumerate(nn_files):
         plt.plot(visits, move_changed[i], label=name)
+    plt.legend()
     plt.title('Selected move change percent')
     plt.ylabel('percent')
     plt.xlabel('visits')
     plt.subplot(212)
     for i, name in enumerate(nn_files):
         plt.plot(visits[1:], move_changed_per_visit[i, 1:], label=name)
+    plt.legend()
     plt.title('Selected move change percent')
     plt.ylabel('percent change')
     plt.xlabel('visits')

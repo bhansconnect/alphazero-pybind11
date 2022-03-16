@@ -3,6 +3,7 @@ import os
 import torch
 import numpy as np
 import time
+import neural_net
 from load_lib import load_alphazero
 
 alphazero = load_alphazero()
@@ -42,11 +43,7 @@ def kl_divergence(target, actual, epsilon=1e9):
     return out
 
 
-def playout_analysis(gs, agent, agent_id):
-    global policy_loss
-    global best_move_change
-    global move_changed
-    global move_count
+def mcts_predictions(gs, agent):
     mcts = alphazero.MCTS(CPUCT, gs.num_players(),
                           gs.num_moves(), 0, 1.4, 0.25)
     _, raw_pi = agent.predict(torch.from_numpy(gs.canonicalized()))
@@ -60,20 +57,44 @@ def playout_analysis(gs, agent, agent_id):
         if (i+1) % ANALYSIS_GROUPING == 0:
             predictions.append(mcts.probs(1.0))
 
-    best_move = np.argmax(predictions[-1])
+    probs = mcts.probs(calc_temp(gs.current_turn()))
+    rand = np.random.choice(probs.shape[0], p=probs)
+    return (predictions, rand)
+
+
+def update_analysis(predictions, oracle_predictions, agent_id):
+    global policy_loss
+    global best_move_change
+    global move_changed
+    best_move = np.argmax(oracle_predictions[-1])
     for i, pi in enumerate(predictions):
         e = 1e-9 if i == 0 else 1.0/MAX_ANALYSIS_PLAYOUTS
-        policy_loss[agent_id, i] += kl_divergence(predictions[-1], pi, e)
+        policy_loss[agent_id,
+                    i] += kl_divergence(oracle_predictions[-1], pi, e)
         best_move_change[agent_id, i] += 100 * \
             (pi[best_move] - predictions[0][best_move])
         if best_move != np.argmax(pi):
             move_changed[agent_id, i] += 1
 
-    move_count[agent_id] += 1
 
-    probs = mcts.probs(calc_temp(gs.current_turn()))
-    rand = np.random.choice(probs.shape[0], p=probs)
-    return rand
+def playout_analysis(gs, nn_folder, nn_files):
+    global move_count
+    oracle = neural_net.NNWrapper.load_checkpoint(
+        Game, nn_folder, nn_files[-1])
+    (oracle_predictions, chosen_move) = mcts_predictions(gs, oracle)
+    del oracle
+    update_analysis(oracle_predictions, oracle_predictions, -1)
+
+    for agent_id, nn_file in enumerate(nn_files[0:-1]):
+        agent = neural_net.NNWrapper.load_checkpoint(
+            Game, nn_folder, nn_file)
+        (predictions, _) = mcts_predictions(gs, agent)
+        del agent
+
+        update_analysis(predictions, oracle_predictions, agent_id)
+
+    move_count += 1
+    return chosen_move
 
 
 def finalize_analysis(nn_files):
@@ -83,9 +104,9 @@ def finalize_analysis(nn_files):
     global move_changed
     global move_count
     for agent_id in range(len(nn_files)):
-        policy_loss[agent_id] /= move_count[agent_id, np.newaxis]
-        best_move_change[agent_id] /= move_count[agent_id, np.newaxis]
-        move_changed[agent_id] /= move_count[agent_id, np.newaxis]
+        policy_loss[agent_id] /= move_count
+        best_move_change[agent_id] /= move_count
+        move_changed[agent_id] /= move_count
     visits = list(range(0, MAX_ANALYSIS_PLAYOUTS, ANALYSIS_GROUPING))
     visits.append(MAX_ANALYSIS_PLAYOUTS)
 
@@ -152,8 +173,6 @@ def main():
     global best_move_change
     global move_changed
     global move_count
-    import neural_net
-    import game_runner
 
     np.set_printoptions(precision=3, suppress=True)
     nn_folder = 'data/checkpoint'
@@ -167,27 +186,27 @@ def main():
     print(nn_files)
     agent_count = len(nn_files)
 
+    # Note, the last network is considered the oracle.
+    # Its moves are used for testing how good the other networks are.
+
     groups = (MAX_ANALYSIS_PLAYOUTS // ANALYSIS_GROUPING+1)
     policy_loss = np.full((agent_count, groups), 0, dtype=float)
     best_move_change = np.full((agent_count, groups), 0, dtype=float)
     move_changed = np.full((agent_count, groups), 0, dtype=float)
-    move_count = np.zeros(agent_count)
+    move_count = 0
 
-    for agent_id, nn_file in enumerate(nn_files):
-        nn = neural_net.NNWrapper.load_checkpoint(Game, nn_folder, nn_file)
-        for i in range(ANALYSIS_GAMES):
-            gs = Game()
-            while gs.scores() is None:
-                print()
-                print(f'Network: {agent_id + 1:3d}/{agent_count:3d}')
-                print(f'Game:    {i+1:3d}/{ANALYSIS_GAMES:3d}')
-                print(gs)
-                rand = playout_analysis(gs, nn, agent_id)
-                print()
-
-                gs.play_move(rand)
+    for i in range(ANALYSIS_GAMES):
+        gs = Game()
+        while gs.scores() is None:
+            print()
+            print(f'Game:    {i+1:3d}/{ANALYSIS_GAMES:3d}')
             print(gs)
-            print(gs.scores())
+            rand = playout_analysis(gs, nn_folder, nn_files)
+            print()
+
+            gs.play_move(rand)
+        print(gs)
+        print(gs.scores())
     finalize_analysis(nn_files)
 
 

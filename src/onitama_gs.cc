@@ -5,7 +5,7 @@ namespace alphazero::onitama_gs {
 [[nodiscard]] std::unique_ptr<GameState> OnitamaGS::copy() const noexcept {
   return std::make_unique<OnitamaGS>(board_, player_, p0_card0_, p0_card1_,
                                      p1_card0_, p1_card1_, waiting_card_, turn_,
-                                     max_turns_);
+                                     num_cards_, max_turns_);
 }
 
 [[nodiscard]] bool OnitamaGS::operator==(

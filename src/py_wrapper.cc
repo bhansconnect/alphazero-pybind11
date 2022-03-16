@@ -274,7 +274,8 @@ PYBIND11_MODULE(alphazero, m) {
 
   py::class_<OnitamaGS, GameState>(m, "OnitamaGS")
       .def(py::init<>())
-      .def(py::init<uint16_t>())
+      .def(py::init<uint8_t>())
+      .def(py::init<uint8_t, uint16_t>())
       .def("p0_card0", &onitama_gs::OnitamaGS::p0_card0)
       .def("p0_card1", &onitama_gs::OnitamaGS::p0_card1)
       .def("p1_card0", &onitama_gs::OnitamaGS::p1_card0)

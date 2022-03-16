@@ -280,6 +280,12 @@ run_name = f'{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
 Game = alphazero.OnitamaGS
 
 
+# When you change game, define initialization here.
+# For example some games could change version or exact ruleset here.
+def new_game():
+    return Game()
+
+
 def base_params(Game, start_temp, bs, cb):
     params = alphazero.PlayParams()
     params.max_cache_size = MAX_CACHE_SIZE
@@ -387,7 +393,7 @@ if __name__ == '__main__':
         for i in tqdm.trange(sample_count, desc='Creating Symmetric Samples', leave=False):
             c, v, pi = dataset[i]
             ph = alphazero.PlayHistory(c, v, pi)
-            syms = Game().symmetries(ph)
+            syms = new_game().symmetries(ph)
             for sym in syms:
                 c_out[i_out] = torch.from_numpy(np.array(sym.canonical()))
                 v_out[i_out] = torch.from_numpy(np.array(sym.v()))
@@ -593,7 +599,7 @@ if __name__ == '__main__':
             nn = neural_net.NNWrapper.load_checkpoint(
                 Game, 'data/checkpoint', f'{best:04d}-{run_name}.pt')
 
-        pm = alphazero.PlayManager(Game(), params)
+        pm = alphazero.PlayManager(new_game(), params)
         grargs = GRArgs(title='Self Play', game=Game, iteration=iteration,
                         max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS, cuda=not use_rand)
 
@@ -637,7 +643,7 @@ if __name__ == '__main__':
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
                 params.mcts_depth = [depth] * Game.NUM_PLAYERS()
-                pm = alphazero.PlayManager(Game(), params)
+                pm = alphazero.PlayManager(new_game(), params)
 
                 grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
                                 max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
@@ -661,7 +667,7 @@ if __name__ == '__main__':
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
                 params.mcts_depth = [depth] * Game.NUM_PLAYERS()
-                pm = alphazero.PlayManager(Game(), params)
+                pm = alphazero.PlayManager(new_game(), params)
 
                 grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
                                 max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
@@ -693,7 +699,7 @@ if __name__ == '__main__':
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
                 params.mcts_depth = [depth] * Game.NUM_PLAYERS()
-                pm = alphazero.PlayManager(Game(), params)
+                pm = alphazero.PlayManager(new_game(), params)
 
                 grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
                                 max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)

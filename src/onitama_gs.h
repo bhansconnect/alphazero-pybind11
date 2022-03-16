@@ -48,9 +48,9 @@ const std::array<Card, NUM_CARDS> generate_cards() {
   cards[2].movements = {{1, 0}, {0, 2}, {0, -2}};
   cards[2].starting_player = 0;
 
-  cards[3].name = "GOOSE";
-  cards[3].movements = {{1, 1}, {-1, -1}, {0, 1}, {0, -1}};
-  cards[3].starting_player = 0;
+  cards[3].name = "ROOSTER";
+  cards[3].movements = {{-1, 1}, {1, -1}, {0, 1}, {0, -1}};
+  cards[3].starting_player = 1;
 
   cards[4].name = "MONKEY";
   cards[4].movements = {{1, 1}, {-1, -1}, {1, -1}, {-1, 1}};
@@ -64,9 +64,9 @@ const std::array<Card, NUM_CARDS> generate_cards() {
   cards[6].movements = {{-1, -1}, {-1, 1}, {1, 0}};
   cards[6].starting_player = 0;
 
-  cards[7].name = "EEL";
-  cards[7].movements = {{1, 1}, {-1, 1}, {0, -1}};
-  cards[7].starting_player = 0;
+  cards[7].name = "COBRA";
+  cards[7].movements = {{0, 1}, {1, -1}, {-1, -1}};
+  cards[7].starting_player = 1;
 
   cards[8].name = "DRAGON";
   cards[8].movements = {{1, 2}, {1, -2}, {-1, 1}, {-1, -1}};
@@ -80,9 +80,9 @@ const std::array<Card, NUM_CARDS> generate_cards() {
   cards[10].movements = {{1, 1}, {1, -1}, {0, 1}, {0, -1}};
   cards[10].starting_player = 1;
 
-  cards[11].name = "ROOSTER";
-  cards[11].movements = {{-1, 1}, {1, -1}, {0, 1}, {0, -1}};
-  cards[11].starting_player = 1;
+  cards[11].name = "GOOSE";
+  cards[11].movements = {{1, 1}, {-1, -1}, {0, 1}, {0, -1}};
+  cards[11].starting_player = 0;
 
   cards[12].name = "MANTIS";
   cards[12].movements = {{1, 1}, {1, -1}, {-1, 0}};
@@ -96,9 +96,9 @@ const std::array<Card, NUM_CARDS> generate_cards() {
   cards[14].movements = {{1, 0}, {0, 1}, {0, -1}};
   cards[14].starting_player = 1;
 
-  cards[15].name = "COBRA";
-  cards[15].movements = {{0, 1}, {1, -1}, {-1, -1}};
-  cards[15].starting_player = 1;
+  cards[15].name = "EEL";
+  cards[15].movements = {{1, 1}, {-1, 1}, {0, -1}};
+  cards[15].starting_player = 0;
 
   return cards;
 }
@@ -115,7 +115,10 @@ using CanonicalTensor =
 
 class OnitamaGS : public GameState {
  public:
-  OnitamaGS(uint16_t max_turns = DEFAULT_MAX_TURNS) : max_turns_(max_turns) {
+  OnitamaGS(uint8_t num_cards = 16, uint16_t max_turns = DEFAULT_MAX_TURNS)
+      : num_cards_(num_cards), max_turns_(max_turns) {
+    assert((num_cards == 8 || num_cards == 16) &&
+           "onitama must be played with 8 (simplified) or 16 (full) cards");
     board_.setZero();
 
     // Masters
@@ -135,9 +138,10 @@ class OnitamaGS : public GameState {
   }
   OnitamaGS(BoardTensor board, int8_t player, int8_t p0_card1, int8_t p0_card2,
             int8_t p1_card1, int8_t p1_card2, int8_t waiting_card,
-            uint16_t turn, uint16_t max_turns)
+            uint16_t turn, uint8_t num_cards, uint16_t max_turns)
       : board_(board),
         turn_(turn),
+        num_cards_(num_cards),
         max_turns_(max_turns),
         player_(player),
         p0_card0_(p0_card1),
@@ -147,9 +151,11 @@ class OnitamaGS : public GameState {
         waiting_card_(waiting_card) {}
   OnitamaGS(BoardTensor&& board, int8_t player, int8_t p0_card1,
             int8_t p0_card2, int8_t p1_card1, int8_t p1_card2,
-            int8_t waiting_card, uint16_t turn, uint16_t max_turns)
+            int8_t waiting_card, uint16_t turn, uint8_t num_cards,
+            uint16_t max_turns)
       : board_(std::move(board)),
         turn_(turn),
+        num_cards_(num_cards),
         max_turns_(max_turns),
         player_(player),
         p0_card0_(p0_card1),
@@ -160,9 +166,10 @@ class OnitamaGS : public GameState {
 
   void randomize_start() noexcept override {
     // Randomly select 5 cards to play with.
-    std::array<int8_t, NUM_CARDS> permutation;
-    for (int i = 0; i < NUM_CARDS; ++i) {
-      permutation[i] = i;
+    std::vector<int8_t> permutation;
+    permutation.reserve(num_cards_);
+    for (int i = 0; i < num_cards_; ++i) {
+      permutation.push_back(i);
     }
 
     std::random_device rd;
@@ -254,6 +261,7 @@ class OnitamaGS : public GameState {
   // A 0 means no piece, a 1 means a piece for that player.
   BoardTensor board_{};
   uint16_t turn_{0};
+  uint8_t num_cards_;
   uint16_t max_turns_;
   int8_t player_;
   int8_t p0_card0_;

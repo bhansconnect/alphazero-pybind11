@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string_view>
+
 #include "game_state.h"
 
 namespace alphazero::onitama_gs {
@@ -33,73 +35,263 @@ struct Card {
   int8_t starting_player;
 };
 
-constexpr const int NUM_CARDS = 16;
+using CardImage = std::array<std::array<int8_t, 5>, 5>;
+
+struct CardSpec {
+  std::string_view name;
+  CardImage image;
+  int8_t starting_player;
+};
+
+constexpr const int NUM_CARDS = 32;
+constexpr std::array<CardSpec, NUM_CARDS> CARD_SPECS = {
+    CardSpec{.name = "TIGER",
+             .image = {{{{0, 0, 1, 0, 0}},
+                        {{0, 0, 0, 0, 0}},
+                        {{0, 0, 2, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "FROG",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 1, 0, 0, 0}},
+                        {{1, 0, 2, 0, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "CRAB",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{1, 0, 2, 0, 1}},
+                        {{0, 0, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "ROOSTER",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 1, 2, 1, 0}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "MONKEY",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 1, 0, 1, 0}},
+                        {{0, 0, 2, 0, 0}},
+                        {{0, 1, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "HORSE",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{0, 1, 2, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "CRANE",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{0, 0, 2, 0, 0}},
+                        {{0, 1, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "COBRA",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 1, 2, 0, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "DRAGON",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{1, 0, 0, 0, 1}},
+                        {{0, 0, 2, 0, 0}},
+                        {{0, 1, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "RABBIT",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 0, 2, 0, 1}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "ELEPHANT",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 1, 0, 1, 0}},
+                        {{0, 1, 2, 1, 0}},
+                        {{0, 0, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "GOOSE",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 1, 2, 1, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "MANTIS",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 1, 0, 1, 0}},
+                        {{0, 0, 2, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "OX",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{0, 0, 2, 1, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "BOAR",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{0, 1, 2, 1, 0}},
+                        {{0, 0, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "EEL",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 0, 2, 1, 0}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "SEA SNAKE",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{0, 0, 2, 0, 1}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "OTTER",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 0, 2, 0, 1}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "TANUKI",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 1, 0, 1}},
+                        {{0, 0, 2, 0, 0}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "RAT",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{0, 1, 2, 0, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "PANDA",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 1, 1, 0}},
+                        {{0, 0, 2, 0, 0}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "DOG",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 1, 2, 0, 0}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "KIRIN",
+             .image = {{{{0, 1, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}},
+                        {{0, 0, 2, 0, 0}},
+                        {{0, 0, 0, 0, 0}},
+                        {{0, 0, 1, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "PHOENIX",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 1, 0, 1, 0}},
+                        {{1, 0, 2, 0, 1}},
+                        {{0, 0, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "VIPER",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{1, 0, 2, 0, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "SABLE",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{1, 0, 2, 0, 0}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "IGUANA",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{1, 0, 1, 0, 0}},
+                        {{0, 0, 2, 0, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "MOUSE",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{0, 0, 2, 1, 0}},
+                        {{0, 1, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "BEAR",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 1, 1, 0, 0}},
+                        {{0, 0, 2, 0, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "FOX",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 0, 2, 1, 0}},
+                        {{0, 0, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+    CardSpec{.name = "GIRAFFE",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{1, 0, 0, 0, 1}},
+                        {{0, 0, 2, 0, 0}},
+                        {{0, 0, 1, 0, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 0},
+    CardSpec{.name = "TURTLE",
+             .image = {{{{0, 0, 0, 0, 0}},
+                        {{0, 0, 0, 0, 0}},
+                        {{1, 0, 2, 0, 1}},
+                        {{0, 1, 0, 1, 0}},
+                        {{0, 0, 0, 0, 0}}}},
+             .starting_player = 1},
+};
+
+Card transform_spec(CardSpec spec) {
+  std::vector<std::pair<int8_t, int8_t>> movements;
+  for (int h = 0; h < HEIGHT; ++h) {
+    for (int w = 0; w < WIDTH; ++w) {
+      if (spec.image[h][w] == 1) {
+        movements.emplace_back(HEIGHT / 2 - h, WIDTH / 2 - w);
+      }
+    }
+  }
+  return Card{
+      .name = std::string{spec.name},
+      .movements = movements,
+      .starting_player = spec.starting_player,
+  };
+}
+
 const std::array<Card, NUM_CARDS> generate_cards() {
   std::array<Card, NUM_CARDS> cards;
-  cards[0].name = "TIGER";
-  cards[0].movements = {{2, 0}, {-1, 0}};
-  cards[0].starting_player = 0;
-
-  cards[1].name = "FROG";
-  cards[1].movements = {{1, 1}, {-1, -1}, {0, 2}};
-  cards[1].starting_player = 1;
-
-  cards[2].name = "CRAB";
-  cards[2].movements = {{1, 0}, {0, 2}, {0, -2}};
-  cards[2].starting_player = 0;
-
-  cards[3].name = "ROOSTER";
-  cards[3].movements = {{-1, 1}, {1, -1}, {0, 1}, {0, -1}};
-  cards[3].starting_player = 1;
-
-  cards[4].name = "MONKEY";
-  cards[4].movements = {{1, 1}, {-1, -1}, {1, -1}, {-1, 1}};
-  cards[4].starting_player = 0;
-
-  cards[5].name = "HORSE";
-  cards[5].movements = {{1, 0}, {-1, 0}, {0, 1}};
-  cards[5].starting_player = 1;
-
-  cards[6].name = "CRANE";
-  cards[6].movements = {{-1, -1}, {-1, 1}, {1, 0}};
-  cards[6].starting_player = 0;
-
-  cards[7].name = "COBRA";
-  cards[7].movements = {{0, 1}, {1, -1}, {-1, -1}};
-  cards[7].starting_player = 1;
-
-  cards[8].name = "DRAGON";
-  cards[8].movements = {{1, 2}, {1, -2}, {-1, 1}, {-1, -1}};
-  cards[8].starting_player = 1;
-
-  cards[9].name = "RABBIT";
-  cards[9].movements = {{-1, 1}, {1, -1}, {0, -2}};
-  cards[9].starting_player = 0;
-
-  cards[10].name = "ELEPHANT";
-  cards[10].movements = {{1, 1}, {1, -1}, {0, 1}, {0, -1}};
-  cards[10].starting_player = 1;
-
-  cards[11].name = "GOOSE";
-  cards[11].movements = {{1, 1}, {-1, -1}, {0, 1}, {0, -1}};
-  cards[11].starting_player = 0;
-
-  cards[12].name = "MANTIS";
-  cards[12].movements = {{1, 1}, {1, -1}, {-1, 0}};
-  cards[12].starting_player = 1;
-
-  cards[13].name = "OX";
-  cards[13].movements = {{1, 0}, {-1, 0}, {0, -1}};
-  cards[13].starting_player = 0;
-
-  cards[14].name = "BOAR";
-  cards[14].movements = {{1, 0}, {0, 1}, {0, -1}};
-  cards[14].starting_player = 1;
-
-  cards[15].name = "EEL";
-  cards[15].movements = {{1, 1}, {-1, 1}, {0, -1}};
-  cards[15].starting_player = 0;
-
+  for (int i = 0; i < NUM_CARDS; ++i) {
+    cards[i] = transform_spec(CARD_SPECS[i]);
+  }
   return cards;
 }
 
@@ -117,7 +309,8 @@ class OnitamaGS : public GameState {
  public:
   OnitamaGS(uint8_t num_cards = 16, uint16_t max_turns = DEFAULT_MAX_TURNS)
       : num_cards_(num_cards), max_turns_(max_turns) {
-    assert((num_cards == 8 || num_cards == 16) &&
+    assert((num_cards == 8 || num_cards == 16 || num_cards == 24 ||
+            num_cards == 32) &&
            "onitama must be played with 8 (simplified) or 16 (full) cards");
     board_.setZero();
 

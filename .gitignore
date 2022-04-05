@@ -1,5 +1,7 @@
 .vscode
 
+.aim
+
 mprofile_*
 
 build

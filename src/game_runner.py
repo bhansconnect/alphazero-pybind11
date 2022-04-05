@@ -6,7 +6,7 @@ import random
 import time
 import torch
 from torch.utils.data import TensorDataset, ConcatDataset, DataLoader
-from torch.utils.tensorboard import SummaryWriter
+import aim
 import threading
 import tqdm
 import queue
@@ -279,9 +279,10 @@ lr_milestone = 150
 run_name = f'{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
 Game = alphazero.OnitamaGS
 
-
 # When you change game, define initialization here.
 # For example some games could change version or exact ruleset here.
+
+
 def new_game():
     return Game()
 
@@ -639,7 +640,7 @@ if __name__ == '__main__':
         if Game.NUM_PLAYERS() > 2:
             bs = 16
             n = bs*cb
-            for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc=f"Bench 1 new vs {Game.NUM_PLAYERS() - 1} old"):
+            for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc=f'Bench 1 new vs {Game.NUM_PLAYERS() - 1} old'):
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
                 params.mcts_depth = [depth] * Game.NUM_PLAYERS()
@@ -663,7 +664,7 @@ if __name__ == '__main__':
                 agl += pm.avg_game_length()
                 del pm
                 gc.collect()
-            for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc=f"Bench {Game.NUM_PLAYERS() - 1} new vs 1 old"):
+            for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc=f'Bench {Game.NUM_PLAYERS() - 1} new vs 1 old'):
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
                 params.mcts_depth = [depth] * Game.NUM_PLAYERS()
@@ -695,7 +696,7 @@ if __name__ == '__main__':
         else:
             bs = 64
             n = bs*cb
-            for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc=f"Bench new vs old"):
+            for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc=f'Bench new vs old'):
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
                 params.mcts_depth = [depth] * Game.NUM_PLAYERS()
@@ -728,9 +729,33 @@ if __name__ == '__main__':
         del nn_past
         return nn_rate, draw_rate, hr, agl
 
+    run = aim.Run(
+        experiment='onitama',
+        run_hash=run_name,
+    )
+
+    run['hparams'] = {
+        'network': 'densenet' if dense_net else 'resnet',
+        'panel_size': GATING_PANEL_SIZE,
+        'panel_win_rate': GATING_PANEL_WIN_RATE,
+        'best_win_rate': GATING_BEST_WIN_RATE,
+        'expected_opening_length': EXPECTED_OPENING_LENGTH,
+        'cpuct': CPUCT,
+        'fpu_reduction': FPU_REDUCTION,
+        'self_play_temp': SELF_PLAY_TEMP,
+        'eval_temp': EVAL_TEMP,
+        'final_temp': FINAL_TEMP,
+        'bootstrap_iters': bootstrap_iters,
+        'depth': depth,
+        'channels': channels,
+        'kernel_size': kernel_size,
+        'lr_milestone': lr_milestone,
+        'full_mcts_depth': nn_selfplay_mcts_depth,
+        'fast_mcts_depth': nn_selfplay_fast_mcts_depth,
+    }
+
     total_agents = iters+1  # + base
 
-    writer = SummaryWriter(f'runs/{run_name}')
     nnargs = neural_net.NNArgs(
         num_channels=channels, depth=depth, lr_milestone=lr_milestone, dense_net=dense_net, kernel_size=kernel_size)
 
@@ -741,8 +766,8 @@ if __name__ == '__main__':
         elo = np.zeros(total_agents)
         current_best = 0
         if bootstrap_iters == 0:
-            np.savetxt("data/elo.csv", elo, delimiter=",")
-            np.savetxt("data/win_rate.csv", wr, delimiter=",")
+            np.savetxt('data/elo.csv', elo, delimiter=',')
+            np.savetxt('data/win_rate.csv', wr, delimiter=',')
     else:
         tmp_wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
         wr = np.full_like(tmp_wr, np.NAN)
@@ -763,15 +788,20 @@ if __name__ == '__main__':
                 wr[i][:bootstrap_iters] = prev_wr[i][:bootstrap_iters]
                 hist_size = calc_hist_size(i)
                 starting_v_loss, starting_pi_loss = iteration_loss(Game, i)
-                writer.add_scalar('Loss/Init V', starting_v_loss, i)
-                writer.add_scalar('Loss/Init Pi', starting_pi_loss, i)
-                writer.add_scalar('Loss/Init Total',
-                                  starting_v_loss+starting_pi_loss, i)
+                run.track(starting_v_loss, name='loss', step=i,
+                          context={'init': True, 'type': 'value'})
+                run.track(starting_pi_loss, name='loss', step=i,
+                          context={'init': True, 'type': 'policy'})
+                run.track(starting_v_loss + starting_pi_loss, name='loss',
+                          step=i, context={'init': True, 'type': 'total'})
                 gc.collect()
                 v_loss, pi_loss = train(Game, i, hist_size)
-                writer.add_scalar('Loss/V', v_loss, i)
-                writer.add_scalar('Loss/Pi', pi_loss, i)
-                writer.add_scalar('Loss/Total', v_loss+pi_loss, i)
+                run.track(v_loss, name='loss', step=i, context={
+                          'init': False, 'type': 'value'})
+                run.track(pi_loss, name='loss', step=i, context={
+                          'init': False, 'type': 'policy'})
+                run.track(v_loss + starting_pi_loss, name='loss',
+                          step=i, context={'init': False, 'type': 'total'})
                 postfix['vloss'] = v_loss
                 postfix['ploss'] = pi_loss
                 pbar.set_postfix(postfix)
@@ -784,40 +814,42 @@ if __name__ == '__main__':
 
     with tqdm.trange(start, iters, desc='Build Amazing Network') as pbar:
         for i in pbar:
-            writer.add_scalar(
-                f'Misc/Current Best', current_best, i)
+            run.track(current_best, name='best network', step=i)
             past_iter = max(0, i - compare_past)
             if past_iter != i and math.isnan(wr[i, past_iter]):
                 nn_rate, draw_rate, _, game_length = play_past(
                     Game, nn_compare_mcts_depth,  i, past_iter)
                 wr[i, past_iter] = (nn_rate + draw_rate/Game.NUM_PLAYERS())
                 wr[past_iter, i] = 1-(nn_rate + draw_rate/Game.NUM_PLAYERS())
-                writer.add_scalar(
-                    f'Win Rate/vs -{compare_past}', nn_rate, i)
-                writer.add_scalar(
-                    f'Draw Rate/vs -{compare_past}', draw_rate, i)
-                writer.add_scalar(
-                    f'Average Game Length/vs -{compare_past}', game_length, i)
+                run.track(nn_rate, name='win_rate', step=i,
+                          context={'vs': f'-{compare_past}'})
+                run.track(draw_rate, name='draw_rate', step=i,
+                          context={'vs': f'-{compare_past}'})
+                run.track(game_length, name='average_game_length',
+                          step=i, context={'vs': f'-{compare_past}'})
                 postfix[f'vs -{compare_past}'] = (nn_rate +
                                                   draw_rate/Game.NUM_PLAYERS())
                 gc.collect()
 
             elo = get_elo(elo, wr, i)
-            writer.add_scalar('Elo/NN', elo[i], i)
-            writer.add_scalar('Elo/Best', elo[current_best], i)
+            run.track(elo[i], name='elo', step=i, context={'type': 'current'})
+            run.track(elo[current_best], name='elo',
+                      step=i, context={'type': 'best'})
             postfix['elo'] = int(elo[i])
             pbar.set_postfix(postfix)
-            np.savetxt("data/elo.csv", elo, delimiter=",")
+            np.savetxt('data/elo.csv', elo, delimiter=',')
 
             win_rates, hit_rate, game_length = self_play(
                 Game, current_best, i, nn_selfplay_mcts_depth, nn_selfplay_fast_mcts_depth)
             for j in range(len(win_rates)-1):
-                writer.add_scalar(
-                    f'Win Rate/Self Play P{j+1}', win_rates[j], i)
-            writer.add_scalar('Draw Rate/Self Play', win_rates[-1], i)
-            writer.add_scalar('Cache Hit Rate/Self Play', hit_rate, i)
-            writer.add_scalar(
-                'Average Game Length/Self Play', game_length, i)
+                run.track(win_rates[j], name='win_rate',
+                          step=i, context={'vs': f'self', 'player': j+1})
+            run.track(win_rates[-1], name='draw_rate',
+                      step=i, context={'vs': f'self'})
+            run.track(hit_rate, name='cache_hit_rate',
+                      step=i, context={'vs': f'self'})
+            run.track(game_length, name='average_game_length',
+                      step=i, context={'vs': f'self'})
             postfix['win_rates'] = list(map(lambda x: f'{x:0.3f}', win_rates))
             pbar.set_postfix(postfix)
             gc.collect()
@@ -829,18 +861,23 @@ if __name__ == '__main__':
             gc.collect()
 
             starting_v_loss, starting_pi_loss = iteration_loss(Game, i)
-            writer.add_scalar('Loss/Init V', starting_v_loss, i)
-            writer.add_scalar('Loss/Init Pi', starting_pi_loss, i)
-            writer.add_scalar('Loss/Init Total',
-                              starting_v_loss+starting_pi_loss, i)
+            run.track(starting_v_loss, name='loss', step=i,
+                      context={'init': True, 'type': 'value'})
+            run.track(starting_pi_loss, name='loss', step=i,
+                      context={'init': True, 'type': 'policy'})
+            run.track(starting_v_loss + starting_pi_loss, name='loss',
+                      step=i, context={'init': True, 'type': 'total'})
             gc.collect()
 
             hist_size = calc_hist_size(i)
-            writer.add_scalar('Misc/History Size', hist_size, i)
+            run.track(hist_size, name='history_size', step=i)
             v_loss, pi_loss = train(Game, i, hist_size)
-            writer.add_scalar('Loss/V', v_loss, i)
-            writer.add_scalar('Loss/Pi', pi_loss, i)
-            writer.add_scalar('Loss/Total', v_loss+pi_loss, i)
+            run.track(v_loss, name='loss', step=i, context={
+                'init': False, 'type': 'value'})
+            run.track(pi_loss, name='loss', step=i, context={
+                'init': False, 'type': 'policy'})
+            run.track(v_loss + starting_pi_loss, name='loss',
+                      step=i, context={'init': False, 'type': 'total'})
             postfix['vloss'] = v_loss
             postfix['ploss'] = pi_loss
             pbar.set_postfix(postfix)
@@ -864,24 +901,24 @@ if __name__ == '__main__':
                     (nn_rate + draw_rate/Game.NUM_PLAYERS())
                 gc.collect()
                 if gate_net == current_best:
-                    writer.add_scalar(
-                        f'Win Rate/vs Best', nn_rate, next_net)
-                    writer.add_scalar(
-                        f'Draw Rate/vs Best', draw_rate, next_net)
-                    writer.add_scalar(
-                        f'Average Game Length/vs Best', game_length, next_net)
+                    run.track(nn_rate, name='win_rate', step=next_net,
+                              context={'vs': 'best'})
+                    run.track(draw_rate, name='draw_rate', step=next_net,
+                              context={'vs': 'best'})
+                    run.track(game_length, name='average_game_length',
+                              step=next_net, context={'vs': 'best'})
                     best_win_rate = nn_rate + draw_rate/Game.NUM_PLAYERS()
                     postfix['vs best'] = best_win_rate
                     pbar.set_postfix(postfix)
             panel_nn_rate /= len(panel)
             panel_draw_rate /= len(panel)
             panel_game_length /= len(panel)
-            writer.add_scalar(
-                f'Win Rate/vs Panel', panel_nn_rate, next_net)
-            writer.add_scalar(
-                f'Draw Rate/vs Panel', panel_draw_rate, next_net)
-            writer.add_scalar(
-                f'Average Game Length/vs Panel', panel_game_length, next_net)
+            run.track(panel_nn_rate, name='win_rate', step=next_net,
+                      context={'vs': 'best'})
+            run.track(panel_draw_rate, name='draw_rate', step=next_net,
+                      context={'vs': 'best'})
+            run.track(panel_game_length, name='average_game_length',
+                      step=next_net, context={'vs': 'best'})
             panel_win_rate = panel_nn_rate + panel_draw_rate/Game.NUM_PLAYERS()
             postfix['vs panel'] = panel_win_rate
             # Scale panel win rate based on size of the panel.
@@ -895,6 +932,4 @@ if __name__ == '__main__':
                 panel.append(current_best)
                 while len(panel) > GATING_PANEL_SIZE:
                     panel = panel[1:]
-            np.savetxt("data/win_rate.csv", wr, delimiter=",")
-
-    writer.close()
+            np.savetxt('data/win_rate.csv', wr, delimiter=',')

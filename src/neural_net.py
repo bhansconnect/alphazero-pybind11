@@ -216,21 +216,21 @@ class NNWrapper:
                 i += 1
         return loss
 
-    def train(self, batches, train_steps):
+    def train(self, batches, steps_to_train, run, epoch, total_train_steps):
         self.nnet.train()
 
         v_loss = 0
         pi_loss = 0
         current_step = 0
-        pbar = tqdm(total=train_steps, unit='batches',
+        pbar = tqdm(total=steps_to_train, unit='batches',
                     desc='Training NN', leave=False)
         past_states = []
-        while current_step < train_steps:
+        while current_step < steps_to_train:
             for batch in batches:
-                if train_steps//4 > 0 and current_step % (train_steps//4) == 0 and current_step != 0:
+                if steps_to_train//4 > 0 and current_step % (steps_to_train//4) == 0 and current_step != 0:
                     # Snapshot model weights
                     past_states.append(dict(self.nnet.named_parameters()))
-                if current_step == train_steps:
+                if current_step == steps_to_train:
                     break
                 canonical, target_vs, target_pis = batch
                 if self.cuda:
@@ -248,6 +248,13 @@ class NNWrapper:
                 total_loss = l_pi + l_v
                 total_loss.backward()
                 self.optimizer.step()
+
+                run.track(l_v.item(), name='loss', epoch=epoch, step=total_train_steps+current_step,
+                          context={'type': 'value'})
+                run.track(l_pi.item(), name='loss', epoch=epoch, step=total_train_steps+current_step,
+                          context={'type': 'policy'})
+                run.track(l_v.item() + l_pi.item(), name='loss', epoch=epoch, step=total_train_steps+current_step,
+                          context={'type': 'total'})
 
                 # record loss and update progress bar.
                 pi_loss += l_pi.item()
@@ -270,7 +277,7 @@ class NNWrapper:
 
         self.scheduler.step()
         pbar.close()
-        return v_loss/train_steps, pi_loss/train_steps
+        return v_loss/steps_to_train, pi_loss/steps_to_train
 
     def predict(self, canonical):
         v, pi = self.process(canonical.unsqueeze(0))

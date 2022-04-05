@@ -279,6 +279,7 @@ compare_past = 20
 lr_milestone = 150
 run_name = f'{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
 Game = alphazero.OnitamaGS
+game_name = 'onitama'
 
 # When you change game, define initialization here.
 # For example some games could change version or exact ruleset here.
@@ -540,7 +541,7 @@ if __name__ == '__main__':
 
         return v_loss, pi_loss
 
-    def train(Game, iteration, hist_size):
+    def train(Game, iteration, hist_size, run, total_train_steps):
         total_size = 0
         datasets = []
         for i in range(max(0, iteration - hist_size), iteration + 1):
@@ -570,15 +571,18 @@ if __name__ == '__main__':
         average_generation = total_size/min(hist_size, iteration+1)
         nn = neural_net.NNWrapper.load_checkpoint(
             Game, 'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
+        steps_to_train = int(
+            math.ceil(average_generation/bs*TRAIN_SAMPLE_RATE))
         v_loss, pi_loss = nn.train(
-            dataloader, int(math.ceil(average_generation/bs*TRAIN_SAMPLE_RATE)))
+            dataloader, steps_to_train, run, iteration, total_train_steps)
+        total_train_steps += steps_to_train
         nn.save_checkpoint('data/checkpoint',
                            f'{iteration+1:04d}-{run_name}.pt')
         del datasets[:]
         del dataset
         del dataloader
         del nn
-        return v_loss, pi_loss
+        return v_loss, pi_loss, total_train_steps
 
     def self_play(Game, best, iteration, depth, fast_depth):
         bs = SELF_PLAY_BATCH_SIZE
@@ -735,7 +739,7 @@ if __name__ == '__main__':
         return nn_rate, draw_rate, hr, agl
 
     run = aim.Run(
-        experiment='onitama',
+        experiment=game_name,
         run_hash=run_name,
     )
 
@@ -771,9 +775,12 @@ if __name__ == '__main__':
         wr[:] = np.NAN
         elo = np.zeros(total_agents)
         current_best = 0
+        total_train_steps = 0
         if bootstrap_iters == 0:
             np.savetxt('data/elo.csv', elo, delimiter=',')
             np.savetxt('data/win_rate.csv', wr, delimiter=',')
+            np.savetxt('data/total_train_steps.txt',
+                       [total_train_steps], delimiter=',')
     else:
         tmp_wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
         wr = np.full_like(tmp_wr, np.NAN)
@@ -782,6 +789,7 @@ if __name__ == '__main__':
         elo = np.zeros_like(tmp_elo)
         elo[:start+1] = tmp_elo[:start+1]
         current_best = np.argmax(elo[:start+1])
+        total_train_steps = np.genfromtxt('data/total_train_steps.txt')[0]
 
     postfix = {'best': current_best}
     if bootstrap_iters > 0 and bootstrap_iters > start:
@@ -793,21 +801,10 @@ if __name__ == '__main__':
                 elo[i] = prev_elo[i]
                 wr[i][:bootstrap_iters] = prev_wr[i][:bootstrap_iters]
                 hist_size = calc_hist_size(i)
-                starting_v_loss, starting_pi_loss = iteration_loss(Game, i)
-                run.track(starting_v_loss, name='loss', step=i,
-                          context={'init': True, 'type': 'value'})
-                run.track(starting_pi_loss, name='loss', step=i,
-                          context={'init': True, 'type': 'policy'})
-                run.track(starting_v_loss + starting_pi_loss, name='loss',
-                          step=i, context={'init': True, 'type': 'total'})
-                gc.collect()
-                v_loss, pi_loss = train(Game, i, hist_size)
-                run.track(v_loss, name='loss', step=i, context={
-                          'init': False, 'type': 'value'})
-                run.track(pi_loss, name='loss', step=i, context={
-                          'init': False, 'type': 'policy'})
-                run.track(v_loss + starting_pi_loss, name='loss',
-                          step=i, context={'init': False, 'type': 'total'})
+                v_loss, pi_loss, total_train_steps = train(
+                    Game, i, hist_size, run, total_train_steps)
+                np.savetxt('data/total_train_steps.txt',
+                           [total_train_steps], delimiter=',')
                 postfix['vloss'] = v_loss
                 postfix['ploss'] = pi_loss
                 pbar.set_postfix(postfix)
@@ -820,27 +817,29 @@ if __name__ == '__main__':
 
     with tqdm.trange(start, iters, desc='Build Amazing Network') as pbar:
         for i in pbar:
-            run.track(current_best, name='best network', step=i)
+            run.track(current_best, name='best network',
+                      epoch=i, step=total_train_steps)
             past_iter = max(0, i - compare_past)
             if past_iter != i and math.isnan(wr[i, past_iter]):
                 nn_rate, draw_rate, _, game_length = play_past(
                     Game, nn_compare_mcts_depth,  i, past_iter)
                 wr[i, past_iter] = (nn_rate + draw_rate/Game.NUM_PLAYERS())
                 wr[past_iter, i] = 1-(nn_rate + draw_rate/Game.NUM_PLAYERS())
-                run.track(nn_rate, name='win_rate', step=i,
+                run.track(nn_rate, name='win_rate', epoch=i, step=total_train_steps,
                           context={'vs': f'-{compare_past}'})
-                run.track(draw_rate, name='draw_rate', step=i,
+                run.track(draw_rate, name='draw_rate', epoch=i, step=total_train_steps,
                           context={'vs': f'-{compare_past}'})
                 run.track(game_length, name='average_game_length',
-                          step=i, context={'vs': f'-{compare_past}'})
+                          epoch=i, step=total_train_steps, context={'vs': f'-{compare_past}'})
                 postfix[f'vs -{compare_past}'] = (nn_rate +
                                                   draw_rate/Game.NUM_PLAYERS())
                 gc.collect()
 
             elo = get_elo(elo, wr, i)
-            run.track(elo[i], name='elo', step=i, context={'type': 'current'})
+            run.track(elo[i], name='elo', epoch=i,
+                      step=total_train_steps, context={'type': 'current'})
             run.track(elo[current_best], name='elo',
-                      step=i, context={'type': 'best'})
+                      epoch=i, step=total_train_steps, context={'type': 'best'})
             postfix['elo'] = int(elo[i])
             pbar.set_postfix(postfix)
             np.savetxt('data/elo.csv', elo, delimiter=',')
@@ -849,13 +848,13 @@ if __name__ == '__main__':
                 Game, current_best, i, nn_selfplay_mcts_depth, nn_selfplay_fast_mcts_depth)
             for j in range(len(win_rates)-1):
                 run.track(win_rates[j], name='win_rate',
-                          step=i, context={'vs': f'self', 'player': j+1})
+                          epoch=i, step=total_train_steps, context={'vs': f'self', 'player': j+1})
             run.track(win_rates[-1], name='draw_rate',
-                      step=i, context={'vs': f'self'})
+                      epoch=i, step=total_train_steps, context={'vs': f'self'})
             run.track(hit_rate, name='cache_hit_rate',
-                      step=i, context={'vs': f'self'})
+                      epoch=i, step=total_train_steps, context={'vs': f'self'})
             run.track(game_length, name='average_game_length',
-                      step=i, context={'vs': f'self'})
+                      epoch=i, step=total_train_steps, context={'vs': f'self'})
             postfix['win_rates'] = list(map(lambda x: f'{x:0.3f}', win_rates))
             pbar.set_postfix(postfix)
             gc.collect()
@@ -866,24 +865,13 @@ if __name__ == '__main__':
             resample_by_surprise(Game, i)
             gc.collect()
 
-            starting_v_loss, starting_pi_loss = iteration_loss(Game, i)
-            run.track(starting_v_loss, name='loss', step=i,
-                      context={'init': True, 'type': 'value'})
-            run.track(starting_pi_loss, name='loss', step=i,
-                      context={'init': True, 'type': 'policy'})
-            run.track(starting_v_loss + starting_pi_loss, name='loss',
-                      step=i, context={'init': True, 'type': 'total'})
-            gc.collect()
-
             hist_size = calc_hist_size(i)
-            run.track(hist_size, name='history_size', step=i)
-            v_loss, pi_loss = train(Game, i, hist_size)
-            run.track(v_loss, name='loss', step=i, context={
-                'init': False, 'type': 'value'})
-            run.track(pi_loss, name='loss', step=i, context={
-                'init': False, 'type': 'policy'})
-            run.track(v_loss + starting_pi_loss, name='loss',
-                      step=i, context={'init': False, 'type': 'total'})
+            run.track(hist_size, name='history_size',
+                      epoch=i, step=total_train_steps)
+            v_loss, pi_loss, total_train_steps = train(
+                Game, i, hist_size, run, total_train_steps)
+            np.savetxt('data/total_train_steps.txt',
+                       [total_train_steps], delimiter=',')
             postfix['vloss'] = v_loss
             postfix['ploss'] = pi_loss
             pbar.set_postfix(postfix)
@@ -907,24 +895,24 @@ if __name__ == '__main__':
                     (nn_rate + draw_rate/Game.NUM_PLAYERS())
                 gc.collect()
                 if gate_net == current_best:
-                    run.track(nn_rate, name='win_rate', step=next_net,
+                    run.track(nn_rate, name='win_rate', epoch=next_net, step=total_train_steps,
                               context={'vs': 'best'})
-                    run.track(draw_rate, name='draw_rate', step=next_net,
+                    run.track(draw_rate, name='draw_rate', epoch=next_net, step=total_train_steps,
                               context={'vs': 'best'})
                     run.track(game_length, name='average_game_length',
-                              step=next_net, context={'vs': 'best'})
+                              epoch=next_net, context={'vs': 'best'})
                     best_win_rate = nn_rate + draw_rate/Game.NUM_PLAYERS()
                     postfix['vs best'] = best_win_rate
                     pbar.set_postfix(postfix)
             panel_nn_rate /= len(panel)
             panel_draw_rate /= len(panel)
             panel_game_length /= len(panel)
-            run.track(panel_nn_rate, name='win_rate', step=next_net,
-                      context={'vs': 'best'})
-            run.track(panel_draw_rate, name='draw_rate', step=next_net,
-                      context={'vs': 'best'})
+            run.track(panel_nn_rate, name='win_rate', epoch=next_net, step=total_train_steps,
+                      context={'vs': 'panel'})
+            run.track(panel_draw_rate, name='draw_rate', epoch=next_net, step=total_train_steps,
+                      context={'vs': 'panel'})
             run.track(panel_game_length, name='average_game_length',
-                      step=next_net, context={'vs': 'best'})
+                      epoch=next_net, context={'vs': 'panel'})
             panel_win_rate = panel_nn_rate + panel_draw_rate/Game.NUM_PLAYERS()
             postfix['vs panel'] = panel_win_rate
             # Scale panel win rate based on size of the panel.

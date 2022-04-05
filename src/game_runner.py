@@ -271,12 +271,13 @@ depth = 4
 channels = 12
 kernel_size = 5
 dense_net = True
+network_name = 'densenet' if dense_net else 'resnet'
 nn_selfplay_mcts_depth = 450
 nn_selfplay_fast_mcts_depth = 75
 nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 lr_milestone = 150
-run_name = f'{"densenet" if dense_net else "resnet"}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
+run_name = f'{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
 Game = alphazero.OnitamaGS
 
 # When you change game, define initialization here.
@@ -464,6 +465,10 @@ if __name__ == '__main__':
         p_out = torch.zeros(
             HIST_SIZE, Game.NUM_MOVES())
         os.makedirs(HIST_LOCATION, exist_ok=True)
+
+        # Clear old history for iteration before saving new history.
+        for fn in glob.glob(f'{HIST_LOCATION}/{iteration:04d}-*.pt'):
+            os.remove(fn)
 
         for i in tqdm.trange(sample_count, desc='Resampling Data', leave=False):
             sample_weight = 0.5 + (loss[i]/total_loss) * 0.5 * sample_count
@@ -735,7 +740,7 @@ if __name__ == '__main__':
     )
 
     run['hparams'] = {
-        'network': 'densenet' if dense_net else 'resnet',
+        'network': network_name,
         'panel_size': GATING_PANEL_SIZE,
         'panel_win_rate': GATING_PANEL_WIN_RATE,
         'best_win_rate': GATING_BEST_WIN_RATE,
@@ -745,6 +750,7 @@ if __name__ == '__main__':
         'self_play_temp': SELF_PLAY_TEMP,
         'eval_temp': EVAL_TEMP,
         'final_temp': FINAL_TEMP,
+        'training_sample_rate': TRAIN_SAMPLE_RATE,
         'bootstrap_iters': bootstrap_iters,
         'depth': depth,
         'channels': channels,

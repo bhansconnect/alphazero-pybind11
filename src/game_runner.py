@@ -276,7 +276,7 @@ nn_selfplay_fast_mcts_depth = 75
 nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 lr_milestone = 150
-run_name = f'{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
+run_name = f'{"densenet" if dense_net else "resnet"}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
 Game = alphazero.OnitamaGS
 
 # When you change game, define initialization here.

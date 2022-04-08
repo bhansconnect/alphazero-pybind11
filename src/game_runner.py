@@ -278,7 +278,7 @@ nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 lr_milestone = 150
 
-Game = alphazero.OnitamaGs
+Game = alphazero.OnitamaGS
 game_name = 'onitama'
 
 run_name = f'{game_name}-{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'

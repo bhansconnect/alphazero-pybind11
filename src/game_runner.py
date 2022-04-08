@@ -277,9 +277,11 @@ nn_selfplay_fast_mcts_depth = 75
 nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 lr_milestone = 150
-run_name = f'{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
-Game = alphazero.OnitamaGS
+
+Game = alphazero.OnitamaGs
 game_name = 'onitama'
+
+run_name = f'{game_name}-{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
 
 # When you change game, define initialization here.
 # For example some games could change version or exact ruleset here.
@@ -851,7 +853,7 @@ if __name__ == '__main__':
                           epoch=i, step=total_train_steps, context={'vs': f'self', 'player': j+1})
             run.track(win_rates[-1], name='draw_rate',
                       epoch=i, step=total_train_steps, context={'vs': f'self'})
-            run.track(hit_rate, name='cache_hit_rate',
+            run.track(float(hit_rate), name='cache_hit_rate',
                       epoch=i, step=total_train_steps, context={'vs': f'self'})
             run.track(game_length, name='average_game_length',
                       epoch=i, step=total_train_steps, context={'vs': f'self'})

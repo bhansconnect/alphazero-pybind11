@@ -819,7 +819,7 @@ if __name__ == '__main__':
 
     with tqdm.trange(start, iters, desc='Build Amazing Network') as pbar:
         for i in pbar:
-            run.track(current_best, name='best network',
+            run.track(current_best, name='best_network',
                       epoch=i, step=total_train_steps)
             past_iter = max(0, i - compare_past)
             if past_iter != i and math.isnan(wr[i, past_iter]):

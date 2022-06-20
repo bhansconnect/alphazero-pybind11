@@ -13,7 +13,7 @@ START_TEMP = 1
 END_TEMP = 0.2
 TEMP_DECAY_HALF_LIFE = 10
 
-Game = alphazero.OnitamaGS
+Game = alphazero.Connect4GS
 
 bf = 0
 bfc = 0

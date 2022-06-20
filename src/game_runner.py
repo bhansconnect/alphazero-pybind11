@@ -256,12 +256,12 @@ RESULT_WORKERS = 2
 # Panel based gating has the network play against multiple previous best agents before being promoted.
 # This is muhch more imortant with games where the draw rate is high betwen new networks and the best.
 # It is also important in grame that lead to rock-paper-scissor type network oscillations.
-GATING_PANEL_SIZE = 3
+GATING_PANEL_SIZE = 1
 # Ensure it is at least this good against the entire panel of networks.
-GATING_PANEL_WIN_RATE = 0.60
+GATING_PANEL_WIN_RATE = 0.52
 # Ensure it is at least this good against the best network.
 # Generally it is ok to be slightly worse than the best if you crush the panel. Especially in high draw games.
-GATING_BEST_WIN_RATE = 0.50
+GATING_BEST_WIN_RATE = 0.52
 
 
 bootstrap_iters = 0
@@ -278,8 +278,8 @@ nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
 compare_past = 20
 lr_milestone = 150
 
-Game = alphazero.OnitamaGS
-game_name = 'onitama'
+Game = alphazero.Connect4GS
+game_name = 'connect4'
 
 run_name = f'{game_name}-{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
 

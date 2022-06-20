@@ -8,7 +8,7 @@ from load_lib import load_alphazero
 
 alphazero = load_alphazero()
 
-Game = alphazero.OnitamaGS
+Game = alphazero.Connect4GS
 
 CPUCT = 1.25
 START_TEMP = 1

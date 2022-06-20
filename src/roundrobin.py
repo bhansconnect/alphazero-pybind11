@@ -52,7 +52,7 @@ if __name__ == '__main__':
     rand_agents = []
     agents = rand_agents + nn_agents
 
-    Game = alphazero.OnitamaGS
+    Game = alphazero.Connect4GS
     bs = 64
     nn_mtcs_depth = 600
 

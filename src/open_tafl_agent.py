@@ -42,11 +42,11 @@ def move_to_string(move, height, width):
     return f"{chr(ord('a')+piece_w)}{piece_h+1}-{chr(ord('a')+new_w)}{new_h+1}"
 
 
-def eval_position(gs, mcts, agent, args):
+def eval_position(gs, mcts, agent, args, time_limit):
     height = gs.CANONICAL_SHAPE()[1]
     width = gs.CANONICAL_SHAPE()[2]
     start = time.time()
-    while time.time() - start < args.time:
+    while time.time() - start < time_limit:
         leaf = mcts.find_leaf(gs)
         v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
         v = v.cpu().numpy()
@@ -85,12 +85,14 @@ def gen_move(height, width, from_h, from_w, to_h, to_w):
 
 
 if __name__ == '__main__':
-    print('hello')
+    print('hello', flush=True)
     parser = argparse.ArgumentParser(description='AlphaZero OpenTafl Agent')
-    parser.add_argument('--network', type=str, required=True,
-                        help='The neural network weights. The file must be in the format {name}-{depth}-{channels}.')
+    parser.add_argument('--folder', type=str, required=True,
+                        help='The folder where networks are stored.')
+    parser.add_argument('--network', type=str, default='latest',
+                        help='The neural network weights file name.')
     parser.add_argument('--time', type=float, default=9.5,
-                        help='Time to think per move in seconds.')
+                        help='Base time to think per move in seconds.')
     parser.add_argument('--start-temp', type=float, default=0.5,
                         help='How much randomness to use when picking a move at start of game. 0 is pick best move.')
     parser.add_argument('--end-temp', type=float, default=0.1,
@@ -107,20 +109,28 @@ if __name__ == '__main__':
 
     if args.game.lower() == 'computer-brandubh':
         Game = alphazero.BrandubhGS
+        name = 'brandubh'
     elif args.game.lower() == 'computer-tawlbwrdd':
         Game = alphazero.TawlbwrddGS
+        name = 'tawlbwrdd'
     elif args.game.lower() == 'computer-fetlar':
         Game = alphazero.OpenTaflGS
+        name = 'opentafl'
     else:
         print(f'status Unsupported ruleset: {args.game.lower()}')
         print('error -1')
         exit()
 
+    if args.network == 'latest':
+        nn_files = [os.path.basename(x) for x in sorted(
+            glob.glob(os.path.join(args.folder, f'*-{name}-*.pt')))]
+        args.network = nn_files[-1]
     start = time.time()
     print(
-        f'status Loading network at {os.path.abspath(args.network)}')
+        f'status Loading network {args.network} in {os.path.abspath(args.folder)}')
     try:
-        nn = neural_net.NNWrapper.load_checkpoint(Game, args.network)
+        nn = neural_net.NNWrapper.load_checkpoint(
+            Game, args.folder, args.network)
     except Exception as e:
         print(f'status Failed to load network: {e}')
         print('error -1')
@@ -135,12 +145,14 @@ if __name__ == '__main__':
     mcts = alphazero.MCTS(args.cpuct, gs.num_players(),
                           gs.num_moves(), 0, 1.4, args.fpu_redux)
 
+    time_limit = args.time
     try:
         while True:
             command = input().strip()
             if command.startswith('play'):
-                move = eval_position(gs, mcts, nn, args)
-                print(f'move {move_to_string(move, width, height)}')
+                move = eval_position(gs, mcts, nn, args, time_limit)
+                print(
+                    f'move {move_to_string(move, width, height)}', flush=True)
                 mcts.update_root(gs, move)
                 gs.play_move(move)
             elif command.startswith('opponent-move'):
@@ -157,6 +169,12 @@ if __name__ == '__main__':
                 gs = Game()
                 mcts = alphazero.MCTS(
                     args.cpuct, gs.num_players(), gs.num_moves(), 0, 1.4, args.fpu_redux)
+            elif command.startswith('clock'):
+                # Grab the over time length.
+                # Subtract 200ms to play it safe.
+                time_limit = float(command.split()[3]) - 0.2
+            elif command.startswith('move'):
+                continue
             elif command.startswith('error'):
                 print('error -1')
                 break

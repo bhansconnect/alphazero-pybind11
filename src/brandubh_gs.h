@@ -9,6 +9,10 @@
 // the defenders. They also might get a win from blocking all possible white
 // moves. On this small board, it really should make little to no difference.
 
+// Also adds the modifications that come from the OpenTafl computer tafl
+// tournament. Found here:
+// https://soupbox.manywords.press/2016-opentafl-tafl-open-ai-tournament
+
 namespace alphazero::brandubh_gs {
 
 constexpr const uint16_t DEFAULT_MAX_TURNS = 150;

@@ -10,8 +10,8 @@ namespace alphazero::tawlbwrdd_gs {
                                        repetition_counts_);
 }
 
-[[nodiscard]] bool TawlbwrddGS::operator==(
-    const GameState& other) const noexcept {
+[[nodiscard]] bool TawlbwrddGS::operator==(const GameState& other) const
+    noexcept {
   const auto* other_cs = dynamic_cast<const TawlbwrddGS*>(&other);
   if (other_cs == nullptr) {
     return false;
@@ -251,8 +251,8 @@ void TawlbwrddGS::play_move(uint32_t move) {
   return false;
 }
 
-[[nodiscard]] std::optional<Vector<float>> TawlbwrddGS::scores()
-    const noexcept {
+[[nodiscard]] std::optional<Vector<float>> TawlbwrddGS::scores() const
+    noexcept {
   auto scores = SizedVector<float, 3>{};
   scores.setZero();
   // Check if 3 fold repetition.
@@ -260,8 +260,15 @@ void TawlbwrddGS::play_move(uint32_t move) {
     // The player who brought us to this state probably was forced to do so.
     // (E.G. it was required to block a king escape)
     // The opponent brought us to this state and thus wins.
-    auto opponent = (player_ + 1) % 2;
-    scores(opponent) = 1;
+    // auto opponent = (player_ + 1) % 2;
+    // scores(opponent) = 1;
+
+    // There seems to be a bug in opentafl currently and this is backwards.
+    // The player that enters a 3 fold repeat position loses.
+    // So the player whose turn it is, wins.
+    // Though it may just be the case that the definition of forced is
+    // confounded.
+    scores(player_) = 1;
     return scores;
   }
   // Check if the king is on an edge.

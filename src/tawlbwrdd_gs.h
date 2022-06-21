@@ -9,6 +9,10 @@
 // Lastly, the starting position is the lewis cross as it has been seen to be
 // fairer.
 
+// Also adds the modifications that come from the OpenTafl computer tafl
+// tournament. Found here:
+// https://soupbox.manywords.press/2016-opentafl-tafl-open-ai-tournament
+
 namespace alphazero::tawlbwrdd_gs {
 
 constexpr const uint16_t DEFAULT_MAX_TURNS = 400;

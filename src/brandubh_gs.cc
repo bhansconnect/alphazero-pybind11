@@ -11,8 +11,8 @@ namespace alphazero::brandubh_gs {
                                       repetition_counts_);
 }
 
-[[nodiscard]] bool BrandubhGS::operator==(
-    const GameState& other) const noexcept {
+[[nodiscard]] bool BrandubhGS::operator==(const GameState& other) const
+    noexcept {
   const auto* other_cs = dynamic_cast<const BrandubhGS*>(&other);
   if (other_cs == nullptr) {
     return false;
@@ -347,8 +347,15 @@ void BrandubhGS::play_move(uint32_t move) {
     // The player who brought us to this state probably was forced to do so.
     // (E.G. it was required to block a king escape)
     // The opponent brought us to this state and thus wins.
-    auto opponent = (player_ + 1) % 2;
-    scores(opponent) = 1;
+    // auto opponent = (player_ + 1) % 2;
+    // scores(opponent) = 1;
+
+    // There seems to be a bug in opentafl currently and this is backwards.
+    // The player that enters a 3 fold repeat position loses.
+    // So the player whose turn it is, wins.
+    // Though it may just be the case that the definition of forced is
+    // confounded.
+    scores(player_) = 1;
     return scores;
   }
   // Check if the king is on a corner.

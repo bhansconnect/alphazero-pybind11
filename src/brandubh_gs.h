@@ -3,7 +3,10 @@
 #include "absl/container/flat_hash_map.h"
 #include "game_state.h"
 
+// Update: Rules now changed to match OpenTafl brandubh rules (at least for
+// now). Changes mentioned below are still applied.
 // Base rules from http://aagenielsen.dk/brandubh2_rules_en.pdf
+
 // A small change is made to rule 7. Encirclement is no longer a win for the
 // attackers. Instead, they must play the few extra moves to finish capturing
 // the defenders. They also might get a win from blocking all possible white
@@ -12,6 +15,12 @@
 // Also adds the modifications that come from the OpenTafl computer tafl
 // tournament. Found here:
 // https://soupbox.manywords.press/2016-opentafl-tafl-open-ai-tournament
+// Specifically, it takes current brandubh rules and makes 3 fold repetition a
+// win.
+
+// Rule String:
+// dim:7 name:Computer_Brandub surf:n atkf:y tfr:w ks:w cenh: corre: aforre:
+// dforre: starti:/3t3/3t3/3T3/ttTKTtt/3T3/3t3/3t3/
 
 namespace alphazero::brandubh_gs {
 

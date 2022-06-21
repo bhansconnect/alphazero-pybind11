@@ -237,14 +237,15 @@ bool captured(const BoardTensor& bt, int from_h, int from_w, int delta_h,
   if (target_w < 0 || target_w >= WIDTH || target_h < 0 || target_h >= HEIGHT) {
     return false;
   }
+  // For now matching OpenTafl, this is no longer special.
   // Special case: King on throne requires complete surrounding.
-  if (target_w == 3 && target_h == 3 && bt(KING_LAYER, 3, 3) == 1) {
-    if (bt(ATK_LAYER, 2, 3) == 1 && bt(ATK_LAYER, 4, 3) == 1 &&
-        bt(ATK_LAYER, 3, 2) == 1 && bt(ATK_LAYER, 3, 4) == 1) {
-      return true;
-    }
-    return false;
-  }
+  // if (target_w == 3 && target_h == 3 && bt(KING_LAYER, 3, 3) == 1) {
+  //   if (bt(ATK_LAYER, 2, 3) == 1 && bt(ATK_LAYER, 4, 3) == 1 &&
+  //       bt(ATK_LAYER, 3, 2) == 1 && bt(ATK_LAYER, 3, 4) == 1) {
+  //     return true;
+  //   }
+  //   return false;
+  // }
 
   uint8_t from_player = piece_to_player(bt, from_h, from_w);
   // Only opponent pieces can be captured.

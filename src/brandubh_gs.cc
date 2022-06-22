@@ -215,10 +215,12 @@ bool is_hostile_to(const BoardTensor& bt, uint8_t player, bool is_king,
     return true;
   }
   if (target_w == 3 && target_h == 3) {
+    // To match OpenTafl Brandubh, the throne is also hostile to the king.
+    (void)is_king;  // void cast to avoid unused warning.
     // Throne is never hostile to the king.
-    if (is_king) {
-      return false;
-    }
+    // if (is_king) {
+    // return false;
+    // }
     // The throne is only hostile to other defenders if the king isn't there.
     if (player == DEF_PLAYER) {
       return bt(KING_LAYER, 3, 3) == 0;

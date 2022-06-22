@@ -791,7 +791,7 @@ if __name__ == '__main__':
         elo = np.zeros_like(tmp_elo)
         elo[:start+1] = tmp_elo[:start+1]
         current_best = np.argmax(elo[:start+1])
-        total_train_steps = np.genfromtxt('data/total_train_steps.txt')[0]
+        total_train_steps = int(np.genfromtxt('data/total_train_steps.txt'))
 
     postfix = {'best': current_best}
     if bootstrap_iters > 0 and bootstrap_iters > start:

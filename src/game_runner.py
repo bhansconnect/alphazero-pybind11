@@ -641,7 +641,7 @@ if __name__ == '__main__':
         agl = pm.avg_game_length()
         del pm
         del nn
-        return win_rates, hr, agl
+        return win_rates, hr, agl, pm.games_resigned()/pm.games_completed()
 
     def play_past(Game, depth, iteration, past_iter):
         nn_rate = 0
@@ -854,11 +854,13 @@ if __name__ == '__main__':
             pbar.set_postfix(postfix)
             np.savetxt('data/elo.csv', elo, delimiter=',')
 
-            win_rates, hit_rate, game_length = self_play(
+            win_rates, hit_rate, game_length, resignation_rate = self_play(
                 Game, current_best, i, nn_selfplay_mcts_depth, nn_selfplay_fast_mcts_depth)
             for j in range(len(win_rates)-1):
                 run.track(win_rates[j], name='win_rate',
                           epoch=i, step=total_train_steps, context={'vs': f'self', 'player': j+1})
+            run.track(resignation_rate, name='resignation_rate',
+                      epoch=i, step=total_train_steps, context={'vs': f'self'})
             run.track(win_rates[-1], name='draw_rate',
                       epoch=i, step=total_train_steps, context={'vs': f'self'})
             run.track(float(hit_rate), name='cache_hit_rate',

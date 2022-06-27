@@ -176,6 +176,7 @@ PYBIND11_MODULE(alphazero, m) {
            py::return_value_policy::reference_internal)
       .def("scores", &PlayManager::scores)
       .def("games_completed", &PlayManager::games_completed)
+      .def("games_resigned", &PlayManager::games_resigned)
       .def("remaining_games", &PlayManager::remaining_games)
       .def("awaiting_inference_count", &PlayManager::awaiting_inference_count)
       .def("awaiting_mcts_count", &PlayManager::awaiting_mcts_count)

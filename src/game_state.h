@@ -110,8 +110,7 @@ bool operator==(const GameStateKeyWrapper& lhs,
     const GameState& gs) {
   auto valids = gs.valid_moves();
   auto values = Vector<float>{gs.num_players() + 1};
-  values.setZero();
-  values(gs.num_players()) = 1;
+  values.setConstant(1.0 / (gs.num_players() + 1));
   auto policy = Vector<float>{gs.num_moves()};
   policy.setZero();
   float sum = valids.sum();

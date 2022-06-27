@@ -81,6 +81,9 @@ class PlayManager {
   [[nodiscard]] uint32_t games_completed() const noexcept {
     return games_completed_;
   }
+  [[nodiscard]] uint32_t games_resigned() const noexcept {
+    return games_resigned_;
+  }
   void dumb_inference(const uint8_t player);
 
   [[nodiscard]] std::optional<uint32_t> pop_game(uint32_t player) noexcept {
@@ -141,6 +144,7 @@ class PlayManager {
   uint32_t games_started_;
   uint64_t game_length_ = 0;
   std::atomic<uint32_t> games_completed_ = 0;
+  std::atomic<uint32_t> games_resigned_ = 0;
 
   ConcurrentQueue<uint32_t> awaiting_mcts_;
   std::vector<std::unique_ptr<ConcurrentQueue<uint32_t>>> awaiting_inference_;

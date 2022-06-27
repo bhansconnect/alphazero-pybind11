@@ -25,13 +25,14 @@ constexpr const auto MAX_WAIT = 10ms;
 struct GameData {
   std::unique_ptr<GameState> gs;
   std::shared_ptr<GameState> leaf;
-  bool initialized = false;
-  bool capped = false;
   std::vector<MCTS> mcts;
   Tensor<float, 3> canonical;
   Vector<float> v;
   Vector<float> pi;
   std::vector<PlayHistory> partial_history;
+  bool initialized = false;
+  bool capped = false;
+  bool playthrough = false;
 };
 
 struct PlayParams {
@@ -54,6 +55,8 @@ struct PlayParams {
   uint32_t playout_cap_depth = 25;
   float playout_cap_percent = 0.75;
   float fpu_reduction = 0.0;
+  float resign_percent = 0.0;
+  float resign_playthrough_percent = 0.0;
 };
 
 // This is a multithread safe game play manager.

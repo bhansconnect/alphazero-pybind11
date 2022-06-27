@@ -21,7 +21,8 @@ def dumb_eval(pm, bs):
                 continue
             batch.append(i)
             gd = pm.game_data(i)
-            gd.v().fill(0)
+            v = gd.v()
+            v.fill(1.0/len(v))
             pi = gd.pi()
             pi[:] = gd.valid_moves()
             total = np.sum(pi)

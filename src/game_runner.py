@@ -214,10 +214,10 @@ class GameRunner:
 
 class RandPlayer:
     def __init__(self, game, max_batch_size):
-        self.v = torch.ones((max_batch_size, game.NUM_PLAYERS()+1))
-        self.v /= torch.sum(self.v)
-        self.pi = torch.ones((max_batch_size, game.NUM_MOVES()))
-        self.pi /= torch.sum(self.pi)
+        self.v = torch.full(
+            (max_batch_size, game.NUM_PLAYERS()+1), 1.0/(game.NUM_PLAYERS()+1))
+        self.pi = torch.full(
+            (max_batch_size, game.NUM_MOVES()), 1.0/game.NUM_MOVES())
 
     def predict(self, canonical):
         v, pi = self.process(canonical.unsqueeze(0))
@@ -263,6 +263,12 @@ GATING_PANEL_WIN_RATE = 0.52
 # Generally it is ok to be slightly worse than the best if you crush the panel. Especially in high draw games.
 GATING_BEST_WIN_RATE = 0.52
 
+# A win/loss/draw will happen if it has a lower percent than this to not happen.
+# EX: 0.02 means that if the chance to draw is greater than 98% it will automatically happen.
+# This must be zero if there are more than 2 players.
+RESIGN_PERCENT = 0.02
+# The percent of resignations that will be played to the end anyway.
+RESIGN_PLAYTHROUGH_PERCENT = 0.20
 
 bootstrap_iters = 0
 start = 0
@@ -600,6 +606,8 @@ if __name__ == '__main__':
         params.playout_cap_randomization = True
         params.playout_cap_depth = fast_depth
         params.playout_cap_percent = 0.75
+        params.resign_percent = RESIGN_PERCENT
+        params.resign_playthrough_percent = RESIGN_PLAYTHROUGH_PERCENT
 
         # Just use a random agent when generating data with network zero.
         # They are equivalent.

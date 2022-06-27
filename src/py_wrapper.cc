@@ -160,7 +160,10 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("self_play", &PlayParams::self_play)
       .def_readwrite("add_noise", &PlayParams::add_noise)
       .def_readwrite("epsilon", &PlayParams::epsilon)
-      .def_readwrite("fpu_reduction", &PlayParams::fpu_reduction);
+      .def_readwrite("fpu_reduction", &PlayParams::fpu_reduction)
+      .def_readwrite("resign_percent", &PlayParams::resign_percent)
+      .def_readwrite("resign_playthrough_percent",
+                     &PlayParams::resign_playthrough_percent);
 
   py::class_<PlayManager>(m, "PlayManager")
       .def(py::init([](const GameState* gs, PlayParams params) {

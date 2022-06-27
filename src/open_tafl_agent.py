@@ -68,7 +68,7 @@ def eval_position(gs, mcts, agent, args, time_limit):
     rand = np.random.choice(probs.shape[0], p=probs)
     print(
         f'status MCTS ran with {sum(mcts.counts())} simulations in {time.time()-start} seconds')
-    print(f'status MCTS win prob: {mcts.root_value()}')
+    print(f'status MCTS win-loss-draw prob: {mcts.root_value()}')
     print(f'status MCTS top moves: {high_prob}')
     print(
         f'status MCTS best: {move_to_string(np.argmax(probs), height, width)}')

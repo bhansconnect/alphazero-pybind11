@@ -24,8 +24,8 @@ void Node::update_policy(const Vector<float>& pi) noexcept {
   }
 }
 
-float Node::uct(float sqrt_parent_n, float cpuct,
-                float fpu_value) const noexcept {
+float Node::uct(float sqrt_parent_n, float cpuct, float fpu_value) const
+    noexcept {
   return (n == 0 ? fpu_value : q) +
          cpuct * policy * sqrt_parent_n / static_cast<float>(n + 1);
 }
@@ -130,6 +130,9 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
     v += value(num_players_) / num_players_;
     current_->q = (current_->q * static_cast<float>(current_->n) + v) /
                   static_cast<float>(current_->n + 1);
+    current_->d =
+        (current_->d * static_cast<float>(current_->n) + value(num_players_)) /
+        static_cast<float>(current_->n + 1);
     if (current_->n == 0) {
       auto leaf_v =
           value(current_->player) + value(num_players_) / num_players_;

@@ -15,6 +15,7 @@ struct Node {
   explicit Node(uint32_t m) : move(m){};
 
   float q = 0;
+  float d = 0;
   float v = 0;
   float policy = 0;
   uint32_t move = 0;
@@ -46,14 +47,22 @@ class MCTS {
   void process_result(const GameState& gs, Vector<float>& value,
                       Vector<float>& pi, bool root_noise_enabled = false);
   void add_root_noise();
-  [[nodiscard]] float root_value() const {
-    float q = -1;
+  [[nodiscard]] Vector<float> root_value() const {
+    float q = 0;
+    float d = 0;
     for (const auto& c : root_.children) {
       if (c.n > 0 && c.q > q) {
         q = c.q;
+        d = c.d;
       }
     }
-    return q;
+    auto w = q - d / num_players_;
+    auto l = 1.0 - w - d;
+    auto wld = Vector<float>{3};
+    wld[0] = w;
+    wld[1] = l;
+    wld[2] = d;
+    return wld;
   }
   [[nodiscard]] Vector<uint32_t> counts() const noexcept;
   [[nodiscard]] Vector<float> probs(float temp) const noexcept;

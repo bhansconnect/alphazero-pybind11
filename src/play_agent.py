@@ -57,7 +57,7 @@ def eval_position(gs, agent):
     print(f'\tRaw Best: {np.argmax(pi)}')
     print(f'\tRaw Rand: {np.random.choice(pi.shape[0], p=pi)}')
 
-    print(f'\tMCTS Score: {mcts.root_value()}')
+    print(f'\tMCTS Current Player WLD: {mcts.root_value()}')
     counts = mcts.counts()
     thing = {x: counts[x] for x in reversed(np.argsort(counts)[-10:])}
     print(f'\tMCTS Top Counts: {thing}')

@@ -639,9 +639,10 @@ if __name__ == '__main__':
         if total > 0:
             hr = hits/total
         agl = pm.avg_game_length()
+        rr = pm.games_resigned()/pm.games_completed()
         del pm
         del nn
-        return win_rates, hr, agl, pm.games_resigned()/pm.games_completed()
+        return win_rates, hr, agl, rr
 
     def play_past(Game, depth, iteration, past_iter):
         nn_rate = 0

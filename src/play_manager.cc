@@ -113,7 +113,7 @@ void PlayManager::play() {
         }
         game.gs->play_move(chosen_m);
         auto scores = game.gs->scores();
-        if (resign_score.sum() > 0) {
+        if (!scores.has_value() && resign_score.sum() > 0) {
           ++games_resigned_;
           scores = std::make_optional(resign_score);
         }

@@ -286,12 +286,19 @@ class NNWrapper:
         return v[0], pi[0]
 
     def process(self, batch):
+        # start = torch.cuda.Event(enable_timing=True)
+        # end = torch.cuda.Event(enable_timing=True)
+        # start.record()
         if self.cuda:
             batch = batch.contiguous().cuda()
         self.nnet.eval()
         with torch.no_grad():
             v, pi = self.nnet(batch)
-            return torch.exp(v), torch.exp(pi)
+            res = (torch.exp(v), torch.exp(pi))
+        # end.record()
+        # torch.cuda.synchronize()
+        # print(start.elapsed_time(end))
+        return res
 
     def sample_loss_pi(self, targets, outputs):
         return -1 * torch.sum(targets * outputs, axis=1)

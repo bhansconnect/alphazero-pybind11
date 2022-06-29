@@ -216,11 +216,22 @@ void PlayManager::update_inferences(const uint8_t player,
 }
 
 void PlayManager::dumb_inference(const uint8_t player) {
+  // int count = 0;
   while (games_completed_ < params_.games_to_play) {
     auto i = awaiting_inference_[params_.self_play ? 0 : player]->pop(MAX_WAIT);
     if (!i.has_value()) {
       continue;
     }
+    // A basic model takes about 50ms per 1024 results.
+    // So this simulates waiting on the GPU.
+    // ++count;
+    // if (count % 1024 == 0) {
+    //   // Busy wait so that perf sees it clearly.
+    //   auto start = std::chrono::system_clock::now();
+    //   while (std::chrono::system_clock::now() - start <
+    //          std::chrono::milliseconds(50)) {
+    //   }
+    // }
     auto& game = games_[i.value()];
     std::tie(game.v, game.pi) = dumb_eval(*game.gs);
     if (params_.max_cache_size > 0) {

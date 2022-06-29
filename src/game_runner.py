@@ -841,9 +841,9 @@ if __name__ == '__main__':
                 wr[i, past_iter] = (nn_rate + draw_rate/Game.NUM_PLAYERS())
                 wr[past_iter, i] = 1-(nn_rate + draw_rate/Game.NUM_PLAYERS())
                 run.track(nn_rate, name='win_rate', epoch=i, step=total_train_steps,
-                          context={'vs': f'-{compare_past}', 'from': 'full_game'})
+                          context={'vs': f'-{compare_past}', 'from': 'all_games'})
                 run.track(draw_rate, name='draw_rate', epoch=i, step=total_train_steps,
-                          context={'vs': f'-{compare_past}', 'from': 'full_game'})
+                          context={'vs': f'-{compare_past}', 'from': 'all_games'})
                 run.track(game_length, name='average_game_length',
                           epoch=i, step=total_train_steps, context={'vs': f'-{compare_past}'})
                 postfix[f'vs -{compare_past}'] = (nn_rate +
@@ -863,14 +863,14 @@ if __name__ == '__main__':
                 Game, current_best, i, nn_selfplay_mcts_depth, nn_selfplay_fast_mcts_depth)
             for j in range(len(win_rates)-1):
                 run.track(win_rates[j], name='win_rate',
-                          epoch=i, step=total_train_steps, context={'vs': f'self', 'player': j+1, 'from': 'full_game'})
+                          epoch=i, step=total_train_steps, context={'vs': f'self', 'player': j+1, 'from': 'all_games'})
             for j in range(len(resign_win_rates)-1):
                 run.track(resign_win_rates[j], name='win_rate',
                           epoch=i, step=total_train_steps, context={'vs': f'self', 'player': j+1, 'from': 'resignation'})
             run.track(resignation_rate, name='resignation_rate',
                       epoch=i, step=total_train_steps, context={'vs': f'self'})
             run.track(win_rates[-1], name='draw_rate',
-                      epoch=i, step=total_train_steps, context={'vs': f'self', 'from': 'full_game'})
+                      epoch=i, step=total_train_steps, context={'vs': f'self', 'from': 'all_games'})
             run.track(resign_win_rates[-1], name='draw_rate',
                       epoch=i, step=total_train_steps, context={'vs': f'self', 'from': 'resignation'})
             run.track(float(hit_rate), name='cache_hit_rate',
@@ -918,9 +918,9 @@ if __name__ == '__main__':
                 gc.collect()
                 if gate_net == current_best:
                     run.track(nn_rate, name='win_rate', epoch=next_net, step=total_train_steps,
-                              context={'vs': 'best', 'from': 'full_game'})
+                              context={'vs': 'best', 'from': 'all_games'})
                     run.track(draw_rate, name='draw_rate', epoch=next_net, step=total_train_steps,
-                              context={'vs': 'best', 'from': 'full_game'})
+                              context={'vs': 'best', 'from': 'all_games'})
                     run.track(game_length, name='average_game_length',
                               epoch=next_net, context={'vs': 'best'})
                     best_win_rate = nn_rate + draw_rate/Game.NUM_PLAYERS()
@@ -930,9 +930,9 @@ if __name__ == '__main__':
             panel_draw_rate /= len(panel)
             panel_game_length /= len(panel)
             run.track(panel_nn_rate, name='win_rate', epoch=next_net, step=total_train_steps,
-                      context={'vs': 'panel', 'from': 'full_game'})
+                      context={'vs': 'panel', 'from': 'all_games'})
             run.track(panel_draw_rate, name='draw_rate', epoch=next_net, step=total_train_steps,
-                      context={'vs': 'panel', 'from': 'full_game'})
+                      context={'vs': 'panel', 'from': 'all_games'})
             run.track(panel_game_length, name='average_game_length',
                       epoch=next_net, context={'vs': 'panel'})
             panel_win_rate = panel_nn_rate + panel_draw_rate/Game.NUM_PLAYERS()

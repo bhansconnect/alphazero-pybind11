@@ -146,9 +146,8 @@ play_manager_bench = executable(
   'play_manager_bench',
   'play_manager_bench.cc',
   dependencies: [gbench_main_dep, gbench_dep, thread_dep, eigen_dep, absl_container_dep, absl_hash_dep],
-  link_with: [play_manager, connect4_gs],
+  link_with: [play_manager, tawlbwrdd_gs],
 )
-test('gtest tests', play_manager_bench)
 
 py3_install.extension_module(
   'alphazero',

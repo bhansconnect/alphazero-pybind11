@@ -14,6 +14,10 @@ eigen_dep = eigen_proj.get_variable('eigen_dep')
 gtest_proj = subproject('gtest')
 gtest_dep = gtest_proj.get_variable('gtest_main_dep')
 
+gbench_proj = subproject('google-benchmark')
+gbench_main_dep = gbench_proj.get_variable('google_benchmark_main_dep')
+gbench_dep = gbench_proj.get_variable('google_benchmark_dep')
+
 thread_dep = dependency('threads')
 
 tafl_helper_test = executable(
@@ -137,6 +141,14 @@ play_manager_test = executable(
   link_with: [play_manager, connect4_gs],
 )
 test('gtest tests', play_manager_test)
+
+play_manager_bench = executable(
+  'play_manager_bench',
+  'play_manager_bench.cc',
+  dependencies: [gbench_main_dep, gbench_dep, thread_dep, eigen_dep, absl_container_dep, absl_hash_dep],
+  link_with: [play_manager, connect4_gs],
+)
+test('gtest tests', play_manager_bench)
 
 py3_install.extension_module(
   'alphazero',

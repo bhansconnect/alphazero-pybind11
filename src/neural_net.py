@@ -8,6 +8,9 @@ from tqdm import tqdm
 import numpy as np
 from load_lib import load_alphazero
 
+# This is an autotuner for network speed.
+torch.backends.cudnn.benchmark = True
+
 NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'kernel_size', 'lr_milestone', 'dense_net',
                                'lr', 'cv', 'cuda'], defaults=(40, False, 0.01, 1.5, torch.cuda.is_available()))
 

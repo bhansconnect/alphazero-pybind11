@@ -1,6 +1,7 @@
 #include "play_manager.h"
 
 #include <cmath>
+#include <optional>
 
 namespace alphazero {
 
@@ -73,8 +74,7 @@ void PlayManager::play() {
           temp *= std::exp(-lambda * t);
           temp += params_.final_temp;
         }
-        auto resign_score = Vector<float>{3};
-        resign_score.setZero();
+        std::optional<Vector<float>> resign_score = std::nullopt;
         if (params_.resign_percent > 0 && !game.playthrough) {
           if (base_gs_->num_players() != 2) {
             throw std::runtime_error{"Resigning only works in 2 player games"};
@@ -85,19 +85,23 @@ void PlayManager::play() {
           const auto d = pred_score[2];
           const auto resign_val = 1.0 - params_.resign_percent;
           // Check resign thresholds.
+          auto tmp_score = Vector<float>{base_gs_->num_players() + 1};
+          tmp_score.setZero();
           if (w > resign_val) {
-            resign_score[cp] = 1.0;
+            tmp_score[cp] = 1.0;
           } else if (l > resign_val) {
             const auto opponent = (cp + 1) % 2;
-            resign_score[opponent] = 1.0;
+            tmp_score[opponent] = 1.0;
           } else if (d > resign_val) {
-            resign_score[base_gs_->num_players()] = 1.0;
+            tmp_score[base_gs_->num_players()] = 1.0;
           }
-          // If we should resign randomly check playthrough chance.
-          if (resign_score.sum() > 0 &&
-              dist(re) < params_.resign_playthrough_percent) {
-            game.playthrough = true;
-            resign_score.setZero();
+          if (tmp_score.sum() > 0) {
+            // If we should resign randomly check playthrough chance.
+            if (dist(re) < params_.resign_playthrough_percent) {
+              game.playthrough = true;
+            } else {
+              resign_score = std::make_optional(tmp_score);
+            }
           }
         }
         const auto pi = mcts.probs(temp);
@@ -116,8 +120,10 @@ void PlayManager::play() {
         }
         game.gs->play_move(chosen_m);
         auto scores = game.gs->scores();
-        if (!scores.has_value() && resign_score.sum() > 0) {
-          scores = std::make_optional(resign_score);
+        if (!scores.has_value() && resign_score.has_value()) {
+          scores = resign_score;
+        } else {
+          resign_score = std::nullopt;
         }
         if (scores.has_value()) {
           // Dump history.
@@ -133,7 +139,9 @@ void PlayManager::play() {
           {
             std::unique_lock<std::mutex>{game_end_mutex_};
             scores_ += scores.value();
-            resign_scores_ += resign_score;
+            if (resign_score.has_value()) {
+              resign_scores_ = resign_score.value();
+            }
             ++games_completed_;
             game_length_ += game.gs->current_turn();
             // If we have started enough games just loop and complete games.

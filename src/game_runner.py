@@ -631,13 +631,15 @@ if __name__ == '__main__':
         gr.run()
         scores = pm.scores()
         win_rates = [0] * len(scores)
+        sn = sum(scores)
         for i in range(len(scores)):
-            win_rates[i] = scores[i] / n
+            win_rates[i] = scores[i] / sn
         resign_scores = pm.resign_scores()
         resign_win_rates = [0] * len(resign_scores)
+        rn = sum(resign_scores)
         for i in range(len(resign_scores)):
-            resign_win_rates[i] = resign_scores[i] / n
-        resign_rate = sum(resign_scores)/sum(scores)
+            resign_win_rates[i] = resign_scores[i] / rn
+        resign_rate = rn/sn
         hits = pm.cache_hits()
         total = hits + pm.cache_misses()
         hr = 0

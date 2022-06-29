@@ -7,12 +7,23 @@ namespace alphazero::tawlbwrdd_gs {
 namespace {
 
 // NOLINTNEXTLINE
-TEST(TawlbwrddGS, Equals) {
-  auto gs = TawlbwrddGS();
-  std::cout << gs.dump();
-  gs.play_move((0 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 5);
-  std::cout << gs.dump();
-  auto m = gs.valid_moves();
+TEST(TawlbwrddGS, RepetitionCount) {
+  auto gs = TawlbwrddGS().copy();
+  std::cout << gs->dump();
+  gs->play_move((0 * WIDTH + 4) * (WIDTH + HEIGHT) + 3);
+  gs->play_move((2 * WIDTH + 5) * (WIDTH + HEIGHT) + 4);
+  std::cout << gs->dump();
+  gs->play_move((0 * WIDTH + 3) * (WIDTH + HEIGHT) + 4);
+  gs->play_move((2 * WIDTH + 4) * (WIDTH + HEIGHT) + 5);
+  std::cout << gs->dump();
+  gs = gs->copy();
+  gs->play_move((0 * WIDTH + 4) * (WIDTH + HEIGHT) + 3);
+  gs->play_move((2 * WIDTH + 5) * (WIDTH + HEIGHT) + 4);
+  std::cout << gs->dump();
+  gs->play_move((0 * WIDTH + 3) * (WIDTH + HEIGHT) + 4);
+  gs->play_move((2 * WIDTH + 4) * (WIDTH + HEIGHT) + 5);
+  std::cout << gs->dump();
+  auto m = gs->valid_moves();
   for (auto i = 0; i < m.size(); ++i) {
     if (m(i) == 1) {
       auto new_loc = i % (WIDTH + HEIGHT);
@@ -35,10 +46,11 @@ TEST(TawlbwrddGS, Equals) {
                 << '\n';
     }
   }
-  auto s = gs.scores().value_or(SizedVector<float, 3>{0, 0, 0});
+  auto s = gs->scores().value_or(SizedVector<float, 3>{0, 0, 0});
 
   std::cout << s(0) << ", " << s(1) << ", " << s(2);
-  // EXPECT_TRUE(false);
+  auto expected = SizedVector<float, 3>{1, 0, 0};
+  EXPECT_EQ(s, expected);
 }
 
 }  // namespace

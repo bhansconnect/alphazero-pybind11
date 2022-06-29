@@ -7,7 +7,7 @@ namespace alphazero::opentafl_gs {
 namespace {
 
 // NOLINTNEXTLINE
-TEST(OpenTaflGS, Equals) {
+TEST(OpenTaflGS, RepetitionCount) {
   auto gs = OpenTaflGS().copy();
   // gs->play_move((0 * WIDTH + 3) * (WIDTH + HEIGHT) + WIDTH + 2);
   // gs->play_move((0 * WIDTH + 4) * (WIDTH + HEIGHT) + WIDTH + 2);
@@ -34,14 +34,13 @@ TEST(OpenTaflGS, Equals) {
   std::cout << gs->dump();
   gs->play_move((8 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 9);
   gs->play_move((7 * WIDTH + 4) * (WIDTH + HEIGHT) + 5 + 0);
+  std::cout << gs->dump();
   gs->play_move((9 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 8);
   gs->play_move((7 * WIDTH + 5) * (WIDTH + HEIGHT) + 4 + 0);
   std::cout << gs->dump();
   gs = gs->copy();
   gs->play_move((8 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 9);
   gs->play_move((7 * WIDTH + 4) * (WIDTH + HEIGHT) + 5 + 0);
-  gs->play_move((9 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 8);
-  gs->play_move((7 * WIDTH + 5) * (WIDTH + HEIGHT) + 4 + 0);
   std::cout << gs->dump();
   // gs->play_move((8 * WIDTH + 5) * (WIDTH + HEIGHT) + WIDTH + 9);
   // gs->play_move((7 * WIDTH + 4) * (WIDTH + HEIGHT) + 5 + 0);
@@ -75,7 +74,8 @@ TEST(OpenTaflGS, Equals) {
   auto s = gs->scores().value_or(SizedVector<float, 3>{0, 0, 0});
 
   std::cout << s(0) << ", " << s(1) << ", " << s(2);
-  // EXPECT_TRUE(false);
+  auto expected = SizedVector<float, 3>{1, 0, 0};
+  EXPECT_EQ(s, expected);
 }
 
 }  // namespace

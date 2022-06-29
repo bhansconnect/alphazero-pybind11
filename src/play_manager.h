@@ -75,14 +75,14 @@ class PlayManager {
                          const Eigen::Ref<const Matrix<float>>& pi);
 
   [[nodiscard]] const Vector<float> scores() const noexcept { return scores_; }
+  [[nodiscard]] const Vector<float> resign_scores() const noexcept {
+    return resign_scores_;
+  }
   [[nodiscard]] uint32_t remaining_games() const noexcept {
     return params_.games_to_play - games_completed_;
   }
   [[nodiscard]] uint32_t games_completed() const noexcept {
     return games_completed_;
-  }
-  [[nodiscard]] uint32_t games_resigned() const noexcept {
-    return games_resigned_;
   }
   void dumb_inference(const uint8_t player);
 
@@ -144,7 +144,7 @@ class PlayManager {
   uint32_t games_started_;
   uint64_t game_length_ = 0;
   std::atomic<uint32_t> games_completed_ = 0;
-  std::atomic<uint32_t> games_resigned_ = 0;
+  Vector<float> resign_scores_;
 
   ConcurrentQueue<uint32_t> awaiting_mcts_;
   std::vector<std::unique_ptr<ConcurrentQueue<uint32_t>>> awaiting_inference_;

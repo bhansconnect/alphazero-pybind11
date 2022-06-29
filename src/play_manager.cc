@@ -41,6 +41,8 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
   }
   scores_ = Vector<float>{base_gs_->num_players() + 1};
   scores_.setZero();
+  resign_scores_ = Vector<float>{base_gs_->num_players() + 1};
+  resign_scores_.setZero();
 }
 
 void PlayManager::play() {
@@ -86,7 +88,8 @@ void PlayManager::play() {
           if (w > resign_val) {
             resign_score[cp] = 1.0;
           } else if (l > resign_val) {
-            resign_score[(cp + 1) % 2] = 1.0;
+            const auto opponent = (cp + 1) % 2;
+            resign_score[opponent] = 1.0;
           } else if (d > resign_val) {
             resign_score[base_gs_->num_players()] = 1.0;
           }
@@ -114,7 +117,6 @@ void PlayManager::play() {
         game.gs->play_move(chosen_m);
         auto scores = game.gs->scores();
         if (!scores.has_value() && resign_score.sum() > 0) {
-          ++games_resigned_;
           scores = std::make_optional(resign_score);
         }
         if (scores.has_value()) {
@@ -131,6 +133,7 @@ void PlayManager::play() {
           {
             std::unique_lock<std::mutex>{game_end_mutex_};
             scores_ += scores.value();
+            resign_scores_ += resign_score;
             ++games_completed_;
             game_length_ += game.gs->current_turn();
             // If we have started enough games just loop and complete games.

@@ -8,7 +8,7 @@ namespace alphazero::brandubh_gs {
 [[nodiscard]] std::unique_ptr<GameState> BrandubhGS::copy() const noexcept {
   return std::make_unique<BrandubhGS>(board_, player_, turn_, max_turns_,
                                       current_repetition_count_,
-                                      repetition_counts_);
+                                      repetition_counts_, board_intern_);
 }
 
 [[nodiscard]] bool BrandubhGS::operator==(const GameState& other) const
@@ -271,6 +271,17 @@ void BrandubhGS::play_move(uint32_t move) {
   if (move < 0 || move >= NUM_MOVES) {
     throw std::runtime_error{"Invalid move: You have a bug in your code."};
   }
+  // Initialize board interning if it is turn is 0.
+  // We initialize it with the first move because we only want to share it
+  // within one game, not across all games.
+  if (turn_ == 0) {
+    board_intern_ =
+        std::make_shared<absl::node_hash_set<RepetitionKeyWrapper>>();
+    auto [key, _inserted_new] = board_intern_->emplace(board_, player_);
+    const auto* key_ptr = &(*key);
+    repetition_counts_[key_ptr] = 1;
+  }
+
   // Move specified piece to row/column.
   auto new_loc = move % (WIDTH + HEIGHT);
   auto height_move = new_loc >= WIDTH;
@@ -322,13 +333,14 @@ void BrandubhGS::play_move(uint32_t move) {
   ++turn_;
 
   // Update repetitions.
-  auto rkw = RepetitionKeyWrapper(board_, player_);
-  if (!repetition_counts_.contains(rkw)) {
-    repetition_counts_[rkw] = 1;
+  auto [key, _inserted_new] = board_intern_->emplace(board_, player_);
+  const auto* key_ptr = &(*key);
+  if (!repetition_counts_.contains(key_ptr)) {
+    repetition_counts_[key_ptr] = 1;
   } else {
-    ++repetition_counts_[rkw];
+    ++repetition_counts_[key_ptr];
   }
-  current_repetition_count_ = repetition_counts_[rkw];
+  current_repetition_count_ = repetition_counts_[key_ptr];
 }
 
 [[nodiscard]] bool king_exists(const BoardTensor& bt) noexcept {
@@ -483,6 +495,9 @@ void BrandubhGS::play_move(uint32_t move) {
   return out;
 }
 
-void BrandubhGS::minimize_storage() { repetition_counts_.clear(); }
+void BrandubhGS::minimize_storage() {
+  repetition_counts_.clear();
+  board_intern_.reset();
+}
 
 }  // namespace alphazero::brandubh_gs

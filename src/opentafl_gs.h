@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/node_hash_set.h"
 #include "game_state.h"
 
 // This version is an extension of the fetlar hnefatafl rules.
@@ -116,22 +117,20 @@ class OpenTaflGS : public GameState {
     board_(ATK_LAYER, 6, 10) = 1;
     board_(ATK_LAYER, 7, 10) = 1;
     board_(ATK_LAYER, 5, 9) = 1;
-
-    repetition_counts_[RepetitionKeyWrapper(board_, player_)] = 1;
   }
   OpenTaflGS(
       BoardTensor board, int8_t player, uint16_t turn, uint16_t max_turns,
       uint8_t current_repetition_count,
-      absl::flat_hash_map<RepetitionKeyWrapper, uint8_t> repetition_counts)
+      absl::flat_hash_map<const RepetitionKeyWrapper*, uint8_t>
+          repetition_counts,
+      std::shared_ptr<absl::node_hash_set<RepetitionKeyWrapper>> board_intern)
       : board_(board),
         turn_(turn),
         max_turns_(max_turns),
         player_(player),
-        current_repetition_count_(current_repetition_count) {
-    for (const auto& entry : repetition_counts) {
-      repetition_counts_[RepetitionKeyWrapper(entry.first)] = entry.second;
-    }
-  }
+        current_repetition_count_(current_repetition_count),
+        repetition_counts_(repetition_counts),
+        board_intern_(board_intern) {}
 
   [[nodiscard]] std::unique_ptr<GameState> copy() const noexcept override;
   [[nodiscard]] bool operator==(const GameState& other) const noexcept override;
@@ -198,7 +197,14 @@ class OpenTaflGS : public GameState {
   uint16_t max_turns_{DEFAULT_MAX_TURNS};
   int8_t player_{0};
   uint8_t current_repetition_count_{1};
-  absl::flat_hash_map<RepetitionKeyWrapper, uint8_t> repetition_counts_{};
+  absl::flat_hash_map<const RepetitionKeyWrapper*, uint8_t>
+      repetition_counts_{};
+  // This is used to avoid constantly copying board tensors.
+  // Instead a shared pointer to this set is copied.
+  // It has pointer stability, so we can use pointers to it's elements as if
+  // they were a copy of the element.
+  std::shared_ptr<absl::node_hash_set<RepetitionKeyWrapper>> board_intern_ =
+      nullptr;
 
   // Repetition count for each board position.
 };

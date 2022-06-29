@@ -1,7 +1,7 @@
 #pragma once
 
 #include "absl/container/flat_hash_map.h"
-#include "absl/container/node_hash_set.h"
+#include "absl/container/flat_hash_set.h"
 #include "game_state.h"
 
 // Update: Rules now changed to match OpenTafl brandubh rules (at least for
@@ -54,30 +54,37 @@ using CanonicalTensor =
     SizedTensor<float, Eigen::Sizes<CANONICAL_SHAPE[0], CANONICAL_SHAPE[1],
                                     CANONICAL_SHAPE[2]>>;
 
-struct RepetitionKeyWrapper {
-  RepetitionKeyWrapper(const BoardTensor& tensor, uint8_t player)
-      : t(tensor), p(player) {}
-  RepetitionKeyWrapper(const RepetitionKeyWrapper& rkw) : t(rkw.t), p(rkw.p) {}
+struct RepetitionKey {
   BoardTensor t;
   uint8_t p;
+
+  RepetitionKey(BoardTensor tensor, uint8_t player) : t(tensor), p(player) {}
+};
+struct RepetitionKeyWrapper {
+  RepetitionKeyWrapper(const BoardTensor& tensor, uint8_t player) {
+    data = std::make_shared<RepetitionKey>(tensor, player);
+  }
+  RepetitionKeyWrapper(const RepetitionKeyWrapper& rkw) { data = rkw.data; }
+  std::shared_ptr<RepetitionKey> data;
 };
 template <typename H>
 H AbslHashValue(H h, const RepetitionKeyWrapper& rkw) {
-  h = H::combine_contiguous(std::move(h), rkw.t.data(), rkw.t.size());
-  return H::combine(std::move(h), rkw.p);
+  h = H::combine_contiguous(std::move(h), rkw.data->t.data(),
+                            rkw.data->t.size());
+  return H::combine(std::move(h), rkw.data->p);
 }
 bool operator==(const RepetitionKeyWrapper& lhs,
                 const RepetitionKeyWrapper& rhs) {
   for (auto i = 0; i < BOARD_SHAPE[0]; ++i) {
     for (auto j = 0; j < BOARD_SHAPE[1]; ++j) {
       for (auto k = 0; k < BOARD_SHAPE[2]; ++k) {
-        if (lhs.t(i, j, k) != rhs.t(i, j, k)) {
+        if (lhs.data->t(i, j, k) != rhs.data->t(i, j, k)) {
           return false;
         }
       }
     }
   }
-  return rhs.p == lhs.p;
+  return rhs.data->p == lhs.data->p;
 }
 
 class BrandubhGS : public GameState {
@@ -106,9 +113,9 @@ class BrandubhGS : public GameState {
   BrandubhGS(
       BoardTensor board, int8_t player, uint16_t turn, uint16_t max_turns,
       uint8_t current_repetition_count,
-      absl::flat_hash_map<const RepetitionKeyWrapper*, uint8_t>
+      absl::flat_hash_map<const std::shared_ptr<RepetitionKey>, uint8_t>
           repetition_counts,
-      std::shared_ptr<absl::node_hash_set<RepetitionKeyWrapper>> board_intern)
+      std::shared_ptr<absl::flat_hash_set<RepetitionKeyWrapper>> board_intern)
       : board_(board),
         turn_(turn),
         max_turns_(max_turns),
@@ -182,13 +189,13 @@ class BrandubhGS : public GameState {
   uint16_t max_turns_{DEFAULT_MAX_TURNS};
   int8_t player_{0};
   uint8_t current_repetition_count_{1};
-  absl::flat_hash_map<const RepetitionKeyWrapper*, uint8_t>
+  absl::flat_hash_map<const std::shared_ptr<RepetitionKey>, uint8_t>
       repetition_counts_{};
   // This is used to avoid constantly copying board tensors.
   // Instead a shared pointer to this set is copied.
   // It has pointer stability, so we can use pointers to it's elements as if
   // they were a copy of the element.
-  std::shared_ptr<absl::node_hash_set<RepetitionKeyWrapper>> board_intern_ =
+  std::shared_ptr<absl::flat_hash_set<RepetitionKeyWrapper>> board_intern_ =
       nullptr;
 
   // Repetition count for each board position.

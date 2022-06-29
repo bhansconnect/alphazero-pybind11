@@ -276,9 +276,9 @@ void BrandubhGS::play_move(uint32_t move) {
   // within one game, not across all games.
   if (turn_ == 0) {
     board_intern_ =
-        std::make_shared<absl::node_hash_set<RepetitionKeyWrapper>>();
+        std::make_shared<absl::flat_hash_set<RepetitionKeyWrapper>>();
     auto [key, _inserted_new] = board_intern_->emplace(board_, player_);
-    const auto* key_ptr = &(*key);
+    const auto key_ptr = key->data;
     repetition_counts_[key_ptr] = 1;
   }
 
@@ -334,13 +334,23 @@ void BrandubhGS::play_move(uint32_t move) {
 
   // Update repetitions.
   auto [key, _inserted_new] = board_intern_->emplace(board_, player_);
-  const auto* key_ptr = &(*key);
+  const auto key_ptr = key->data;
   if (!repetition_counts_.contains(key_ptr)) {
     repetition_counts_[key_ptr] = 1;
   } else {
     ++repetition_counts_[key_ptr];
   }
   current_repetition_count_ = repetition_counts_[key_ptr];
+
+  // Prune old unused keys.
+  for (auto it = board_intern_->begin(), end = board_intern_->end();
+       it != end;) {
+    // `erase()` will invalidate `it`, so advance `it` first.
+    auto copy_it = it++;
+    if (copy_it->data.unique()) {
+      board_intern_->erase(copy_it);
+    }
+  }
 }
 
 [[nodiscard]] bool king_exists(const BoardTensor& bt) noexcept {

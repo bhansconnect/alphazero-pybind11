@@ -140,7 +140,7 @@ void PlayManager::play() {
             std::unique_lock<std::mutex>{game_end_mutex_};
             scores_ += scores.value();
             if (resign_score.has_value()) {
-              resign_scores_ = resign_score.value();
+              resign_scores_ += resign_score.value();
             }
             ++games_completed_;
             game_length_ += game.gs->current_turn();

@@ -11,8 +11,8 @@ namespace alphazero::brandubh_gs {
                                       repetition_counts_, board_intern_);
 }
 
-[[nodiscard]] bool BrandubhGS::operator==(
-    const GameState& other) const noexcept {
+[[nodiscard]] bool BrandubhGS::operator==(const GameState& other) const
+    noexcept {
   const auto* other_cs = dynamic_cast<const BrandubhGS*>(&other);
   if (other_cs == nullptr) {
     return false;
@@ -312,21 +312,33 @@ void BrandubhGS::play_move(uint32_t move) {
     board_(0, new_h - 1, new_w) = 0;
     board_(1, new_h - 1, new_w) = 0;
     board_(2, new_h - 1, new_w) = 0;
+    // All old repetitions are invalid since we no longer have the same number
+    // of pieces.
+    repetition_counts_.clear();
   }
   if (captured(board_, new_h, new_w, 1, 0)) {
     board_(0, new_h + 1, new_w) = 0;
     board_(1, new_h + 1, new_w) = 0;
     board_(2, new_h + 1, new_w) = 0;
+    // All old repetitions are invalid since we no longer have the same number
+    // of pieces.
+    repetition_counts_.clear();
   }
   if (captured(board_, new_h, new_w, 0, -1)) {
     board_(0, new_h, new_w - 1) = 0;
     board_(1, new_h, new_w - 1) = 0;
     board_(2, new_h, new_w - 1) = 0;
+    // All old repetitions are invalid since we no longer have the same number
+    // of pieces.
+    repetition_counts_.clear();
   }
   if (captured(board_, new_h, new_w, 0, 1)) {
     board_(0, new_h, new_w + 1) = 0;
     board_(1, new_h, new_w + 1) = 0;
     board_(2, new_h, new_w + 1) = 0;
+    // All old repetitions are invalid since we no longer have the same number
+    // of pieces.
+    repetition_counts_.clear();
   }
 
   player_ = (player_ + 1) % 2;

@@ -4,12 +4,14 @@
 #include <iostream>
 #include <random>
 
+#include "pcg_random.hpp"
+
 namespace alphazero {
 
 constexpr const float NOISE_ALPHA_RATIO = 10.83;
+thread_local pcg32 re{pcg_extras::seed_seq_from<std::random_device>{}};
 
 void Node::add_children(const Vector<uint8_t>& valids) noexcept {
-  thread_local std::default_random_engine re{std::random_device{}()};
   children.reserve(valids.sum());
   for (auto w = 0; w < valids.size(); ++w) {
     if (valids(w) == 1) {
@@ -25,8 +27,8 @@ void Node::update_policy(const Vector<float>& pi) noexcept {
   }
 }
 
-float Node::uct(float sqrt_parent_n, float cpuct,
-                float fpu_value) const noexcept {
+float Node::uct(float sqrt_parent_n, float cpuct, float fpu_value) const
+    noexcept {
   return (n == 0 ? fpu_value : q) +
          cpuct * policy * sqrt_parent_n / static_cast<float>(n + 1);
 }
@@ -67,7 +69,6 @@ void MCTS::update_root(const GameState& gs, uint32_t move) {
 }
 
 void MCTS::add_root_noise() {
-  thread_local std::default_random_engine re{std::random_device{}()};
   const auto legal_move_count = root_.children.size();
   auto dist =
       std::gamma_distribution<float>{NOISE_ALPHA_RATIO / legal_move_count, 1.0};
@@ -186,8 +187,7 @@ Vector<float> MCTS::probs(const float temp) const noexcept {
 }
 
 uint32_t MCTS::pick_move(const Vector<float>& p) {
-  thread_local std::default_random_engine re{std::random_device{}()};
-  thread_local std::uniform_real_distribution<float> dist{0.0F, 1.0F};
+  std::uniform_real_distribution<float> dist{0.0F, 1.0F};
   auto choice = dist(re);
   auto sum = 0.0F;
   for (auto m = 0U; m < p.size(); ++m) {

@@ -137,7 +137,19 @@ class TawlbwrddGS : public GameState {
         player_(player),
         current_repetition_count_(current_repetition_count),
         repetition_counts_(repetition_counts),
-        board_intern_(board_intern) {}
+        board_intern_(board_intern) {
+    // Prune old unused keys from global intern pool.
+    if (board_intern_) {
+      for (auto it = board_intern_->begin(), end = board_intern_->end();
+           it != end;) {
+        // `erase()` will invalidate `it`, so advance `it` first.
+        auto copy_it = it++;
+        if (copy_it->data.unique()) {
+          board_intern_->erase(copy_it);
+        }
+      }
+    }
+  }
 
   [[nodiscard]] std::unique_ptr<GameState> copy() const noexcept override;
   [[nodiscard]] bool operator==(const GameState& other) const noexcept override;

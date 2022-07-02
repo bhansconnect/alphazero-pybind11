@@ -234,10 +234,10 @@ void PlayManager::dumb_inference(const uint8_t player) {
     // }
     auto& game = games_[i.value()];
     std::tie(game.v, game.pi) = dumb_eval(*game.gs);
-    if (params_.max_cache_size > 0) {
-      caches_[params_.self_play ? 0 : player]->insert(
-          game.leaf, {Vector<float>{game.v}, Vector<float>{game.pi}});
-    }
+    // if (params_.max_cache_size > 0) {
+    //   caches_[params_.self_play ? 0 : player]->insert(
+    //       game.leaf, {Vector<float>{game.v}, Vector<float>{game.pi}});
+    // }
     awaiting_mcts_.push(i.value());
   }
 }

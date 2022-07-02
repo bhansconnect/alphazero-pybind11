@@ -11,8 +11,8 @@ namespace alphazero::brandubh_gs {
                                       repetition_counts_, board_intern_);
 }
 
-[[nodiscard]] bool BrandubhGS::operator==(const GameState& other) const
-    noexcept {
+[[nodiscard]] bool BrandubhGS::operator==(
+    const GameState& other) const noexcept {
   const auto* other_cs = dynamic_cast<const BrandubhGS*>(&other);
   if (other_cs == nullptr) {
     return false;
@@ -341,16 +341,6 @@ void BrandubhGS::play_move(uint32_t move) {
     ++repetition_counts_[key_ptr];
   }
   current_repetition_count_ = repetition_counts_[key_ptr];
-
-  // Prune old unused keys.
-  for (auto it = board_intern_->begin(), end = board_intern_->end();
-       it != end;) {
-    // `erase()` will invalidate `it`, so advance `it` first.
-    auto copy_it = it++;
-    if (copy_it->data.unique()) {
-      board_intern_->erase(copy_it);
-    }
-  }
 }
 
 [[nodiscard]] bool king_exists(const BoardTensor& bt) noexcept {

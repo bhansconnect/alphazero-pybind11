@@ -10,8 +10,8 @@ namespace alphazero::tawlbwrdd_gs {
                                        repetition_counts_, board_intern_);
 }
 
-[[nodiscard]] bool TawlbwrddGS::operator==(const GameState& other) const
-    noexcept {
+[[nodiscard]] bool TawlbwrddGS::operator==(
+    const GameState& other) const noexcept {
   const auto* other_cs = dynamic_cast<const TawlbwrddGS*>(&other);
   if (other_cs == nullptr) {
     return false;
@@ -250,16 +250,6 @@ void TawlbwrddGS::play_move(uint32_t move) {
     ++repetition_counts_[key_ptr];
   }
   current_repetition_count_ = repetition_counts_[key_ptr];
-
-  // Prune old unused keys.
-  for (auto it = board_intern_->begin(), end = board_intern_->end();
-       it != end;) {
-    // `erase()` will invalidate `it`, so advance `it` first.
-    auto copy_it = it++;
-    if (copy_it->data.unique()) {
-      board_intern_->erase(copy_it);
-    }
-  }
 }
 
 [[nodiscard]] bool king_exists(const BoardTensor& bt) noexcept {
@@ -273,8 +263,8 @@ void TawlbwrddGS::play_move(uint32_t move) {
   return false;
 }
 
-[[nodiscard]] std::optional<Vector<float>> TawlbwrddGS::scores() const
-    noexcept {
+[[nodiscard]] std::optional<Vector<float>> TawlbwrddGS::scores()
+    const noexcept {
   auto scores = SizedVector<float, 3>{};
   scores.setZero();
   // Check if 3 fold repetition.

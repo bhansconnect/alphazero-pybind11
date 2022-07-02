@@ -10,8 +10,8 @@ namespace alphazero::tawlbwrdd_gs {
                                        repetition_counts_, board_intern_);
 }
 
-[[nodiscard]] bool TawlbwrddGS::operator==(
-    const GameState& other) const noexcept {
+[[nodiscard]] bool TawlbwrddGS::operator==(const GameState& other) const
+    noexcept {
   const auto* other_cs = dynamic_cast<const TawlbwrddGS*>(&other);
   if (other_cs == nullptr) {
     return false;
@@ -221,21 +221,33 @@ void TawlbwrddGS::play_move(uint32_t move) {
     board_(0, new_h - 1, new_w) = 0;
     board_(1, new_h - 1, new_w) = 0;
     board_(2, new_h - 1, new_w) = 0;
+    // All old repetitions are invalid since we no longer have the same number
+    // of pieces.
+    repetition_counts_.clear();
   }
   if (captured(board_, new_h, new_w, 1, 0)) {
     board_(0, new_h + 1, new_w) = 0;
     board_(1, new_h + 1, new_w) = 0;
     board_(2, new_h + 1, new_w) = 0;
+    // All old repetitions are invalid since we no longer have the same number
+    // of pieces.
+    repetition_counts_.clear();
   }
   if (captured(board_, new_h, new_w, 0, -1)) {
     board_(0, new_h, new_w - 1) = 0;
     board_(1, new_h, new_w - 1) = 0;
     board_(2, new_h, new_w - 1) = 0;
+    // All old repetitions are invalid since we no longer have the same number
+    // of pieces.
+    repetition_counts_.clear();
   }
   if (captured(board_, new_h, new_w, 0, 1)) {
     board_(0, new_h, new_w + 1) = 0;
     board_(1, new_h, new_w + 1) = 0;
     board_(2, new_h, new_w + 1) = 0;
+    // All old repetitions are invalid since we no longer have the same number
+    // of pieces.
+    repetition_counts_.clear();
   }
 
   player_ = (player_ + 1) % 2;
@@ -263,8 +275,8 @@ void TawlbwrddGS::play_move(uint32_t move) {
   return false;
 }
 
-[[nodiscard]] std::optional<Vector<float>> TawlbwrddGS::scores()
-    const noexcept {
+[[nodiscard]] std::optional<Vector<float>> TawlbwrddGS::scores() const
+    noexcept {
   auto scores = SizedVector<float, 3>{};
   scores.setZero();
   // Check if 3 fold repetition.

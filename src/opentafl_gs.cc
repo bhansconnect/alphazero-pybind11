@@ -544,8 +544,8 @@ void OpenTaflGS::play_move(uint32_t move) {
 }
 
 void OpenTaflGS::minimize_storage() {
-  repetition_counts_.clear();
-  board_intern_.reset();
+  repetition_counts_ = {};
+  board_intern_ = nullptr;
 }
 
 }  // namespace alphazero::opentafl_gs

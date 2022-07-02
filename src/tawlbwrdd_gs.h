@@ -136,8 +136,8 @@ class TawlbwrddGS : public GameState {
         max_turns_(max_turns),
         player_(player),
         current_repetition_count_(current_repetition_count),
-        repetition_counts_(repetition_counts),
-        board_intern_(board_intern) {
+        repetition_counts_(std::move(repetition_counts)),
+        board_intern_(std::move(board_intern)) {
     // Prune old unused keys from global intern pool.
     if (board_intern_) {
       for (auto it = board_intern_->begin(), end = board_intern_->end();

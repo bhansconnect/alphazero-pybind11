@@ -10,6 +10,7 @@ constexpr const float NOISE_ALPHA_RATIO = 10.83;
 
 void Node::add_children(const Vector<uint8_t>& valids) noexcept {
   thread_local std::default_random_engine re{std::random_device{}()};
+  children.reserve(valids.sum());
   for (auto w = 0; w < valids.size(); ++w) {
     if (valids(w) == 1) {
       children.emplace_back(w);
@@ -24,8 +25,8 @@ void Node::update_policy(const Vector<float>& pi) noexcept {
   }
 }
 
-float Node::uct(float sqrt_parent_n, float cpuct, float fpu_value) const
-    noexcept {
+float Node::uct(float sqrt_parent_n, float cpuct,
+                float fpu_value) const noexcept {
   return (n == 0 ? fpu_value : q) +
          cpuct * policy * sqrt_parent_n / static_cast<float>(n + 1);
 }

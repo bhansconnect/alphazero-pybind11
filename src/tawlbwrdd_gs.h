@@ -216,6 +216,8 @@ class TawlbwrddGS : public GameState {
   uint16_t max_turns_{DEFAULT_MAX_TURNS};
   int8_t player_{0};
   uint8_t current_repetition_count_{1};
+  // TODO: maybe look into making this a sorted vector/flat_map.
+  // It should be small enough that it would be faster than hashing.
   absl::flat_hash_map<const std::shared_ptr<RepetitionKey>, uint8_t>
       repetition_counts_{};
   // This is used to avoid constantly copying board tensors.

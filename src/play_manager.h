@@ -87,12 +87,11 @@ class PlayManager {
   void dumb_inference(const uint8_t player);
 
   [[nodiscard]] std::optional<uint32_t> pop_game(uint32_t player) noexcept {
-    return awaiting_inference_[params_.self_play ? 0 : player]->pop(MAX_WAIT);
+    return awaiting_inference_[player]->pop(MAX_WAIT);
   }
   [[nodiscard]] std::vector<uint32_t> pop_games_upto(uint32_t player,
                                                      size_t n) noexcept {
-    return awaiting_inference_[params_.self_play ? 0 : player]->pop_upto(
-        n, MAX_WAIT);
+    return awaiting_inference_[player]->pop_upto(n, MAX_WAIT);
   }
   [[nodiscard]] std::optional<PlayHistory> pop_hist() noexcept {
     return history_.pop(MAX_WAIT);

@@ -31,14 +31,10 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     awaiting_mcts_.push(i);
   }
   for (auto i = 0U; i < base_gs_->num_players(); ++i) {
-    caches_.push_back(std::make_unique<Cache>(
-        params_.max_cache_size /
-        (params_.self_play ? 1 : base_gs_->num_players())));
+    caches_.push_back(std::make_unique<Cache>(params_.max_cache_size /
+                                              (base_gs_->num_players())));
     awaiting_inference_.push_back(
         std::make_unique<ConcurrentQueue<uint32_t>>());
-    if (params_.self_play) {
-      break;
-    }
   }
   scores_ = Vector<float>{base_gs_->num_players() + 1};
   scores_.setZero();
@@ -185,17 +181,14 @@ void PlayManager::play() {
     leaf->minimize_storage();
     game.leaf = std::move(leaf);
     if (params_.max_cache_size > 0) {
-      auto opt =
-          caches_[params_.self_play ? 0 : game.gs->current_player()]->find(
-              game.leaf);
+      auto opt = caches_[game.gs->current_player()]->find(game.leaf);
       if (opt.has_value()) {
         std::tie(game.v, game.pi) = opt.value();
         awaiting_mcts_.push(i.value());
         continue;
       }
     }
-    awaiting_inference_[params_.self_play ? 0 : game.gs->current_player()]
-        ->push(i.value());
+    awaiting_inference_[game.gs->current_player()]->push(i.value());
   }
 }
 
@@ -215,7 +208,7 @@ void PlayManager::update_inferences(const uint8_t player,
     }
   }
   if (params_.max_cache_size > 0) {
-    caches_[params_.self_play ? 0 : player]->insert_many(keys, values);
+    caches_[player]->insert_many(keys, values);
   }
   awaiting_mcts_.push_many(game_indices);
 }
@@ -223,7 +216,7 @@ void PlayManager::update_inferences(const uint8_t player,
 void PlayManager::dumb_inference(const uint8_t player) {
   // int count = 0;
   while (games_completed_ < params_.games_to_play) {
-    auto i = awaiting_inference_[params_.self_play ? 0 : player]->pop(MAX_WAIT);
+    auto i = awaiting_inference_[player]->pop(MAX_WAIT);
     if (!i.has_value()) {
       continue;
     }
@@ -240,7 +233,7 @@ void PlayManager::dumb_inference(const uint8_t player) {
     auto& game = games_[i.value()];
     std::tie(game.v, game.pi) = dumb_eval(*game.gs);
     // if (params_.max_cache_size > 0) {
-    //   caches_[params_.self_play ? 0 : player]->insert(
+    //   caches_[player]->insert(
     //       game.leaf, {Vector<float>{game.v}, Vector<float>{game.pi}});
     // }
     awaiting_mcts_.push(i.value());

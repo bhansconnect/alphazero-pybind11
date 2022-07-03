@@ -31,7 +31,7 @@ MAX_CACHE_SIZE = 200_000
 # How many shards to split the cache into.
 # Due to multithreading, the cache can have high contention.
 # The more threads generally means you want more shards.
-CACHE_SHARDS = os.cpu_count()
+CACHE_SHARDS = 1
 
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
 WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
@@ -54,7 +54,7 @@ FPU_REDUCTION = 0.25
 # Concurrent games played is batch size * num player * concurrent batch mult
 # Total games per iteration is batch size * num players * concurrent batch mult * chunks
 # For training of complex games, this probably should be closer to 1024.
-SELF_PLAY_BATCH_SIZE = 256
+SELF_PLAY_BATCH_SIZE = 1024
 SELF_PLAY_CONCURRENT_BATCH_MULT = 2
 SELF_PLAY_CHUNKS = 4
 
@@ -96,7 +96,7 @@ def new_game():
 # They also enable restarting at a specific interation.
 bootstrap_iters = 0
 start = 0
-iters = 200
+iters = 5
 depth = 4
 channels = 12
 kernel_size = 5
@@ -152,10 +152,16 @@ class GameRunner:
             self.args.data_save_size, self.args.game.NUM_MOVES())
         shape = (self.args.max_batch_size, cs[0], cs[1], cs[2])
         self.batches = []
+        self.v = []
+        self.pi = []
         for i in range(self.concurrent_batches):
             self.batches.append(torch.zeros(shape))
+            self.v.append(torch.zeros((self.num_players+1)))
+            self.pi.append(torch.zeros((self.args.game.NUM_MOVES())))
             if self.args.cuda:
                 self.batches[i].pin_memory()
+                self.v[i].pin_memory()
+                self.pi[i].pin_memory()
             self.ready_queues[i % self.num_players].put(i)
 
     def run(self):
@@ -256,7 +262,7 @@ class GameRunner:
                 batch_index % self.num_players, batch, self.batch_workers)
             out = batch[:len(game_indices)]
             if self.args.cuda:
-                out = out.contiguous().cuda(non_blocking=True)
+                out = out.contiguous().cuda()
             self.batch_queue.put((out, batch_index, game_indices))
 
     def player_executor(self):
@@ -266,18 +272,19 @@ class GameRunner:
                     timeout=1)
             except queue.Empty:
                 continue
-            v, pi = self.players[batch_index % self.num_players].process(batch)
-            self.result_queue.put((v, pi, batch_index, game_indices))
+            self.v[batch_index], self.pi[batch_index] = self.players[batch_index %
+                                                                     self.num_players].process(batch)
+            self.result_queue.put((batch_index, game_indices))
 
     def result_processor(self):
         while (self.pm.remaining_games() > 0):
             try:
-                v, pi, batch_index, game_indices = self.result_queue.get(
+                batch_index, game_indices = self.result_queue.get(
                     timeout=1)
             except queue.Empty:
                 continue
-            v = v.cpu().numpy()
-            pi = pi.cpu().numpy()
+            v = self.v[batch_index].cpu().numpy()
+            pi = self.pi[batch_index].cpu().numpy()
             if v.size == 0 or pi.size == 0:
                 # As an edge case, it seems that when queues are closed, empty data gets sent somehow.
                 # Just ignore the data.
@@ -627,8 +634,7 @@ if __name__ == '__main__':
 
         # Just use a random agent when generating data with network zero.
         # They are equivalent.
-        # use_rand = best == 0
-        use_rand = False
+        use_rand = best == 0
 
         if use_rand:
             nn = RandPlayer(Game, bs)

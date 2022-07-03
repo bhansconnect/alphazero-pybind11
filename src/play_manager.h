@@ -109,7 +109,11 @@ class PlayManager {
   }
   size_t awaiting_mcts_count() const noexcept { return awaiting_mcts_.size(); }
   size_t awaiting_inference_count() const noexcept {
-    return awaiting_inference_.size();
+    auto out = 0;
+    for (const auto& queue : awaiting_inference_) {
+      out += queue->size();
+    }
+    return out;
   }
   size_t hist_count() const noexcept { return history_.size(); }
   [[nodiscard]] size_t cache_size() const {

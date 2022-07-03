@@ -45,6 +45,25 @@ class LRUCache {
     }
   }
 
+  void insert_many(const std::vector<K>& ks, const std::vector<V>& vs) {
+    std::unique_lock l{m_};
+    for (auto i = 0; i < ks.size(); ++i) {
+      const auto k = ks[i];
+      const auto it = cache_.find(k);
+      if (it != cache_.end()) {
+        return;
+      }
+      const auto v = vs[i];
+      lru_.emplace_front(k, v);
+      cache_.emplace(k, lru_.begin());
+    }
+    while (lru_.size() > ms_) {
+      auto& [k, _] = lru_.back();
+      cache_.erase(k);
+      lru_.pop_back();
+    }
+  }
+
   [[nodiscard]] size_t hits() { return hits_; };
   [[nodiscard]] size_t misses() { return misses_; };
   [[nodiscard]] size_t size() { return lru_.size(); };

@@ -20,6 +20,15 @@ class ConcurrentQueue {
     cv_.notify_one();
   }
 
+  void push_many(const std::vector<T>& data) noexcept {
+    std::unique_lock lock(m_);
+    for (const auto& d : data) {
+      queue_.push(d);
+    }
+    lock.unlock();
+    cv_.notify_all();
+  }
+
   [[nodiscard]] size_t size() const noexcept { return queue_.size(); }
 
   [[nodiscard]] bool empty() const noexcept {

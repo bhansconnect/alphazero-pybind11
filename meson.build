@@ -5,7 +5,6 @@ project(
   default_options : [
     'warning_level=2',
     'cpp_std=c++20',
-    'default_library=static'
   ]
 )
 

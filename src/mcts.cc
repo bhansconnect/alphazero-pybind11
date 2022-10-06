@@ -4,7 +4,7 @@
 #include <iostream>
 #include <random>
 
-#include "pcg_random.hpp"
+#include "pcg/pcg_random.hpp"
 
 namespace alphazero {
 
@@ -27,8 +27,8 @@ void Node::update_policy(const Vector<float>& pi) noexcept {
   }
 }
 
-float Node::uct(float sqrt_parent_n, float cpuct, float fpu_value) const
-    noexcept {
+float Node::uct(float sqrt_parent_n, float cpuct,
+                float fpu_value) const noexcept {
   return (n == 0 ? fpu_value : q) +
          cpuct * policy * sqrt_parent_n / static_cast<float>(n + 1);
 }

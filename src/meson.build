@@ -11,9 +11,6 @@ absl_hash_dep = absl_proj.get_variable('absl_hash_dep')
 eigen_proj = subproject('eigen')
 eigen_dep = eigen_proj.get_variable('eigen_dep')
 
-pcg_proj = subproject('pcg')
-pcg_dep = pcg_proj.get_variable('pcg_cpp_dep')
-
 gtest_proj = subproject('gtest')
 gtest_dep = gtest_proj.get_variable('gtest_main_dep')
 
@@ -103,13 +100,13 @@ test('gtest tests', photosynthesis_gs_test)
 mcts = library(
     'mcts',
     'mcts.cc',
-    dependencies: [eigen_dep, absl_hash_dep, pcg_dep],
+    dependencies: [eigen_dep, absl_hash_dep],
 )
 
 mcts_test = executable(
   'mcts_test',
   'mcts_test.cc',
-  dependencies: [gtest_dep, eigen_dep, absl_hash_dep, pcg_dep],
+  dependencies: [gtest_dep, eigen_dep, absl_hash_dep],
   link_with: [mcts, connect4_gs],
 )
 test('gtest tests', mcts_test)
@@ -133,14 +130,14 @@ test('gtest tests', lru_cache_test)
 play_manager = library(
   'play_manager',
   'play_manager.cc',
-  dependencies: [eigen_dep, absl_container_dep, absl_hash_dep, thread_dep, pcg_dep],
+  dependencies: [eigen_dep, absl_container_dep, absl_hash_dep, thread_dep],
   link_with: [mcts],
 )
 
 play_manager_test = executable(
   'play_manager_test',
   'play_manager_test.cc',
-  dependencies: [gtest_dep, eigen_dep, absl_container_dep, absl_hash_dep, pcg_dep],
+  dependencies: [gtest_dep, eigen_dep, absl_container_dep, absl_hash_dep],
   link_with: [play_manager, connect4_gs],
 )
 test('gtest tests', play_manager_test)
@@ -148,7 +145,7 @@ test('gtest tests', play_manager_test)
 play_manager_bench = executable(
   'play_manager_bench',
   'play_manager_bench.cc',
-  dependencies: [gbench_main_dep, gbench_dep, thread_dep, eigen_dep, absl_container_dep, absl_hash_dep, pcg_dep],
+  dependencies: [gbench_main_dep, gbench_dep, thread_dep, eigen_dep, absl_container_dep, absl_hash_dep],
   link_with: [play_manager, tawlbwrdd_gs],
 )
 
@@ -156,5 +153,5 @@ py3_install.extension_module(
   'alphazero',
   sources: ['py_wrapper.cc'],
   link_with: [connect4_gs, onitama_gs, brandubh_gs, opentafl_gs, tawlbwrdd_gs, play_manager],
-  dependencies : [pybind11_dep, py3_dep, eigen_dep, absl_container_dep, absl_hash_dep, pcg_dep],
+  dependencies : [pybind11_dep, py3_dep, eigen_dep, absl_container_dep, absl_hash_dep],
 )

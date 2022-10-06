@@ -140,6 +140,7 @@ play_manager = library(
   'play_manager.cc',
   dependencies: [eigen_dep, absl_container_dep, absl_hash_dep, thread_dep],
   link_with: [mcts],
+  cpp_args: lib_args,
 )
 
 play_manager_test = executable(

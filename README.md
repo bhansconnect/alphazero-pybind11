@@ -6,7 +6,7 @@ This is a modified implementation of AlphaZero. It takes some inspiration from [
 
 ### Prereqs
 
-This project has a few prereqs, but should be usable on Linux, Windows, or Mac (note, M1 may have some architecture problems between python and the built c++).
+This project has a few prereqs, but should be usable on Linux, Windows, or Mac.
 
 1. You need a C++ toolchain, ninja, and the meson build system.
 All of this information can be found in [the meson installation guide](https://mesonbuild.com/SimpleStart.html).
@@ -36,7 +36,7 @@ If using conda, you can follow this to get all of the python libaries installed:
 
 Building the project is pretty simple once you have the dependencies.
 
-1. Setup the project with `meson setup build --buildtype release`
+1. Setup the project with `meson setup build --buildtype release`. For M1 macs, you probably have to add `--cross-file m1-cross-file.txt` as well. This is due to python and its packages still generally being installed as x86_64.
 
 1. Build the C++ `ninja -C build test`. There will be warnings, but my minimal tests should pass.
 
@@ -45,5 +45,8 @@ Building the project is pretty simple once you have the dependencies.
 ### Just running something
 
 To start training a network, just run: `python src/game_runner.py`
+
+To track the progress, you can launch aim with: `aim up` from the project directy (make sure the torch env is activated).
+Go the to Metrics tab and start adding metrics. [Guide on metrics explorer](https://www.youtube.com/watch?v=7LUT9judVTQ).
 
 ### Base structure

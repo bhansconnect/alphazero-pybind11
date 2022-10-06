@@ -762,10 +762,8 @@ if __name__ == '__main__':
         del nn_past
         return nn_rate, draw_rate, hr, agl
 
-    run = aim.Run(
-        experiment=game_name,
-        run_hash=run_name,
-    )
+    run = aim.Run(experiment=game_name)
+    run.name = run_name
 
     run['hparams'] = {
         'network': network_name,

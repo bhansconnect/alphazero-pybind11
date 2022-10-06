@@ -20,7 +20,7 @@ HIST_SIZE = 30_000
 HIST_LOCATION = 'data/history'
 TMP_HIST_LOCATION = 'data/tmp_history'
 GRArgs = namedtuple(
-    'GRArgs', ['title', 'game', 'max_batch_size', 'iteration',  'data_save_size', 'data_folder', 'concurrent_batches', 'batch_workers', 'nn_workers', 'result_workers', 'mcts_workers', 'cuda'], defaults=(0, HIST_SIZE, TMP_HIST_LOCATION, 0, 0, 1, 1, os.cpu_count() - 1, torch.cuda.is_available()))
+    'GRArgs', ['title', 'game', 'max_batch_size', 'cuda', 'iteration',  'data_save_size', 'data_folder', 'concurrent_batches', 'batch_workers', 'nn_workers', 'result_workers', 'mcts_workers'], defaults=(0, HIST_SIZE, TMP_HIST_LOCATION, 0, 0, 1, 1, os.cpu_count() - 1))
 
 EXPECTED_OPENING_LENGTH = 10
 CPUCT = 1.25
@@ -47,6 +47,8 @@ WINDOW_SIZE_BETA = 0.7  # This decides the rough overall slope.
 WINDOW_SIZE_SCALAR = 6  # This ends up being approximately first time history doesn't grow
 
 RESULT_WORKERS = 2
+DATA_WORKERS = os.cpu_count() - 1
+USE_CUDA = torch.cuda.is_available()
 
 # Panel based gating has the network play against multiple previous best agents before being promoted.
 # This is muhch more imortant with games where the draw rate is high betwen new networks and the best.
@@ -254,6 +256,10 @@ class GameRunner:
                 continue
             v = v.cpu().numpy()
             pi = pi.cpu().numpy()
+            if v.size == 0 or pi.size == 0:
+                # As an edge case, it seems that when queues are closed, empty data gets sent somehow. 
+                # Just ignore the data.
+                continue
             self.pm.update_inferences(batch_index % self.num_players,
                                       game_indices, v, pi)
             self.ready_queues[batch_index % self.num_players].put(batch_index)
@@ -389,7 +395,7 @@ if __name__ == '__main__':
         dataset = ConcatDataset(datasets)
         sample_count = len(dataset)
         dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE,
-                                shuffle=False, num_workers=os.cpu_count() - 1)
+                                shuffle=False, num_workers=DATA_WORKERS)
 
         i_out = 0
         batch_out = 0
@@ -457,7 +463,7 @@ if __name__ == '__main__':
         dataset = ConcatDataset(datasets)
         sample_count = len(dataset)
         dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE,
-                                shuffle=False, num_workers=11)
+                                shuffle=False, num_workers=DATA_WORKERS)
 
         nn = neural_net.NNWrapper.load_checkpoint(
             Game, 'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
@@ -536,7 +542,7 @@ if __name__ == '__main__':
 
         dataset = ConcatDataset(datasets)
         dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE,
-                                shuffle=True, num_workers=11)
+                                shuffle=True, num_workers=DATA_WORKERS)
 
         nn = neural_net.NNWrapper.load_checkpoint(
             Game, 'data/checkpoint', f'{iteration:04d}-{run_name}.pt')
@@ -574,7 +580,7 @@ if __name__ == '__main__':
         bs = TRAIN_BATCH_SIZE
         dataset = ConcatDataset(datasets)
         dataloader = DataLoader(dataset, batch_size=bs,
-                                shuffle=True, num_workers=11)
+                                shuffle=True, num_workers=DATA_WORKERS)
 
         average_generation = total_size/min(hist_size, iteration+1)
         nn = neural_net.NNWrapper.load_checkpoint(
@@ -620,8 +626,9 @@ if __name__ == '__main__':
                 Game, 'data/checkpoint', f'{best:04d}-{run_name}.pt')
 
         pm = alphazero.PlayManager(new_game(), params)
+        use_cuda = (USE_CUDA and not use_rand)
         grargs = GRArgs(title='Self Play', game=Game, iteration=iteration,
-                        max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS, cuda=not use_rand)
+                        max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS, cuda=use_cuda)
 
         players = []
         for _ in range(Game.NUM_PLAYERS()):
@@ -673,7 +680,7 @@ if __name__ == '__main__':
                 pm = alphazero.PlayManager(new_game(), params)
 
                 grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
-                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
+                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS, cuda=USE_CUDA)
                 players = []
                 for _ in range(Game.NUM_PLAYERS()):
                     players.append(nn_past)
@@ -697,7 +704,7 @@ if __name__ == '__main__':
                 pm = alphazero.PlayManager(new_game(), params)
 
                 grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
-                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
+                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS, cuda=USE_CUDA)
                 players = []
                 for _ in range(Game.NUM_PLAYERS()):
                     players.append(nn)
@@ -729,7 +736,7 @@ if __name__ == '__main__':
                 pm = alphazero.PlayManager(new_game(), params)
 
                 grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
-                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
+                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS, cuda=USE_CUDA)
                 players = []
                 for _ in range(Game.NUM_PLAYERS()):
                     players.append(nn_past)

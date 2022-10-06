@@ -144,7 +144,7 @@ class OpenTaflGS : public GameState {
            it != end;) {
         // `erase()` will invalidate `it`, so advance `it` first.
         auto copy_it = it++;
-        if (copy_it->data.unique()) {
+        if (copy_it->data.use_count() == 1) {
           board_intern_->erase(copy_it);
         }
       }

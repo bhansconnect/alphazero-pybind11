@@ -1,9 +1,12 @@
 [wrap-file]
-directory = benchmark-1.5.2
-source_url = https://github.com/google/benchmark/archive/v1.5.2.zip
-source_filename = benchmark-1.5.2.zip
-source_hash = 21e6e096c9a9a88076b46bd38c33660f565fa050ca427125f64c4a8bf60f336b
-patch_url = https://wrapdb.mesonbuild.com/v1/projects/google-benchmark/1.5.2/1/get_zip
-patch_filename = google-benchmark-1.5.2-1-wrap.zip
-patch_hash = 49f41e4a7e68ac258b6509b9de9857441903be4fb473454c4cba8be885f0c6c3
+directory = benchmark-1.7.0
+source_url = https://github.com/google/benchmark/archive/refs/tags/v1.7.0.tar.gz
+source_filename = benchmark-1.7.0.tar.gz
+source_hash = 3aff99169fa8bdee356eaa1f691e835a6e57b1efeadb8a0f9f228531158246ac
+patch_filename = google-benchmark_1.7.0-1_patch.zip
+patch_url = https://wrapdb.mesonbuild.com/v2/google-benchmark_1.7.0-1/get_patch
+patch_hash = 5862874b0c9382d7b5891e8a5a89c6719d7a1ae5d42435ecc8c5e83aca83b8e9
+wrapdb_version = 1.7.0-1
 
+[provide]
+benchmark = google_benchmark_dep

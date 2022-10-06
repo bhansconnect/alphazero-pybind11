@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dll_export.h"
 #include "game_state.h"
 
 namespace alphazero::connect4_gs {
@@ -20,7 +21,7 @@ using CanonicalTensor =
     SizedTensor<float, Eigen::Sizes<CANONICAL_SHAPE[0], CANONICAL_SHAPE[1],
                                     CANONICAL_SHAPE[2]>>;
 
-class Connect4GS : public GameState {
+class DLLEXPORT Connect4GS : public GameState {
  public:
   Connect4GS() { board_.setZero(); }
   Connect4GS(BoardTensor board, int8_t player, int32_t turn)

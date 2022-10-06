@@ -20,6 +20,8 @@ gbench_dep = gbench_proj.get_variable('google_benchmark_dep')
 
 thread_dep = dependency('threads')
 
+lib_args = ['-DBUILDLIB']
+
 tafl_helper_test = executable(
   'tafl_helper_test',
   'tafl_helper_test.cc',
@@ -32,6 +34,7 @@ brandubh_gs = library(
     'brandubh_gs',
     'brandubh_gs.cc',
     dependencies: [eigen_dep, absl_hash_dep, absl_container_dep],
+    cpp_args: lib_args,
 )
 
 brandubh_gs_test = executable(
@@ -46,6 +49,7 @@ opentafl_gs = library(
     'opentafl_gs',
     'opentafl_gs.cc',
     dependencies: [eigen_dep, absl_hash_dep, absl_container_dep],
+    cpp_args: lib_args,
 )
 
 opentafl_gs_test = executable(
@@ -60,6 +64,7 @@ tawlbwrdd_gs = library(
     'tawlbwrdd_gs',
     'tawlbwrdd_gs.cc',
     dependencies: [eigen_dep, absl_hash_dep, absl_container_dep],
+    cpp_args: lib_args,
 )
 
 tawlbwrdd_gs_test = executable(
@@ -74,12 +79,14 @@ onitama_gs = library(
     'onitama_gs',
     'onitama_gs.cc',
     dependencies: [eigen_dep, absl_hash_dep, absl_container_dep],
+    cpp_args: lib_args,
 )
 
 connect4_gs = library(
     'connect4_gs',
     'connect4_gs.cc',
     dependencies: [eigen_dep, absl_hash_dep],
+    cpp_args: lib_args,
 )
 
 connect4_gs_test = executable(
@@ -101,6 +108,7 @@ mcts = library(
     'mcts',
     'mcts.cc',
     dependencies: [eigen_dep, absl_hash_dep],
+    cpp_args: lib_args,
 )
 
 mcts_test = executable(
@@ -152,6 +160,6 @@ play_manager_bench = executable(
 py3_install.extension_module(
   'alphazero',
   sources: ['py_wrapper.cc'],
-  link_with: [connect4_gs, onitama_gs, brandubh_gs, opentafl_gs, tawlbwrdd_gs, play_manager],
+  link_with: [connect4_gs, onitama_gs, brandubh_gs, opentafl_gs, tawlbwrdd_gs, play_manager, mcts],
   dependencies : [pybind11_dep, py3_dep, eigen_dep, absl_container_dep, absl_hash_dep],
 )

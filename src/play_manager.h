@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <deque>
 #include <limits>
 #include <mutex>
@@ -9,6 +10,7 @@
 
 #include "absl/hash/hash.h"
 #include "concurrent_queue.h"
+#include "dll_export.h"
 #include "game_state.h"
 #include "lru_cache.h"
 #include "mcts.h"
@@ -62,7 +64,7 @@ struct PlayParams {
 // This is a multithread safe game play manager.
 // It enables running of MCTS and preparing games for GPU inference.
 
-class PlayManager {
+class DLLEXPORT PlayManager {
  public:
   PlayManager(std::unique_ptr<GameState> gs, PlayParams p);
 
@@ -70,7 +72,7 @@ class PlayManager {
   void play();
 
   void update_inferences(uint8_t player,
-                         const std::vector<u_int32_t>& game_indices,
+                         const std::vector<uint32_t>& game_indices,
                          const Eigen::Ref<const Matrix<float>>& v,
                          const Eigen::Ref<const Matrix<float>>& pi);
 

@@ -1,6 +1,6 @@
 py_mod = import('python')
 py3_install = py_mod.find_installation('python3')
-py3_dep = dependency('python3')
+py3_dep = py3_install.dependency()
 pybind11_proj = subproject('pybind11')
 pybind11_dep = pybind11_proj.get_variable('pybind11_dep')
 

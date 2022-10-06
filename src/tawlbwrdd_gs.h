@@ -2,6 +2,7 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "dll_export.h"
 #include "game_state.h"
 
 // Base rules from http://www.cyningstan.com/game/175/tawlbwrdd
@@ -78,7 +79,7 @@ bool operator==(const RepetitionKeyWrapper& lhs,
   return rhs.data->p == lhs.data->p;
 }
 
-class TawlbwrddGS : public GameState {
+class DLLEXPORT TawlbwrddGS : public GameState {
  public:
   TawlbwrddGS(uint16_t max_turns = DEFAULT_MAX_TURNS) : max_turns_(max_turns) {
     board_.setZero();

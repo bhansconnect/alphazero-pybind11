@@ -2,6 +2,7 @@
 
 #include <string_view>
 
+#include "dll_export.h"
 #include "game_state.h"
 
 namespace alphazero::onitama_gs {
@@ -305,7 +306,7 @@ using CanonicalTensor =
     SizedTensor<float, Eigen::Sizes<CANONICAL_SHAPE[0], CANONICAL_SHAPE[1],
                                     CANONICAL_SHAPE[2]>>;
 
-class OnitamaGS : public GameState {
+class DLLEXPORT OnitamaGS : public GameState {
  public:
   OnitamaGS(uint8_t num_cards = 16, uint16_t max_turns = DEFAULT_MAX_TURNS)
       : num_cards_(num_cards), max_turns_(max_turns) {

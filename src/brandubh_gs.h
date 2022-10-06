@@ -2,6 +2,7 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "dll_export.h"
 #include "game_state.h"
 
 // Update: Rules now changed to match OpenTafl brandubh rules (at least for
@@ -87,7 +88,7 @@ bool operator==(const RepetitionKeyWrapper& lhs,
   return rhs.data->p == lhs.data->p;
 }
 
-class BrandubhGS : public GameState {
+class DLLEXPORT BrandubhGS : public GameState {
  public:
   BrandubhGS(uint16_t max_turns = DEFAULT_MAX_TURNS) : max_turns_(max_turns) {
     board_.setZero();

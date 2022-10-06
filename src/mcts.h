@@ -5,12 +5,13 @@
 #include <optional>
 #include <vector>
 
+#include "dll_export.h"
 #include "game_state.h"
 #include "shapes.h"
 
 namespace alphazero {
 
-struct Node {
+struct DLLEXPORT Node {
   Node() = default;
   explicit Node(uint32_t m) : move(m){};
 
@@ -31,7 +32,7 @@ struct Node {
   [[nodiscard]] Node* best_child(float cpuct, float fpu_reduction) noexcept;
 };
 
-class MCTS {
+class DLLEXPORT MCTS {
  public:
   MCTS(float cpuct, uint32_t num_players, uint32_t num_moves, float epsilon = 0,
        float root_policy_temp = 1.4, float fpu_reduction = 0)

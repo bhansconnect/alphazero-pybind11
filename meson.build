@@ -9,25 +9,3 @@ project(
 )
 
 subdir('src')
-
-sources = run_command('sources.sh').stdout().strip().split('\n')
-clangtidy = find_program('clang-tidy', required: false)
-if clangtidy.found()
-    run_target(
-        'tidy',
-        command: [
-            clangtidy,
-            '-p', meson.build_root(),
-        ]+sources)
-endif
-
-cppcheck = find_program('cppcheck', required: false)
-if cppcheck.found()
-    run_target(
-        'cppcheck',
-        command: [
-            cppcheck,
-            '--enable=all',
-            '--language=c++',
-        ]+sources)
-endif

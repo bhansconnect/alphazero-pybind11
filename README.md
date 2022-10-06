@@ -40,7 +40,7 @@ Building the project is pretty simple once you have the dependencies.
 
 1. Setup the project with `meson setup build --buildtype release`. For M1 macs, you probably have to add `--cross-file m1-cross-file.txt` as well. This is due to python and its packages still generally being installed as x86_64.
 
-1. Build the C++ `ninja -C build test`. There will be warnings, but my minimal tests should pass. For Windows, you may need to build through the meson wrapper with `meson test -C build`
+1. Build the C++ `ninja -C build test`. There will be warnings, but my minimal tests should pass. For Windows, you may need to build through the meson wrapper with `meson compile -C build && meson test -C build`
 
 ## How to Use
 

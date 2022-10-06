@@ -23,10 +23,10 @@ I am not really a fan of that. I would advise [getting Anaconda](https://www.ana
 If using conda, you can follow this to get all of the python libaries installed:
 
 1. Create and activate a new environment (on windows make sure to use the Anaconda prompt if not in path)
-```
-conda create -n torch python=3.9
-conda activate torch
-```
+   ```
+   conda create -n torch python=3.9
+   conda activate torch
+   ```
 
 1. Install [pytorch](https://pytorch.org/get-started/locally/) as recomended for your system. Just select your OS, Conda, and the compute platform.
 

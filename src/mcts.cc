@@ -65,7 +65,8 @@ void MCTS::update_root(const GameState& gs, uint32_t move) {
     std::cout << gs.dump();
     throw std::runtime_error("ahh, what is this move: " + std::to_string(move));
   }
-  root_ = std::move(*x);
+  Node tmp = *x;
+  root_ = tmp;
 }
 
 void MCTS::add_root_noise() {

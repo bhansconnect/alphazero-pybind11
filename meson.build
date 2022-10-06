@@ -8,8 +8,6 @@ project(
   ]
 )
 
-add_global_arguments('-march=native', language : 'c++')
-
 subdir('src')
 
 sources = run_command('sources.sh').stdout().strip().split('\n')

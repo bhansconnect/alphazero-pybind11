@@ -22,6 +22,75 @@ TMP_HIST_LOCATION = 'data/tmp_history'
 GRArgs = namedtuple(
     'GRArgs', ['title', 'game', 'max_batch_size', 'iteration',  'data_save_size', 'data_folder', 'concurrent_batches', 'batch_workers', 'nn_workers', 'result_workers', 'mcts_workers', 'cuda'], defaults=(0, HIST_SIZE, TMP_HIST_LOCATION, 0, 0, 1, 1, os.cpu_count() - 1, torch.cuda.is_available()))
 
+EXPECTED_OPENING_LENGTH = 10
+CPUCT = 1.25
+SELF_PLAY_TEMP = 1.0
+EVAL_TEMP = 0.5
+TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
+FINAL_TEMP = 0.2
+FPU_REDUCTION = 0.25
+MAX_CACHE_SIZE = 200_000
+
+# Concurrent games played is batch size * num player * concurrent batch mult
+# Total games per iteration is batch size * num players * concurrent batch mult * chunks
+SELF_PLAY_BATCH_SIZE = 1024
+SELF_PLAY_CONCURRENT_BATCH_MULT = 2
+SELF_PLAY_CHUNKS = 4
+
+TRAIN_BATCH_SIZE = 1024
+# Note: If the game has a high number of symetries generated, this number should likely get lowered.
+TRAIN_SAMPLE_RATE = 1
+
+# To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
+WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
+WINDOW_SIZE_BETA = 0.7  # This decides the rough overall slope.
+WINDOW_SIZE_SCALAR = 6  # This ends up being approximately first time history doesn't grow
+
+RESULT_WORKERS = 2
+
+# Panel based gating has the network play against multiple previous best agents before being promoted.
+# This is muhch more imortant with games where the draw rate is high betwen new networks and the best.
+# It is also important in grame that lead to rock-paper-scissor type network oscillations.
+GATING_PANEL_SIZE = 1
+# Ensure it is at least this good against the entire panel of networks.
+GATING_PANEL_WIN_RATE = 0.52
+# Ensure it is at least this good against the best network.
+# Generally it is ok to be slightly worse than the best if you crush the panel. Especially in high draw games.
+GATING_BEST_WIN_RATE = 0.52
+
+# A win/loss/draw will happen if it has a lower percent than this to not happen.
+# EX: 0.02 means that if the chance to draw is greater than 98% it will automatically happen.
+# This must be zero if there are more than 2 players.
+RESIGN_PERCENT = 0.02
+# The percent of resignations that will be played to the end anyway.
+RESIGN_PLAYTHROUGH_PERCENT = 0.20
+
+bootstrap_iters = 0
+start = 0
+iters = 200
+depth = 4
+channels = 12
+kernel_size = 5
+dense_net = True
+network_name = 'densenet' if dense_net else 'resnet'
+nn_selfplay_mcts_depth = 450
+nn_selfplay_fast_mcts_depth = 75
+nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
+compare_past = 20
+lr_milestone = 150
+
+Game = alphazero.Connect4GS
+game_name = 'connect4'
+
+run_name = f'{game_name}-{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
+
+# When you change game, define initialization here.
+# For example some games could change version or exact ruleset here.
+
+
+def new_game():
+    return Game()
+
 
 class GameRunner:
     def __init__(self, players, pm, args):
@@ -226,76 +295,6 @@ class RandPlayer:
 
     def process(self, batch):
         return self.v[:batch.shape[0]], self.pi[:batch.shape[0]]
-
-
-EXPECTED_OPENING_LENGTH = 10
-CPUCT = 1.25
-SELF_PLAY_TEMP = 1.0
-EVAL_TEMP = 0.5
-TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
-FINAL_TEMP = 0.2
-FPU_REDUCTION = 0.25
-MAX_CACHE_SIZE = 200_000
-
-# Concurrent games played is batch size * num player * concurrent batch mult
-# Total games per iteration is batch size * num players * concurrent batch mult * chunks
-SELF_PLAY_BATCH_SIZE = 1024
-SELF_PLAY_CONCURRENT_BATCH_MULT = 2
-SELF_PLAY_CHUNKS = 4
-
-TRAIN_BATCH_SIZE = 1024
-# Note: If the game has a high number of symetries generated, this number should likely get lowered.
-TRAIN_SAMPLE_RATE = 1
-
-# To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
-WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
-WINDOW_SIZE_BETA = 0.7  # This decides the rough overall slope.
-WINDOW_SIZE_SCALAR = 6  # This ends up being approximately first time history doesn't grow
-
-RESULT_WORKERS = 2
-
-# Panel based gating has the network play against multiple previous best agents before being promoted.
-# This is muhch more imortant with games where the draw rate is high betwen new networks and the best.
-# It is also important in grame that lead to rock-paper-scissor type network oscillations.
-GATING_PANEL_SIZE = 1
-# Ensure it is at least this good against the entire panel of networks.
-GATING_PANEL_WIN_RATE = 0.52
-# Ensure it is at least this good against the best network.
-# Generally it is ok to be slightly worse than the best if you crush the panel. Especially in high draw games.
-GATING_BEST_WIN_RATE = 0.52
-
-# A win/loss/draw will happen if it has a lower percent than this to not happen.
-# EX: 0.02 means that if the chance to draw is greater than 98% it will automatically happen.
-# This must be zero if there are more than 2 players.
-RESIGN_PERCENT = 0.02
-# The percent of resignations that will be played to the end anyway.
-RESIGN_PLAYTHROUGH_PERCENT = 0.20
-
-bootstrap_iters = 0
-start = 0
-iters = 200
-depth = 4
-channels = 12
-kernel_size = 5
-dense_net = True
-network_name = 'densenet' if dense_net else 'resnet'
-nn_selfplay_mcts_depth = 450
-nn_selfplay_fast_mcts_depth = 75
-nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
-compare_past = 20
-lr_milestone = 150
-
-Game = alphazero.Connect4GS
-game_name = 'connect4'
-
-run_name = f'{game_name}-{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
-
-# When you change game, define initialization here.
-# For example some games could change version or exact ruleset here.
-
-
-def new_game():
-    return Game()
 
 
 def base_params(Game, start_temp, bs, cb):

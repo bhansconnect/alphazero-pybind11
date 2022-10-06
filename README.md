@@ -49,4 +49,10 @@ To start training a network, just run: `python src/game_runner.py`
 To track the progress, you can launch aim with: `aim up` from the project directy (make sure the torch env is activated).
 Go the to Metrics tab and start adding metrics. [Guide on metrics explorer](https://www.youtube.com/watch?v=7LUT9judVTQ).
 
+> Note: The first iteration will use a random player, and is likely to run much faster than following iterations.
+If following iterations are too slow, try lowering the number of games played by changing `SELF_PLAY_BATCH_SIZE`.
+You can also lower the tree search depth by changing `nn_selfplay_mcts_depth`.
+
+After a couple of iterations have finished, you can end the program and have the networks directly compete in a tournament. For a faster tournament, run `python src/monrad.py`. For a full roundrobin, run `python src/roundrobin.py`
+
 ### Base structure

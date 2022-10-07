@@ -6,7 +6,6 @@ import random
 import time
 import torch
 from torch.utils.data import TensorDataset, ConcatDataset, DataLoader
-import aim
 import threading
 import tqdm
 import queue
@@ -763,29 +762,42 @@ if __name__ == '__main__':
         del nn_past
         return nn_rate, draw_rate, hr, agl
 
-    run = aim.Run(experiment=game_name)
-    run.name = run_name
+    try:
+        import aim
+        run = aim.Run(experiment=game_name)
+        run.name = run_name
 
-    run['hparams'] = {
-        'network': network_name,
-        'panel_size': GATING_PANEL_SIZE,
-        'panel_win_rate': GATING_PANEL_WIN_RATE,
-        'best_win_rate': GATING_BEST_WIN_RATE,
-        'expected_opening_length': EXPECTED_OPENING_LENGTH,
-        'cpuct': CPUCT,
-        'fpu_reduction': FPU_REDUCTION,
-        'self_play_temp': SELF_PLAY_TEMP,
-        'eval_temp': EVAL_TEMP,
-        'final_temp': FINAL_TEMP,
-        'training_sample_rate': TRAIN_SAMPLE_RATE,
-        'bootstrap_iters': bootstrap_iters,
-        'depth': depth,
-        'channels': channels,
-        'kernel_size': kernel_size,
-        'lr_milestone': lr_milestone,
-        'full_mcts_depth': nn_selfplay_mcts_depth,
-        'fast_mcts_depth': nn_selfplay_fast_mcts_depth,
-    }
+        run['hparams'] = {
+            'network': network_name,
+            'panel_size': GATING_PANEL_SIZE,
+            'panel_win_rate': GATING_PANEL_WIN_RATE,
+            'best_win_rate': GATING_BEST_WIN_RATE,
+            'expected_opening_length': EXPECTED_OPENING_LENGTH,
+            'cpuct': CPUCT,
+            'fpu_reduction': FPU_REDUCTION,
+            'self_play_temp': SELF_PLAY_TEMP,
+            'eval_temp': EVAL_TEMP,
+            'final_temp': FINAL_TEMP,
+            'training_sample_rate': TRAIN_SAMPLE_RATE,
+            'bootstrap_iters': bootstrap_iters,
+            'depth': depth,
+            'channels': channels,
+            'kernel_size': kernel_size,
+            'lr_milestone': lr_milestone,
+            'full_mcts_depth': nn_selfplay_mcts_depth,
+            'fast_mcts_depth': nn_selfplay_fast_mcts_depth,
+        }
+    except:
+        print("aim is used for nice web logging with graphs. I would advise `pip install aim`.")
+        print("If on windows, that may fail due to: https://github.com/aimhubio/aim/issues/2064")
+        print("Hopefully it gets a fixed one day.")
+        print("Using a dummy logger for now that does nothing.\n")
+        # Maybe create a basic logger class that puts the information in a file to at least save the info.
+        # Or could fall back on tensorboard I guess.
+        class DummyRun:
+            def track(*args, **kwargs):
+                pass
+        run = DummyRun()
 
     total_agents = iters+1  # + base
 

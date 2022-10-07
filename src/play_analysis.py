@@ -180,7 +180,7 @@ def main():
     global move_count
 
     np.set_printoptions(precision=3, suppress=True)
-    nn_folder = 'data/checkpoint'
+    nn_folder = os.path.join('data','checkpoint')
     base_params = '4d-12c-5k'
     all_nn_paths = sorted(
         glob.glob(os.path.join(nn_folder, f'*-{base_params}-*.pt')))

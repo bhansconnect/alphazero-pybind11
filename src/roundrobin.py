@@ -46,9 +46,9 @@ def pit_agents(Game, players, mcts_depths, bs, name):
 
 
 if __name__ == '__main__':
-    model_path = 'data/checkpoint'
-    if os.path.isdir('data/bench'):
-        model_path = 'data/bench'
+    model_path = os.path.join('data','checkpoint')
+    if os.path.isdir(os.path.join('data','bench')):
+        model_path = os.path.join('data','bench')
     nn_agents = [os.path.basename(x) for x in sorted(
         glob.glob(os.path.join(model_path, '*.pt')), reverse=False)]
     # rand_agents = [5000]
@@ -115,5 +115,5 @@ if __name__ == '__main__':
     print(win_matrix)
     print()
     print(agents)
-    np.savetxt('data/roundrobin_wr.csv', win_matrix,
+    np.savetxt(os.path.join('data','roundrobin_wr.csv'), win_matrix,
                delimiter=',', header=','.join([str(a) for a in agents]))

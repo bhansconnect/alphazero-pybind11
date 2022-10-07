@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 if __name__ == '__main__':
     np.set_printoptions(precision=3, suppress=True)
 
-    wr = np.genfromtxt('data/win_rate.csv', delimiter=',')
+    wr = np.genfromtxt(os.path.join('data','win_rate.csv'), delimiter=',')
 
     size = wr.shape[0]
     agents = set()
@@ -64,7 +64,7 @@ if __name__ == '__main__':
                                  c_cost=np.average(change_c))
 
     melo -= melo[0]
-    np.savetxt("data/melo.csv", melo, delimiter=",")
+    np.savetxt(os.path.join("data','melo.csv", melo, delimiter=",")
     # tmp_melo = np.zeros(len(agents))
     # tmp_c = np.zeros((len(agents), 2))
     # tmp_melo[:len(agents)] = melo[:len(agents)]

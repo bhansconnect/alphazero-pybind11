@@ -388,9 +388,7 @@ if __name__ == '__main__':
             p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
                 p_names[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
             datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-            del c_tensor
-            del v_tensor
-            del p_tensor
+            del c_tensor, v_tensor, p_tensor
 
         dataset = ConcatDataset(datasets)
         sample_count = len(dataset)
@@ -419,15 +417,12 @@ if __name__ == '__main__':
                 if maybe_save(Game, c_out, v_out, p_out, i_out, batch_out, iteration, location=TMP_HIST_LOCATION, name='syms'):
                     i_out = 0
                     batch_out += 1
+            del c, v, pi, ph, syms
         maybe_save(Game, c_out, v_out, p_out, i_out,
                    batch_out, iteration, location=TMP_HIST_LOCATION, name='syms', force=True)
 
-        del datasets[:]
-        del dataset
-        del dataloader
-        del c_out
-        del v_out
-        del p_out
+        del datasets, dataset, dataloader
+        del c_out, v_out, p_out
 
         gc.collect()
         for fn in c_names + v_names + p_names:
@@ -457,9 +452,7 @@ if __name__ == '__main__':
             p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
                 p_names[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
             datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-            del c_tensor
-            del v_tensor
-            del p_tensor
+            del c_tensor, v_tensor, p_tensor
 
         dataset = ConcatDataset(datasets)
         sample_count = len(dataset)
@@ -498,6 +491,7 @@ if __name__ == '__main__':
                 if maybe_save(Game, c_out, v_out, p_out, i_out, batch_out, iteration):
                     i_out = 0
                     batch_out += 1
+                del c, v, pi
             if random.random() < sample_weight - math.floor(sample_weight):
                 c, v, pi = dataset[i]
                 c_out[i_out] = c
@@ -507,17 +501,13 @@ if __name__ == '__main__':
                 if maybe_save(Game, c_out, v_out, p_out, i_out, batch_out, iteration):
                     i_out = 0
                     batch_out += 1
+                del c, v, pi
 
         maybe_save(Game, c_out, v_out, p_out, i_out,
                    batch_out, iteration, force=True)
 
-        del datasets[:]
-        del dataset
-        del dataloader
-        del nn
-        del c_out
-        del v_out
-        del p_out
+        del datasets, dataset, dataloader, nn
+        del c_out, v_out, p_out
 
         gc.collect()
         for fn in glob.glob(os.path.join(f'{TMP_HIST_LOCATION}','*')):
@@ -539,9 +529,7 @@ if __name__ == '__main__':
             p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
                 p[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
             datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-            del c_tensor
-            del v_tensor
-            del p_tensor
+            del c_tensor, v_tensor, p_tensor
 
         dataset = ConcatDataset(datasets)
         dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE,
@@ -551,10 +539,7 @@ if __name__ == '__main__':
             Game,CHECKPOINT_LOCATION, f'{iteration:04d}-{run_name}.pt')
         v_loss, pi_loss = nn.losses(dataloader)
 
-        del datasets[:]
-        del dataset
-        del dataloader
-        del nn
+        del datasets, dataset, dataloader, nn
 
         return v_loss, pi_loss
 
@@ -576,9 +561,7 @@ if __name__ == '__main__':
                 p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
                     p[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
                 datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-                del c_tensor
-                del v_tensor
-                del p_tensor
+                del c_tensor, v_tensor, p_tensor
 
         bs = TRAIN_BATCH_SIZE
         dataset = ConcatDataset(datasets)
@@ -595,10 +578,7 @@ if __name__ == '__main__':
         total_train_steps += steps_to_train
         nn.save_checkpoint(CHECKPOINT_LOCATION,
                            f'{iteration+1:04d}-{run_name}.pt')
-        del datasets[:]
-        del dataset
-        del dataloader
-        del nn
+        del datasets, dataset, dataloader, nn
         return v_loss, pi_loss, total_train_steps
 
     def self_play(Game, best, iteration, depth, fast_depth):
@@ -656,8 +636,7 @@ if __name__ == '__main__':
         if total > 0:
             hr = hits/total
         agl = pm.avg_game_length()
-        del pm
-        del nn
+        del pm, nn
         return win_rates, hr, agl, resign_win_rates, resign_rate
 
     def play_past(Game, depth, iteration, past_iter):
@@ -761,8 +740,7 @@ if __name__ == '__main__':
             hr /= Game.NUM_PLAYERS()
             agl /= Game.NUM_PLAYERS()
 
-        del nn
-        del nn_past
+        del nn, nn_past
         return nn_rate, draw_rate, hr, agl
 
     try:

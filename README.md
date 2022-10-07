@@ -44,7 +44,7 @@ Building the project is pretty simple once you have the dependencies.
 
 ## How to Use
 
-### Just running something
+### Just Running Something
 
 To start training a network, just run: `python src/game_runner.py`
 
@@ -57,4 +57,19 @@ You can also lower the tree search depth by changing `nn_selfplay_mcts_depth`.
 
 After a couple of iterations have finished, you can end the program and have the networks directly compete in a tournament. For a faster tournament, run `python src/monrad.py`. For a full roundrobin, run `python src/roundrobin.py`
 
-### Base structure
+### Important Files for Users
+
+Everything is a bit of a mess and config could definitely use more cleanup, but here are the important files:
+
+ - `src/game_runner.py`: Main python entrypoint for training. Lot of config options.
+ - `src/neural_net.py`: The neural network implementations and config.
+ - `src/monrad.py`: Runs a monrad tournament between networks put in `data/bench`. Is be much faster than roundrobin.
+ - `src/roundrobin.py`: Runs a roundrobin tournament between networks put in `data/bench`. Can take a long time to run, but is very accurate.
+ - `src/play_agent.py`: Lets the user play a network. Requires move selection customization (look at the commented out block).
+ - `src/play_analysis`: Compares the network to itself with increasingly more MCTS searches. Can be useful for debugging and telling how good a network is.
+ - `src/game_state.h`: This is the interface that must be implemented to add a new game.
+ - `src/*_gs.(h|cc)`: Implementations of various games.
+ - `src/py_wrapper.cc`: The definition of the python api that gets exposed.
+ - `src/meson.build`: The build definition that must be edited when adding a new game.
+
+In general if you want to add something new, just start by coping from some other game and then editting. That will probably make life easier. Also, don't forget to rebuild before running the python app again.

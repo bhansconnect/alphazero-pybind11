@@ -22,24 +22,11 @@ CHECKPOINT_LOCATION = os.path.join('data', 'checkpoint')
 GRArgs = namedtuple(
     'GRArgs', ['title', 'game', 'max_batch_size', 'cuda', 'iteration',  'data_save_size', 'data_folder', 'concurrent_batches', 'batch_workers', 'nn_workers', 'result_workers', 'mcts_workers'], defaults=(0, HIST_SIZE, TMP_HIST_LOCATION, 0, 0, 1, 1, os.cpu_count() - 1))
 
-EXPECTED_OPENING_LENGTH = 10
-CPUCT = 1.25
-SELF_PLAY_TEMP = 1.0
-EVAL_TEMP = 0.5
-TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
-FINAL_TEMP = 0.2
-FPU_REDUCTION = 0.25
+# In some games, setting this to max out your memory can have huge performance gains.
+# That said, some games get a lot of cache misses and the cache contention makes it slower.
+# Setting to 0 disables the cache.
+# Probably a number between 100_000 and 1_000_000 for most games.
 MAX_CACHE_SIZE = 200_000
-
-# Concurrent games played is batch size * num player * concurrent batch mult
-# Total games per iteration is batch size * num players * concurrent batch mult * chunks
-SELF_PLAY_BATCH_SIZE = 1024
-SELF_PLAY_CONCURRENT_BATCH_MULT = 2
-SELF_PLAY_CHUNKS = 4
-
-TRAIN_BATCH_SIZE = 1024
-# Note: If the game has a high number of symetries generated, this number should likely get lowered.
-TRAIN_SAMPLE_RATE = 1
 
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
 WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
@@ -50,9 +37,30 @@ RESULT_WORKERS = 2
 DATA_WORKERS = os.cpu_count() - 1
 USE_CUDA = torch.cuda.is_available()
 
+# The traditional alphazero parameters.
+EXPECTED_OPENING_LENGTH = 10
+CPUCT = 1.25
+SELF_PLAY_TEMP = 1.0
+EVAL_TEMP = 0.5
+TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
+FINAL_TEMP = 0.2
+FPU_REDUCTION = 0.25
+
+# Concurrent games played is batch size * num player * concurrent batch mult
+# Total games per iteration is batch size * num players * concurrent batch mult * chunks
+# For training of complex games, this probably should be closer to 1024.
+SELF_PLAY_BATCH_SIZE = 256
+SELF_PLAY_CONCURRENT_BATCH_MULT = 2
+SELF_PLAY_CHUNKS = 4
+
+# This generally should be as big as can fit on your gpu.
+TRAIN_BATCH_SIZE = 1024
+# Note: If the game has a high number of symetries generated, this number should likely get lowered.
+TRAIN_SAMPLE_RATE = 1
+
 # Panel based gating has the network play against multiple previous best agents before being promoted.
 # This is muhch more imortant with games where the draw rate is high betwen new networks and the best.
-# It is also important in grame that lead to rock-paper-scissor type network oscillations.
+# It is also important in games that lead to rock-paper-scissor type network oscillations.
 GATING_PANEL_SIZE = 1
 # Ensure it is at least this good against the entire panel of networks.
 GATING_PANEL_WIN_RATE = 0.52
@@ -67,6 +75,18 @@ RESIGN_PERCENT = 0.02
 # The percent of resignations that will be played to the end anyway.
 RESIGN_PLAYTHROUGH_PERCENT = 0.20
 
+# Use this to select what game to train.
+Game = alphazero.Connect4GS
+game_name = 'connect4'
+
+# When you change game, define initialization here.
+# For example some games could change board size or exact ruleset here.
+def new_game():
+    return Game()
+
+
+# These control the network generated.
+# They also enable restarting at a specific interation.
 bootstrap_iters = 0
 start = 0
 iters = 200
@@ -75,23 +95,18 @@ channels = 12
 kernel_size = 5
 dense_net = True
 network_name = 'densenet' if dense_net else 'resnet'
-nn_selfplay_mcts_depth = 450
-nn_selfplay_fast_mcts_depth = 75
-nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
-compare_past = 20
 lr_milestone = 150
 
-Game = alphazero.Connect4GS
-game_name = 'connect4'
+# MCTS search depth must increase with complex games.
+nn_selfplay_mcts_depth = 100
+nn_selfplay_fast_mcts_depth = 25
+nn_compare_mcts_depth = nn_selfplay_mcts_depth//2
+
+# This is  just for validation of learning.
+compare_past = 20
+
 
 run_name = f'{game_name}-{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims'
-
-# When you change game, define initialization here.
-# For example some games could change version or exact ruleset here.
-
-
-def new_game():
-    return Game()
 
 
 class GameRunner:

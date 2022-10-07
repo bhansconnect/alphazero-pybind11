@@ -83,7 +83,7 @@ if __name__ == '__main__':
 
     Game = alphazero.Connect4GS
     bs = 64
-    nn_mtcs_depth = 500
+    nn_mtcs_depth = 200
 
     if len(agents) % 2 == 1:
         agents.insert(0, "dummy")

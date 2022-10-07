@@ -57,7 +57,7 @@ if __name__ == '__main__':
 
     Game = alphazero.Connect4GS
     bs = 64
-    nn_mtcs_depth = 600
+    nn_mtcs_depth = 200
 
     count = len(agents)
     print(agents)

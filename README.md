@@ -32,7 +32,7 @@ If using conda, you can follow this to get all of the python libaries installed:
 
 1. Other package to install: `conda install tqdm matplotlib`
 
-1. Install aim, it is used for visualization of training. Sadly it is not yet supported by conda, so just: `pip install aim`. On Windows, this is problematic due to [this issue](https://github.com/aimhubio/aim/issues/2064). If you want to use Windows, you have to comment out all metric collection(search for "aim" and "run.track"). Maybe it is better to use WSL or dual boot linux.
+1. Install aim, it is used for visualization of training. Sadly it is not yet supported by conda, so just: `pip install aim`. On Windows, this is problematic due to [this issue](https://github.com/aimhubio/aim/issues/2064). To make things still work, Windows, doesn't get any of the nice web logging. Maybe it is better to use WSL or dual boot linux.
 
 ### Build the Project
 

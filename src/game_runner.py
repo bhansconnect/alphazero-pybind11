@@ -353,15 +353,24 @@ if __name__ == '__main__':
     def maybe_save(Game, c, v, p, size, batch, iteration, location=HIST_LOCATION, name='', force=False):
         cs = Game.CANONICAL_SHAPE()
         if size == HIST_SIZE or (force and size > 0):
-            c_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{location}',f'{iteration:04d}-{batch:04d}{name}-canonical-{size}.pt'), shared=True, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
-            v_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{location}',f'{iteration:04d}-{batch:04d}{name}-v-{size}.pt'), shared=True, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
-            p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{location}',f'{iteration:04d}-{batch:04d}{name}-pi-{size}.pt'), shared=True, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+            c_storage = torch.FloatStorage.from_file(
+                os.path.join(f'{location}',f'{iteration:04d}-{batch:04d}{name}-canonical-{size}.pt'), shared=True, size=size*cs[0]*cs[1]*cs[2])
+            c_tensor = torch.FloatTensor(c_storage).reshape(size, cs[0], cs[1], cs[2])
+            v_storage = torch.FloatStorage.from_file(
+                os.path.join(f'{location}',f'{iteration:04d}-{batch:04d}{name}-v-{size}.pt'), shared=True, size=size*(Game.NUM_PLAYERS()+1))
+            v_tensor = torch.FloatTensor(v_storage).reshape(size, Game.NUM_PLAYERS()+1)
+            p_storage = torch.FloatStorage.from_file(
+                os.path.join(f'{location}',f'{iteration:04d}-{batch:04d}{name}-pi-{size}.pt'), shared=True, size=size*(Game.NUM_MOVES()))
+            p_tensor = torch.FloatTensor(p_storage).reshape(size, Game.NUM_MOVES())
             c_tensor[:] = c[:size]
             v_tensor[:] = v[:size]
             p_tensor[:] = p[:size]
+            del c_storage
+            del v_storage
+            del p_storage
+            del c_tensor
+            del v_tensor
+            del p_tensor
             return True
         return False
 
@@ -381,13 +390,16 @@ if __name__ == '__main__':
         for j in range(len(c_names)):
             size = int(c_names[j].split('-')[-1].split('.')[0])
             cs = Game.CANONICAL_SHAPE()
-            c_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                c_names[j], shared=False, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
-            v_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                v_names[j], shared=False, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
-            p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                p_names[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+            c_storage = torch.FloatStorage.from_file(c_names[j], shared=False, size=size*cs[0]*cs[1]*cs[2])
+            c_tensor = torch.FloatTensor(c_storage).reshape(size, cs[0], cs[1], cs[2])
+            v_storage = torch.FloatStorage.from_file(v_names[j], shared=False, size=size*(Game.NUM_PLAYERS()+1))
+            v_tensor = torch.FloatTensor(v_storage).reshape(size, Game.NUM_PLAYERS()+1)
+            p_storage = torch.FloatStorage.from_file(p_names[j], shared=False, size=size*(Game.NUM_MOVES()))
+            p_tensor = torch.FloatTensor(p_storage).reshape(size, Game.NUM_MOVES())
             datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
+            del c_storage
+            del v_storage
+            del p_storage
             del c_tensor
             del v_tensor
             del p_tensor

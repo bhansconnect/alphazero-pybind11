@@ -429,6 +429,7 @@ if __name__ == '__main__':
         del v_out
         del p_out
 
+        gc.collect()
         for fn in c_names + v_names + p_names:
             os.remove(fn)
 
@@ -482,6 +483,7 @@ if __name__ == '__main__':
         os.makedirs(HIST_LOCATION, exist_ok=True)
 
         # Clear old history for iteration before saving new history.
+        gc.collect()
         for fn in glob.glob(os.path.join(f'{HIST_LOCATION}',f'{iteration:04d}-*.pt')):
             os.remove(fn)
 
@@ -517,6 +519,7 @@ if __name__ == '__main__':
         del v_out
         del p_out
 
+        gc.collect()
         for fn in glob.glob(os.path.join(f'{TMP_HIST_LOCATION}','*')):
             os.remove(fn)
 

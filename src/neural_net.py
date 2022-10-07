@@ -313,7 +313,7 @@ class NNWrapper:
         # return torch.sum((targets - outputs) ** 2) / targets.size()[0]
         return -self.cv * torch.sum(targets * outputs) / targets.size()[0]
 
-    def save_checkpoint(self, folder='data/checkpoint', filename='checkpoint.pt'):
+    def save_checkpoint(self, folder=os.path.join('data','checkpoint'), filename='checkpoint.pt'):
         filepath = os.path.join(folder, filename)
         os.makedirs(folder, exist_ok=True)
         torch.save({
@@ -325,7 +325,7 @@ class NNWrapper:
         }, filepath)
 
     @staticmethod
-    def load_checkpoint(Game, folder='data/checkpoint', filename='checkpoint.pt'):
+    def load_checkpoint(Game, folder=os.path.join('data','checkpoint'), filename='checkpoint.pt'):
         if folder != '':
             filepath = os.path.join(folder, filename)
         else:

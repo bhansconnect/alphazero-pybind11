@@ -76,7 +76,7 @@ if __name__ == '__main__':
     import game_runner
 
     np.set_printoptions(precision=3, suppress=True)
-    nn_folder = 'data/checkpoint'
+    nn_folder = os.path.join('data','checkpoint')
     nn_file = os.path.basename(
         sorted(glob.glob(os.path.join(nn_folder, '*.pt')))[-1])
 

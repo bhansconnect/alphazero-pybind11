@@ -31,8 +31,8 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     awaiting_mcts_.push(i);
   }
   for (auto i = 0U; i < base_gs_->num_players(); ++i) {
-    caches_.push_back(std::make_unique<Cache>(params_.max_cache_size /
-                                              (base_gs_->num_players())));
+    caches_.push_back(Cache{params_.max_cache_size / (base_gs_->num_players()),
+                            params_.cache_shards});
     awaiting_inference_.push_back(
         std::make_unique<ConcurrentQueue<uint32_t>>());
   }
@@ -181,7 +181,7 @@ void PlayManager::play() {
     leaf->minimize_storage();
     game.leaf = std::move(leaf);
     if (params_.max_cache_size > 0) {
-      auto opt = caches_[game.gs->current_player()]->find(game.leaf);
+      auto opt = caches_[game.gs->current_player()].find(game.leaf);
       if (opt.has_value()) {
         std::tie(game.v, game.pi) = opt.value();
         awaiting_mcts_.push(i.value());
@@ -208,7 +208,7 @@ void PlayManager::update_inferences(const uint8_t player,
     }
   }
   if (params_.max_cache_size > 0) {
-    caches_[player]->insert_many(keys, values);
+    caches_[player].insert_many(keys, values);
   }
   awaiting_mcts_.push_many(game_indices);
 }

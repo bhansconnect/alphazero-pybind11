@@ -31,7 +31,7 @@ MAX_CACHE_SIZE = 200_000
 # How many shards to split the cache into.
 # Due to multithreading, the cache can have high contention.
 # The more threads generally means you want more shards.
-CACHE_SHARDS = 1
+CACHE_SHARDS = os.cpu_count()
 
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
 WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
@@ -54,7 +54,7 @@ FPU_REDUCTION = 0.25
 # Concurrent games played is batch size * num player * concurrent batch mult
 # Total games per iteration is batch size * num players * concurrent batch mult * chunks
 # For training of complex games, this probably should be closer to 1024.
-SELF_PLAY_BATCH_SIZE = 1024
+SELF_PLAY_BATCH_SIZE = 256
 SELF_PLAY_CONCURRENT_BATCH_MULT = 2
 SELF_PLAY_CHUNKS = 4
 
@@ -96,7 +96,7 @@ def new_game():
 # They also enable restarting at a specific interation.
 bootstrap_iters = 0
 start = 0
-iters = 5
+iters = 200
 depth = 4
 channels = 12
 kernel_size = 5

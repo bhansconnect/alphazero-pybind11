@@ -28,6 +28,11 @@ GRArgs = namedtuple(
 # Probably a number between 100_000 and 1_000_000 for most games.
 MAX_CACHE_SIZE = 200_000
 
+# How many shards to split the cache into.
+# Due to multithreading, the cache can have high contention.
+# The more threads generally means you want more shards.
+CACHE_SHARDS = os.cpu_count()
+
 # To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
 WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
 WINDOW_SIZE_BETA = 0.7  # This decides the rough overall slope.
@@ -320,6 +325,7 @@ class RandPlayer:
 
 def base_params(Game, start_temp, bs, cb):
     params = alphazero.PlayParams()
+    params.cache_shards = CACHE_SHARDS
     params.max_cache_size = MAX_CACHE_SIZE
     params.cpuct = CPUCT
     params.start_temp = start_temp

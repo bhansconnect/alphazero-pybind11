@@ -17,8 +17,8 @@
 
 namespace alphazero {
 
-using Cache =
-    LRUCache<GameStateKeyWrapper, std::tuple<Vector<float>, Vector<float>>>;
+using Cache = ShardedLRUCache<GameStateKeyWrapper,
+                              std::tuple<Vector<float>, Vector<float>>>;
 
 using namespace std::chrono_literals;
 
@@ -42,6 +42,7 @@ struct PlayParams {
   uint32_t concurrent_games;
   uint32_t max_batch_size = 1;
   uint32_t max_cache_size = 0;
+  uint8_t cache_shards = 1;
   std::vector<uint32_t> mcts_depth{};
   float cpuct = 2.0;
   float start_temp = 1.0;
@@ -120,21 +121,21 @@ class DLLEXPORT PlayManager {
   [[nodiscard]] size_t cache_size() const {
     size_t out = 0;
     for (auto& cache : caches_) {
-      out += cache->size();
+      out += cache.size();
     }
     return out;
   };
   [[nodiscard]] size_t cache_hits() const {
     size_t out = 0;
     for (auto& cache : caches_) {
-      out += cache->hits();
+      out += cache.hits();
     }
     return out;
   };
   [[nodiscard]] size_t cache_misses() const {
     size_t out = 0;
     for (auto& cache : caches_) {
-      out += cache->misses();
+      out += cache.misses();
     }
     return out;
   };
@@ -155,7 +156,7 @@ class DLLEXPORT PlayManager {
   std::vector<std::unique_ptr<ConcurrentQueue<uint32_t>>> awaiting_inference_;
   ConcurrentQueue<PlayHistory> history_;
 
-  std::vector<std::unique_ptr<Cache>> caches_;
+  std::vector<Cache> caches_;
   // Eventaully contain history, maybe store it in GameData.
 };
 

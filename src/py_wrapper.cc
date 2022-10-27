@@ -146,6 +146,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("concurrent_games", &PlayParams::concurrent_games)
       .def_readwrite("max_batch_size", &PlayParams::max_batch_size)
       .def_readwrite("max_cache_size", &PlayParams::max_cache_size)
+      .def_readwrite("cache_shards", &PlayParams::cache_shards)
       .def_readwrite("mcts_depth", &PlayParams::mcts_depth)
       .def_readwrite("cpuct", &PlayParams::cpuct)
       .def_readwrite("playout_cap_randomization",

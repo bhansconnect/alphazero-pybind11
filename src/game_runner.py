@@ -86,6 +86,8 @@ game_name = 'connect4'
 
 # When you change game, define initialization here.
 # For example some games could change board size or exact ruleset here.
+
+
 def new_game():
     return Game()
 
@@ -202,7 +204,7 @@ class GameRunner:
         n = self.pm.params().games_to_play
         pbar = tqdm.tqdm(total=n,
                          unit='games', desc=self.args.title, leave=False)
-        while(self.pm.remaining_games() > 0):
+        while (self.pm.remaining_games() > 0):
             try:
                 self.monitor_queue.get(timeout=1)
             except queue.Empty:
@@ -244,7 +246,7 @@ class GameRunner:
         pbar.close()
 
     def batch_builder(self, player):
-        while(self.pm.remaining_games() > 0):
+        while (self.pm.remaining_games() > 0):
             try:
                 batch_index = self.ready_queues[player].get(timeout=1)
             except queue.Empty:
@@ -258,7 +260,7 @@ class GameRunner:
             self.batch_queue.put((out, batch_index, game_indices))
 
     def player_executor(self):
-        while(self.pm.remaining_games() > 0):
+        while (self.pm.remaining_games() > 0):
             try:
                 batch, batch_index, game_indices = self.batch_queue.get(
                     timeout=1)
@@ -268,7 +270,7 @@ class GameRunner:
             self.result_queue.put((v, pi, batch_index, game_indices))
 
     def result_processor(self):
-        while(self.pm.remaining_games() > 0):
+        while (self.pm.remaining_games() > 0):
             try:
                 v, pi, batch_index, game_indices = self.result_queue.get(
                     timeout=1)
@@ -277,7 +279,7 @@ class GameRunner:
             v = v.cpu().numpy()
             pi = pi.cpu().numpy()
             if v.size == 0 or pi.size == 0:
-                # As an edge case, it seems that when queues are closed, empty data gets sent somehow. 
+                # As an edge case, it seems that when queues are closed, empty data gets sent somehow.
                 # Just ignore the data.
                 continue
             self.pm.update_inferences(batch_index % self.num_players,
@@ -288,7 +290,7 @@ class GameRunner:
     def hist_saver(self):
         batch = 0
         os.makedirs(self.args.data_folder, exist_ok=True)
-        while(self.pm.remaining_games() > 0 or self.pm.hist_count() > 0):
+        while (self.pm.remaining_games() > 0 or self.pm.hist_count() > 0):
             size = self.pm.build_history_batch(
                 self.hist_canonical, self.hist_v, self.hist_pi)
             if size == 0:
@@ -296,11 +298,11 @@ class GameRunner:
 
             cs = self.args.game.CANONICAL_SHAPE()
             c_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{self.args.data_folder}',f'{self.args.iteration:04d}-{batch:04d}-canonical-{size}.pt'), shared=True, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
+                os.path.join(f'{self.args.data_folder}', f'{self.args.iteration:04d}-{batch:04d}-canonical-{size}.pt'), shared=True, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
             v_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{self.args.data_folder}',f'{self.args.iteration:04d}-{batch:04d}-v-{size}.pt'), shared=True, size=size*(self.num_players+1))).reshape(size, self.num_players+1)
+                os.path.join(f'{self.args.data_folder}', f'{self.args.iteration:04d}-{batch:04d}-v-{size}.pt'), shared=True, size=size*(self.num_players+1))).reshape(size, self.num_players+1)
             p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{self.args.data_folder}',f'{self.args.iteration:04d}-{batch:04d}-pi-{size}.pt'), shared=True, size=size*(self.args.game.NUM_MOVES()))).reshape(size, self.args.game.NUM_MOVES())
+                os.path.join(f'{self.args.data_folder}', f'{self.args.iteration:04d}-{batch:04d}-pi-{size}.pt'), shared=True, size=size*(self.args.game.NUM_MOVES()))).reshape(size, self.args.game.NUM_MOVES())
             c_tensor[:] = self.hist_canonical[:size]
             v_tensor[:] = self.hist_v[:size]
             p_tensor[:] = self.hist_pi[:size]
@@ -375,11 +377,11 @@ if __name__ == '__main__':
         cs = Game.CANONICAL_SHAPE()
         if size == HIST_SIZE or (force and size > 0):
             c_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{location}',f'{iteration:04d}-{batch:04d}{name}-canonical-{size}.pt'), shared=True, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
+                os.path.join(f'{location}', f'{iteration:04d}-{batch:04d}{name}-canonical-{size}.pt'), shared=True, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
             v_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{location}',f'{iteration:04d}-{batch:04d}{name}-v-{size}.pt'), shared=True, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
+                os.path.join(f'{location}', f'{iteration:04d}-{batch:04d}{name}-v-{size}.pt'), shared=True, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
             p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{location}',f'{iteration:04d}-{batch:04d}{name}-pi-{size}.pt'), shared=True, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+                os.path.join(f'{location}', f'{iteration:04d}-{batch:04d}{name}-pi-{size}.pt'), shared=True, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
             c_tensor[:] = c[:size]
             v_tensor[:] = v[:size]
             p_tensor[:] = p[:size]
@@ -392,11 +394,11 @@ if __name__ == '__main__':
             return
 
         c_names = sorted(
-            glob.glob(os.path.join(f'{TMP_HIST_LOCATION}',f'{iteration:04d}-*-canonical-*.pt')))
+            glob.glob(os.path.join(f'{TMP_HIST_LOCATION}', f'{iteration:04d}-*-canonical-*.pt')))
         v_names = sorted(
-            glob.glob(os.path.join(f'{TMP_HIST_LOCATION}',f'{iteration:04d}-*-v-*.pt')))
+            glob.glob(os.path.join(f'{TMP_HIST_LOCATION}', f'{iteration:04d}-*-v-*.pt')))
         p_names = sorted(
-            glob.glob(os.path.join(f'{TMP_HIST_LOCATION}',f'{iteration:04d}-*-pi-*.pt')))
+            glob.glob(os.path.join(f'{TMP_HIST_LOCATION}', f'{iteration:04d}-*-pi-*.pt')))
 
         datasets = []
         for j in range(len(c_names)):
@@ -413,8 +415,8 @@ if __name__ == '__main__':
 
         dataset = ConcatDataset(datasets)
         sample_count = len(dataset)
-        dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE,
-                                shuffle=False, num_workers=DATA_WORKERS)
+        dataloader = DataLoader(
+            dataset, batch_size=TRAIN_BATCH_SIZE, shuffle=False)
 
         i_out = 0
         batch_out = 0
@@ -456,11 +458,11 @@ if __name__ == '__main__':
         # The sample is then added to the dataset floor(weight) times.
         # It is also added an extra time with the probability of weight - floor(weight)
         c_names = sorted(
-            glob.glob(os.path.join(f'{TMP_HIST_LOCATION}',f'{iteration:04d}-*-canonical-*.pt')))
+            glob.glob(os.path.join(f'{TMP_HIST_LOCATION}', f'{iteration:04d}-*-canonical-*.pt')))
         v_names = sorted(
-            glob.glob(os.path.join(f'{TMP_HIST_LOCATION}',f'{iteration:04d}-*-v-*.pt')))
+            glob.glob(os.path.join(f'{TMP_HIST_LOCATION}', f'{iteration:04d}-*-v-*.pt')))
         p_names = sorted(
-            glob.glob(os.path.join(f'{TMP_HIST_LOCATION}',f'{iteration:04d}-*-pi-*.pt')))
+            glob.glob(os.path.join(f'{TMP_HIST_LOCATION}', f'{iteration:04d}-*-pi-*.pt')))
 
         datasets = []
         for j in range(len(c_names)):
@@ -477,11 +479,11 @@ if __name__ == '__main__':
 
         dataset = ConcatDataset(datasets)
         sample_count = len(dataset)
-        dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE,
-                                shuffle=False, num_workers=DATA_WORKERS)
+        dataloader = DataLoader(
+            dataset, batch_size=TRAIN_BATCH_SIZE, shuffle=False)
 
         nn = neural_net.NNWrapper.load_checkpoint(
-            Game,CHECKPOINT_LOCATION, f'{iteration:04d}-{run_name}.pt')
+            Game, CHECKPOINT_LOCATION, f'{iteration:04d}-{run_name}.pt')
         loss = nn.sample_loss(dataloader, sample_count)
         total_loss = np.sum(loss)
 
@@ -498,7 +500,7 @@ if __name__ == '__main__':
 
         # Clear old history for iteration before saving new history.
         gc.collect()
-        for fn in glob.glob(os.path.join(f'{HIST_LOCATION}',f'{iteration:04d}-*.pt')):
+        for fn in glob.glob(os.path.join(f'{HIST_LOCATION}', f'{iteration:04d}-*.pt')):
             os.remove(fn)
 
         for i in tqdm.trange(sample_count, desc='Resampling Data', leave=False):
@@ -531,15 +533,17 @@ if __name__ == '__main__':
         del c_out, v_out, p_out
 
         gc.collect()
-        for fn in glob.glob(os.path.join(f'{TMP_HIST_LOCATION}','*')):
+        for fn in glob.glob(os.path.join(f'{TMP_HIST_LOCATION}', '*')):
             os.remove(fn)
 
     def iteration_loss(Game, iteration):
         datasets = []
         c = sorted(
-            glob.glob(os.path.join(f'{HIST_LOCATION}',f'{iteration:04d}-*-canonical-*.pt')))
-        v = sorted(glob.glob(os.path.join(f'{HIST_LOCATION}',f'{iteration:04d}-*-v-*.pt')))
-        p = sorted(glob.glob(os.path.join(f'{HIST_LOCATION}',f'{iteration:04d}-*-pi-*.pt')))
+            glob.glob(os.path.join(f'{HIST_LOCATION}', f'{iteration:04d}-*-canonical-*.pt')))
+        v = sorted(glob.glob(os.path.join(
+            f'{HIST_LOCATION}', f'{iteration:04d}-*-v-*.pt')))
+        p = sorted(glob.glob(os.path.join(
+            f'{HIST_LOCATION}', f'{iteration:04d}-*-pi-*.pt')))
         for j in range(len(c)):
             size = int(c[j].split('-')[-1].split('.')[0])
             cs = Game.CANONICAL_SHAPE()
@@ -553,11 +557,11 @@ if __name__ == '__main__':
             del c_tensor, v_tensor, p_tensor
 
         dataset = ConcatDataset(datasets)
-        dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE,
-                                shuffle=True, num_workers=DATA_WORKERS)
+        dataloader = DataLoader(
+            dataset, batch_size=TRAIN_BATCH_SIZE, shuffle=True)
 
         nn = neural_net.NNWrapper.load_checkpoint(
-            Game,CHECKPOINT_LOCATION, f'{iteration:04d}-{run_name}.pt')
+            Game, CHECKPOINT_LOCATION, f'{iteration:04d}-{run_name}.pt')
         v_loss, pi_loss = nn.losses(dataloader)
 
         del datasets, dataset, dataloader, nn
@@ -568,9 +572,12 @@ if __name__ == '__main__':
         total_size = 0
         datasets = []
         for i in range(max(0, iteration - hist_size), iteration + 1):
-            c = sorted(glob.glob(os.path.join(f'{HIST_LOCATION}',f'{i:04d}-*-canonical-*.pt')))
-            v = sorted(glob.glob(os.path.join(f'{HIST_LOCATION}',f'{i:04d}-*-v-*.pt')))
-            p = sorted(glob.glob(os.path.join(f'{HIST_LOCATION}',f'{i:04d}-*-pi-*.pt')))
+            c = sorted(glob.glob(os.path.join(
+                f'{HIST_LOCATION}', f'{i:04d}-*-canonical-*.pt')))
+            v = sorted(glob.glob(os.path.join(
+                f'{HIST_LOCATION}', f'{i:04d}-*-v-*.pt')))
+            p = sorted(glob.glob(os.path.join(
+                f'{HIST_LOCATION}', f'{i:04d}-*-pi-*.pt')))
             for j in range(len(c)):
                 size = int(c[j].split('-')[-1].split('.')[0])
                 total_size += size
@@ -586,12 +593,11 @@ if __name__ == '__main__':
 
         bs = TRAIN_BATCH_SIZE
         dataset = ConcatDataset(datasets)
-        dataloader = DataLoader(dataset, batch_size=bs,
-                                shuffle=True, num_workers=DATA_WORKERS)
+        dataloader = DataLoader(dataset, batch_size=bs, shuffle=True)
 
         average_generation = total_size/min(hist_size, iteration+1)
         nn = neural_net.NNWrapper.load_checkpoint(
-            Game,CHECKPOINT_LOCATION, f'{iteration:04d}-{run_name}.pt')
+            Game, CHECKPOINT_LOCATION, f'{iteration:04d}-{run_name}.pt')
         steps_to_train = int(
             math.ceil(average_generation/bs*TRAIN_SAMPLE_RATE))
         v_loss, pi_loss = nn.train(
@@ -621,13 +627,15 @@ if __name__ == '__main__':
 
         # Just use a random agent when generating data with network zero.
         # They are equivalent.
-        use_rand = best == 0
+        # use_rand = best == 0
+        use_rand = False
+
         if use_rand:
             nn = RandPlayer(Game, bs)
             params.max_cache_size = 0
         else:
             nn = neural_net.NNWrapper.load_checkpoint(
-                Game,CHECKPOINT_LOCATION, f'{best:04d}-{run_name}.pt')
+                Game, CHECKPOINT_LOCATION, f'{best:04d}-{run_name}.pt')
 
         pm = alphazero.PlayManager(new_game(), params)
         use_cuda = (USE_CUDA and not use_rand)
@@ -666,12 +674,12 @@ if __name__ == '__main__':
         hr = 0
         agl = 0
         nn = neural_net.NNWrapper.load_checkpoint(
-            Game,CHECKPOINT_LOCATION, f'{iteration:04d}-{run_name}.pt')
+            Game, CHECKPOINT_LOCATION, f'{iteration:04d}-{run_name}.pt')
         if past_iter == 0:
             nn_past = RandPlayer(Game, 64)
         else:
             nn_past = neural_net.NNWrapper.load_checkpoint(
-                Game,CHECKPOINT_LOCATION, f'{past_iter:04d}-{run_name}.pt')
+                Game, CHECKPOINT_LOCATION, f'{past_iter:04d}-{run_name}.pt')
         cb = Game.NUM_PLAYERS()
         if Game.NUM_PLAYERS() > 2:
             bs = 16
@@ -796,6 +804,7 @@ if __name__ == '__main__':
         print("Using a dummy logger for now that does nothing.\n")
         # Maybe create a basic logger class that puts the information in a file to at least save the info.
         # Or could fall back on tensorboard I guess.
+
         class DummyRun:
             def track(*args, **kwargs):
                 pass
@@ -814,25 +823,29 @@ if __name__ == '__main__':
         current_best = 0
         total_train_steps = 0
         if bootstrap_iters == 0:
-            np.savetxt(os.path.join('data','elo.csv'), elo, delimiter=',')
-            np.savetxt(os.path.join('data','win_rate.csv'), wr, delimiter=',')
-            np.savetxt(os.path.join('data','total_train_steps.txt'),
+            np.savetxt(os.path.join('data', 'elo.csv'), elo, delimiter=',')
+            np.savetxt(os.path.join('data', 'win_rate.csv'), wr, delimiter=',')
+            np.savetxt(os.path.join('data', 'total_train_steps.txt'),
                        [total_train_steps], delimiter=',')
     else:
-        tmp_wr = np.genfromtxt(os.path.join('data','win_rate.csv'), delimiter=',')
+        tmp_wr = np.genfromtxt(os.path.join(
+            'data', 'win_rate.csv'), delimiter=',')
         wr = np.full_like(tmp_wr, np.NAN)
         wr[:start+1][:start+1] = tmp_wr[:start+1][:start+1]
-        tmp_elo = np.genfromtxt(os.path.join('data','elo.csv'), delimiter=',')
+        tmp_elo = np.genfromtxt(os.path.join('data', 'elo.csv'), delimiter=',')
         elo = np.zeros_like(tmp_elo)
         elo[:start+1] = tmp_elo[:start+1]
         current_best = np.argmax(elo[:start+1])
-        total_train_steps = int(np.genfromtxt(os.path.join('data','total_train_steps.txt')))
+        total_train_steps = int(np.genfromtxt(
+            os.path.join('data', 'total_train_steps.txt')))
 
     postfix = {'best': current_best}
     if bootstrap_iters > 0 and bootstrap_iters > start:
         # We are just going to assume the new nets have similar elo to the past instead of running many comparisons matches.
-        prev_elo = np.genfromtxt(os.path.join('data','elo.csv'), delimiter=',')
-        prev_wr = np.genfromtxt(os.path.join('data','win_rate.csv'), delimiter=',')
+        prev_elo = np.genfromtxt(os.path.join(
+            'data', 'elo.csv'), delimiter=',')
+        prev_wr = np.genfromtxt(os.path.join(
+            'data', 'win_rate.csv'), delimiter=',')
         with tqdm.trange(start, bootstrap_iters, desc='Bootstraping Network') as pbar:
             for i in pbar:
                 elo[i] = prev_elo[i]
@@ -840,7 +853,7 @@ if __name__ == '__main__':
                 hist_size = calc_hist_size(i)
                 v_loss, pi_loss, total_train_steps = train(
                     Game, i, hist_size, run, total_train_steps)
-                np.savetxt(os.path.join('data','total_train_steps.txt'),
+                np.savetxt(os.path.join('data', 'total_train_steps.txt'),
                            [total_train_steps], delimiter=',')
                 postfix['vloss'] = v_loss
                 postfix['ploss'] = pi_loss
@@ -879,7 +892,7 @@ if __name__ == '__main__':
                       epoch=i, step=total_train_steps, context={'type': 'best'})
             postfix['elo'] = int(elo[i])
             pbar.set_postfix(postfix)
-            np.savetxt(os.path.join('data','elo.csv'), elo, delimiter=',')
+            np.savetxt(os.path.join('data', 'elo.csv'), elo, delimiter=',')
 
             win_rates, hit_rate, game_length, resign_win_rates, resignation_rate = self_play(
                 Game, current_best, i, nn_selfplay_mcts_depth, nn_selfplay_fast_mcts_depth)
@@ -914,7 +927,7 @@ if __name__ == '__main__':
                       epoch=i, step=total_train_steps)
             v_loss, pi_loss, total_train_steps = train(
                 Game, i, hist_size, run, total_train_steps)
-            np.savetxt(os.path.join('data','total_train_steps.txt'),
+            np.savetxt(os.path.join('data', 'total_train_steps.txt'),
                        [total_train_steps], delimiter=',')
             postfix['vloss'] = v_loss
             postfix['ploss'] = pi_loss
@@ -970,4 +983,4 @@ if __name__ == '__main__':
                 panel.append(current_best)
                 while len(panel) > GATING_PANEL_SIZE:
                     panel = panel[1:]
-            np.savetxt(os.path.join('data','win_rate.csv'), wr, delimiter=',')
+            np.savetxt(os.path.join('data', 'win_rate.csv'), wr, delimiter=',')

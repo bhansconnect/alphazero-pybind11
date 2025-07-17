@@ -228,7 +228,7 @@ TEST_F(TakGSTest, VerticalRoadWin) {
 }
 
 TEST_F(TakGSTest, SimultaneousRoadWins) {
-  TakGS<5> game{false};  // No opening swap
+  TakGS<5> game{0.0f, "", false};  // No opening swap
   
   // Player 0 creates horizontal road at row 0
   game.play_move(0);  // position 0
@@ -251,7 +251,7 @@ TEST_F(TakGSTest, SimultaneousRoadWins) {
 
 TEST_F(TakGSTest, ZigzagRoadWin) {
   // Test complex road connectivity with a true zigzag pattern
-  TakGS<5> game{false};
+  TakGS<5> game{0.0f, "", false};
   
   // Player 0 creates zigzag road: (0,0)-(0,1)-(1,1)-(1,2)-(0,2)-(0,3)-(0,4)
   game.play_move(0);       // (0,0)
@@ -284,7 +284,7 @@ TEST_F(TakGSTest, ZigzagRoadWin) {
 }
 
 TEST_F(TakGSTest, FlatWinTieBreaker) {
-  TakGS<4> game{false};  // No opening swap for clearer control
+  TakGS<4> game{0.0f, "", false};  // No opening swap for clearer control
   
   // Fill the entire 4x4 board systematically
   for (int i = 0; i < 16; ++i) {
@@ -305,7 +305,7 @@ TEST_F(TakGSTest, FlatWinTieBreaker) {
 }
 
 TEST_F(TakGSTest, DrawCondition) {
-  TakGS<4> game{false};  // No opening swap for precise control
+  TakGS<4> game{0.0f, "", false};  // No opening swap for precise control
   
   // Fill board to completion and test draw mechanics
   for (int i = 0; i < 16; ++i) {
@@ -650,8 +650,8 @@ TEST_F(TakGSTest, RoadWinPriority) {
 }
 
 TEST_F(TakGSTest, ConfigurableOpeningSwap) {
-  TakGS<5> game_with_swap{true};
-  TakGS<5> game_without_swap{false};
+  TakGS<5> game_with_swap{0.0f, "", true};
+  TakGS<5> game_without_swap{0.0f, "", false};
   
   auto valid_with = game_with_swap.valid_moves();
   auto valid_without = game_without_swap.valid_moves();
@@ -661,8 +661,8 @@ TEST_F(TakGSTest, ConfigurableOpeningSwap) {
 }
 
 TEST_F(TakGSTest, KomiSystem) {
-  TakGS<4> game_no_komi{false, 0.0f};   // No komi
-  TakGS<4> game_with_komi{false, 2.5f}; // Player 0 gets significant komi
+  TakGS<4> game_no_komi{0.0f, "", false};   // No komi
+  TakGS<4> game_with_komi{2.5f, "", false}; // Player 0 gets significant komi
   
   // Fill boards identically
   for (int i = 0; i < 16; ++i) {
@@ -720,7 +720,7 @@ TEST_F(TakGSTest, TwentyFiveMoveDrawRule) {
 }
 
 TEST_F(TakGSTest, HouseRulesCombination) {
-  TakGS<5> game{false, 1.5f};
+  TakGS<5> game{1.5f, "", false};
   
   EXPECT_EQ(game.board_size(), 5);
   
@@ -914,6 +914,247 @@ TEST_F(TakGSTest, BoardSizeLimits) {
   
   EXPECT_EQ(valid4.sum(), 16);  // 4x4 = 16 opening moves
   EXPECT_EQ(valid6.sum(), 36);  // 6x6 = 36 opening moves
+}
+
+// TPS (Tak Positional System) Tests
+TEST_F(TakGSTest, TPSInitialPositionGeneration) {
+  TakGS<5> game{};
+  std::string tps = game.to_tps();
+  
+  // Initial position should be all empty squares
+  EXPECT_EQ(tps, "x5/x5/x5/x5/x5 1 1");
+}
+
+TEST_F(TakGSTest, TPSInitialPositionParsing) {
+  TakGS<5> game{0.0f, "x5/x5/x5/x5/x5 1 1"};
+  
+  EXPECT_EQ(game.current_player(), 0);  // Player 1 = index 0
+  EXPECT_EQ(game.current_turn(), 0);    // Turn 1 = index 0
+  
+  // All squares should be empty
+  auto valid = game.valid_moves();
+  EXPECT_EQ(valid.sum(), 25);  // Only flat placements allowed on first move
+}
+
+TEST_F(TakGSTest, TPSAfterFirstMove) {
+  TakGS<5> game{};
+  game.play_move(0);  // Place at (0,0) - opening swap makes it player 1's piece
+  
+  std::string tps = game.to_tps();
+  EXPECT_EQ(tps, "x5/x5/x5/x5/2,x4 1 2");  // Player 2 (index 1) piece at bottom-left
+}
+
+TEST_F(TakGSTest, TPSParsingAfterFirstMove) {
+  TakGS<5> game{0.0f, "x5/x5/x5/x5/2,x4 1 2"};
+  
+  EXPECT_EQ(game.current_player(), 0);  // Player 1's turn
+  EXPECT_EQ(game.current_turn(), 1);    // Turn 2 (0-indexed)
+  
+  // Position (0,0) should be occupied
+  auto valid = game.valid_moves();
+  EXPECT_EQ(valid[0], 0);  // Cannot place at (0,0)
+  EXPECT_EQ(valid[1], 0);  // Cannot place wall at (0,0)
+  EXPECT_EQ(valid[2], 0);  // Cannot place cap at (0,0)
+}
+
+TEST_F(TakGSTest, TPSWithWalls) {
+  TakGS<5> game{};
+  game.play_move(0);   // Opening swap: player 1 flat at (0,0)
+  game.play_move(3);   // Player 0 flat at (0,1)
+  game.play_move(7);   // Player 1 wall at (0,2)
+  
+  std::string tps = game.to_tps();
+  EXPECT_EQ(tps, "x5/x5/x5/x5/2,1,2S,x2 1 4");  // Player 1 flat at (0,0), player 0 flat at (0,1), player 1 wall at (0,2)
+}
+
+TEST_F(TakGSTest, TPSParsingWithWalls) {
+  TakGS<5> game{0.0f, "x5/x5/x5/x5/2,12S,x3 2 4"};
+  
+  EXPECT_EQ(game.current_player(), 1);  // Player 2's turn
+  EXPECT_EQ(game.current_turn(), 3);    // Turn 4 (0-indexed)
+  
+  // Check that position (0,1) has a wall on top
+  auto valid = game.valid_moves();
+  EXPECT_EQ(valid[3], 0);  // Cannot place at (0,1)
+  EXPECT_EQ(valid[4], 0);  // Cannot place wall at (0,1)
+  EXPECT_EQ(valid[5], 0);  // Cannot place cap at (0,1)
+}
+
+TEST_F(TakGSTest, TPSWithCapstones) {
+  TakGS<5> game{};
+  game.play_move(0);   // Opening swap: player 1 flat at (0,0)
+  game.play_move(3);   // Player 0 flat at (0,1)
+  game.play_move(8);   // Player 1 capstone at (0,2)
+  
+  std::string tps = game.to_tps();
+  EXPECT_EQ(tps, "x5/x5/x5/x5/2,1,2C,x2 1 4");  // Player 1 flat at (0,0), player 0 flat at (0,1), player 1 capstone at (0,2)
+}
+
+TEST_F(TakGSTest, TPSParsingWithCapstones) {
+  TakGS<5> game{0.0f, "x5/x5/x5/x5/2,1,2C,x2 2 4"};
+  
+  EXPECT_EQ(game.current_player(), 1);  // Player 2's turn
+  EXPECT_EQ(game.current_turn(), 3);    // Turn 4 (0-indexed)
+  
+  // Check that position (0,2) has a capstone
+  auto valid = game.valid_moves();
+  EXPECT_EQ(valid[6], 0);  // Cannot place at (0,2)
+  EXPECT_EQ(valid[7], 0);  // Cannot place wall at (0,2)
+  EXPECT_EQ(valid[8], 0);  // Cannot place cap at (0,2)
+}
+
+TEST_F(TakGSTest, TPSComplexStack) {
+  TakGS<5> game{};
+  game.play_move(0);   // Opening swap: player 1 flat at (0,0)
+  game.play_move(3);   // Player 0 flat at (0,1)
+  game.play_move(6);   // Player 1 flat at (0,2)
+  game.play_move(15);  // Player 0 flat at (1,0)
+  game.play_move(18);  // Player 1 flat at (1,1)
+  
+  std::string tps = game.to_tps();
+  EXPECT_EQ(tps, "x5/x5/x5/1,2,x3/2,1,2,x2 1 6");  // Row 3: player 0 at (1,0), player 1 at (1,1); Row 4: player 1 at (0,0), player 0 at (0,1), player 1 at (0,2)
+}
+
+TEST_F(TakGSTest, TPSComplexStackParsing) {
+  TakGS<5> game{0.0f, "x5/x5/x5/1,2,x3/2,1,2,x2 1 6"};
+  
+  EXPECT_EQ(game.current_player(), 0);  // Player 1's turn
+  EXPECT_EQ(game.current_turn(), 5);    // Turn 6 (0-indexed)
+  
+  // Position (0,0) should be occupied by a 3-high stack
+  auto valid = game.valid_moves();
+  EXPECT_EQ(valid[0], 0);  // Cannot place at (0,0)
+  EXPECT_EQ(valid[1], 0);  // Cannot place wall at (0,0)
+  EXPECT_EQ(valid[2], 0);  // Cannot place cap at (0,0)
+}
+
+TEST_F(TakGSTest, TPSEmptySquareCompression) {
+  TakGS<5> game{};
+  game.play_move(0);   // Opening swap: player 1 at (0,0)
+  game.play_move(72);  // Player 0 at (4,4)
+  
+  std::string tps = game.to_tps();
+  EXPECT_EQ(tps, "x4,1/x5/x5/x5/2,x4 2 3");  // x4,1 instead of x,x,x,x,1
+}
+
+TEST_F(TakGSTest, TPSEmptySquareCompressionParsing) {
+  TakGS<5> game{0.0f, "x4,1/x5/x5/x5/2,x4 2 3"};
+  
+  EXPECT_EQ(game.current_player(), 1);  // Player 2's turn
+  EXPECT_EQ(game.current_turn(), 2);    // Turn 3 (0-indexed)
+  
+  // Position (4,4) should be occupied
+  auto valid = game.valid_moves();
+  EXPECT_EQ(valid[72], 0);  // Cannot place at (4,4)
+  EXPECT_EQ(valid[73], 0);  // Cannot place wall at (4,4)
+  EXPECT_EQ(valid[74], 0);  // Cannot place cap at (4,4)
+}
+
+TEST_F(TakGSTest, TPSRoundTripConsistency) {
+  TakGS<5> game{};
+  
+  // Make several moves (all placements to avoid moves_without_placement issues)
+  game.play_move(0);   // Opening swap: player 1 at (0,0)
+  game.play_move(3);   // Player 0 flat at (0,1)
+  game.play_move(7);   // Player 1 wall at (0,2)
+  game.play_move(15);  // Player 0 flat at (1,0)
+  game.play_move(20);  // Player 1 capstone at (1,1)
+  
+  // Convert to TPS and back
+  std::string tps = game.to_tps();
+  TakGS<5> game2{0.0f, tps};
+  
+  // Check key state is preserved
+  EXPECT_EQ(game.current_player(), game2.current_player());
+  EXPECT_EQ(game.current_turn(), game2.current_turn());
+  EXPECT_EQ(game.to_tps(), game2.to_tps());
+}
+
+TEST_F(TakGSTest, TPSBoardSize4) {
+  TakGS<4> game{};
+  game.play_move(0);   // Opening swap
+  game.play_move(3);   // Player 0 flat
+  
+  std::string tps = game.to_tps();
+  EXPECT_EQ(tps, "x4/x4/x4/2,1,x2 2 3");
+}
+
+TEST_F(TakGSTest, TPSBoardSize6) {
+  TakGS<6> game{};
+  game.play_move(0);   // Opening swap: player 1 at (0,0)
+  game.play_move(3);   // Player 0 flat at (0,1)
+  
+  std::string tps = game.to_tps();
+  EXPECT_EQ(tps, "x6/x6/x6/x6/x6/2,1,x4 2 3");
+}
+
+TEST_F(TakGSTest, TPSInvalidFormat) {
+  // Test various invalid TPS formats
+  EXPECT_THROW((TakGS<5>{0.0f, "invalid"}), std::invalid_argument);
+  EXPECT_THROW((TakGS<5>{0.0f, "x5/x5/x5/x5 1 1"}), std::invalid_argument);  // Missing row
+  EXPECT_THROW((TakGS<5>{0.0f, "x5/x5/x5/x5/x5 3 1"}), std::invalid_argument);  // Invalid player
+  EXPECT_THROW((TakGS<5>{0.0f, "x5/x5/x5/x5/x5 1 0"}), std::invalid_argument);  // Invalid turn
+  EXPECT_THROW((TakGS<5>{0.0f, "x6/x5/x5/x5/x5 1 1"}), std::invalid_argument);  // Wrong board size
+}
+
+TEST_F(TakGSTest, TPSMismatchedBoardSize) {
+  // TPS for 4x4 board should fail on 5x5 game
+  EXPECT_THROW((TakGS<5>{0.0f, "x4/x4/x4/x4 1 1"}), std::invalid_argument);
+  
+  // TPS for 6x6 board should fail on 5x5 game
+  EXPECT_THROW((TakGS<5>{0.0f, "x6/x6/x6/x6/x6/x6 1 1"}), std::invalid_argument);
+}
+
+TEST_F(TakGSTest, TPSBracketFormat) {
+  // Test parsing TPS with brackets (standard format)
+  TakGS<5> game{0.0f, R"([TPS "x5/x5/x5/x5/x5 1 1"])"};
+  
+  EXPECT_EQ(game.current_player(), 0);
+  EXPECT_EQ(game.current_turn(), 0);
+  
+  auto valid = game.valid_moves();
+  EXPECT_EQ(valid.sum(), 25);  // All empty squares for flat placement
+}
+
+TEST_F(TakGSTest, TPSPieceCountCalculation) {
+  TakGS<5> game{};
+  
+  // Place several pieces
+  game.play_move(0);   // Opening swap
+  game.play_move(3);   // Player 0 flat
+  game.play_move(6);   // Player 1 flat
+  game.play_move(5);   // Player 0 capstone
+  
+  // Parse from TPS
+  std::string tps = game.to_tps();
+  TakGS<5> game2{0.0f, tps};
+  
+  // Check that piece counts are calculated correctly
+  // Both games should have same valid moves (indicating same piece counts)
+  auto valid1 = game.valid_moves();
+  auto valid2 = game2.valid_moves();
+  
+  EXPECT_EQ(valid1.sum(), valid2.sum());
+  
+  // Check specific positions
+  for (int i = 0; i < valid1.size(); ++i) {
+    EXPECT_EQ(valid1[i], valid2[i]) << "Mismatch at move " << i;
+  }
+}
+
+TEST_F(TakGSTest, TPSPrintingInDump) {
+  TakGS<5> game{};
+  game.play_move(0);   // Opening swap
+  game.play_move(3);   // Player 0 flat
+  
+  std::string dump = game.dump();
+  
+  // Check that TPS appears at the beginning of dump
+  EXPECT_TRUE(dump.find("TPS: ") == 0);
+  
+  // Check that it contains the expected TPS
+  std::string expected_tps = game.to_tps();
+  EXPECT_TRUE(dump.find(expected_tps) != std::string::npos);
 }
 
 }  // namespace alphazero::tak_gs

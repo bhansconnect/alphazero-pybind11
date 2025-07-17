@@ -4,11 +4,13 @@
 #include <sstream>
 #include <numeric>
 #include <queue>
+#include <stdexcept>
+#include <regex>
 
 namespace alphazero::tak_gs {
 
 template<int SIZE>
-TakGS<SIZE>::TakGS(bool opening_swap, float komi) 
+TakGS<SIZE>::TakGS(float komi, const std::string& tps_string, bool opening_swap) 
     : board_(SIZE * SIZE),
       player_(0),
       turn_(0),
@@ -24,6 +26,11 @@ TakGS<SIZE>::TakGS(bool opening_swap, float komi)
       compact_board_cache_(SIZE * SIZE, 0),
       compact_board_valid_(false) {
   static_assert(SIZE >= MIN_SIZE && SIZE <= MAX_SIZE);
+  
+  // If TPS string is provided, parse it
+  if (!tps_string.empty()) {
+    parse_tps_string(tps_string);
+  }
 }
 
 template<int SIZE>
@@ -47,6 +54,7 @@ TakGS<SIZE>::TakGS(std::vector<Square> board, uint8_t player, uint32_t turn,
   static_assert(SIZE >= MIN_SIZE && SIZE <= MAX_SIZE);
   assert(board_.size() == SIZE * SIZE);
 }
+
 
 template<int SIZE>
 std::unique_ptr<GameState> TakGS<SIZE>::copy() const noexcept {
@@ -382,6 +390,7 @@ std::vector<PlayHistory> TakGS<SIZE>::symmetries(const PlayHistory& base) const 
 template<int SIZE>
 std::string TakGS<SIZE>::dump() const noexcept {
   std::ostringstream oss;
+  oss << "TPS: " << to_tps() << "\n\n";
   oss << "Tak " << SIZE << "x" << SIZE << "\n";
   oss << "Turn: " << turn_ << ", Player: " << static_cast<int>(player_) << "\n";
   oss << "P0: " << p0_stones_ << " stones, " << p0_caps_ << " caps\n";
@@ -666,6 +675,229 @@ void TakGS<SIZE>::update_compact_board() const noexcept {
   }
   
   compact_board_valid_ = true;
+}
+
+template<int SIZE>
+std::string TakGS<SIZE>::to_tps() const noexcept {
+  std::ostringstream oss;
+  
+  // Build board representation row by row (top to bottom)
+  for (int row = SIZE - 1; row >= 0; --row) {
+    if (row < SIZE - 1) oss << "/";
+    
+    bool first_in_row = true;
+    int empty_count = 0;
+    
+    for (int col = 0; col < SIZE; ++col) {
+      const Square& sq = board_[square_to_index(row, col)];
+      
+      if (sq.empty()) {
+        empty_count++;
+      } else {
+        // Output any accumulated empty squares
+        if (empty_count > 0) {
+          if (!first_in_row) oss << ",";
+          if (empty_count == 1) {
+            oss << "x";
+          } else {
+            oss << "x" << empty_count;
+          }
+          empty_count = 0;
+          first_in_row = false;
+        }
+        
+        // Add comma if not first piece in this row
+        if (!first_in_row) {
+          oss << ",";
+        }
+        
+        // Output the square
+        oss << square_to_tps_string(sq);
+        first_in_row = false;
+      }
+    }
+    
+    // Output any remaining empty squares
+    if (empty_count > 0) {
+      if (!first_in_row) oss << ",";
+      if (empty_count == 1) {
+        oss << "x";
+      } else {
+        oss << "x" << empty_count;
+      }
+    }
+  }
+  
+  // Add turn and move information
+  oss << " " << (player_ + 1) << " " << (turn_ + 1);
+  
+  return oss.str();
+}
+
+template<int SIZE>
+std::string TakGS<SIZE>::square_to_tps_string(const Square& sq) const noexcept {
+  if (sq.empty()) return "";
+  
+  std::string result;
+  
+  // Build stack from bottom to top
+  for (const auto& piece : sq.stack) {
+    result += std::to_string(piece.owner + 1);  // Convert 0-based to 1-based
+    
+    if (piece.type == PieceType::WALL) {
+      result += "S";
+    } else if (piece.type == PieceType::CAP) {
+      result += "C";
+    }
+    // FLAT pieces don't need a suffix
+  }
+  
+  return result;
+}
+
+template<int SIZE>
+void TakGS<SIZE>::parse_tps_string(const std::string& tps_string) {
+  // Remove brackets and "TPS" prefix if present
+  std::string cleaned = tps_string;
+  if (cleaned.find("[TPS \"") == 0) {
+    size_t start = cleaned.find("\"") + 1;
+    size_t end = cleaned.find("\"", start);
+    if (end != std::string::npos) {
+      cleaned = cleaned.substr(start, end - start);
+    }
+  }
+  
+  // Split by spaces to get board, player, turn
+  std::istringstream iss(cleaned);
+  std::string board_str, player_str, turn_str;
+  
+  if (!(iss >> board_str >> player_str >> turn_str)) {
+    throw std::invalid_argument("Invalid TPS format: expected 'board player turn'");
+  }
+  
+  // Parse player (1-based to 0-based)
+  int player_num = std::stoi(player_str);
+  if (player_num < 1 || player_num > 2) {
+    throw std::invalid_argument("Invalid player number: must be 1 or 2");
+  }
+  player_ = static_cast<uint8_t>(player_num - 1);
+  
+  // Parse turn (1-based to 0-based)
+  int turn_num = std::stoi(turn_str);
+  if (turn_num < 1) {
+    throw std::invalid_argument("Invalid turn number: must be >= 1");
+  }
+  turn_ = static_cast<uint32_t>(turn_num - 1);
+  
+  // Clear the board
+  for (auto& sq : board_) {
+    sq.stack.clear();
+  }
+  
+  // Parse board state
+  std::vector<std::string> rows;
+  std::stringstream ss(board_str);
+  std::string row;
+  
+  while (std::getline(ss, row, '/')) {
+    rows.push_back(row);
+  }
+  
+  if (static_cast<int>(rows.size()) != SIZE) {
+    throw std::invalid_argument("Board has " + std::to_string(rows.size()) + 
+                               " rows, expected " + std::to_string(SIZE));
+  }
+  
+  // Process rows from top to bottom (reverse order in our internal representation)
+  for (int row_idx = 0; row_idx < SIZE; ++row_idx) {
+    int actual_row = SIZE - 1 - row_idx;  // Convert to our coordinate system
+    const std::string& row_str = rows[row_idx];
+    
+    int col = 0;
+    for (size_t i = 0; i < row_str.length(); ++i) {
+      if (col >= SIZE) {
+        throw std::invalid_argument("Too many columns in row " + std::to_string(row_idx));
+      }
+      
+      char c = row_str[i];
+      if (c == 'x') {
+        // Empty square(s)
+        int count = 1;
+        if (i + 1 < row_str.length() && std::isdigit(row_str[i + 1])) {
+          count = row_str[i + 1] - '0';
+          i++; // Skip the digit
+        }
+        col += count;
+      } else if (c == ',') {
+        // Comma separator, ignore
+        continue;
+      } else if (std::isdigit(c)) {
+        // Start of a piece/stack
+        std::string piece_str;
+        while (i < row_str.length() && row_str[i] != ',' && row_str[i] != '/') {
+          piece_str += row_str[i];
+          i++;
+        }
+        i--; // Back up one since the loop will increment
+        
+        // Parse the piece string
+        Square& sq = board_[square_to_index(actual_row, col)];
+        for (size_t j = 0; j < piece_str.length(); ++j) {
+          if (std::isdigit(piece_str[j])) {
+            uint8_t owner = piece_str[j] - '1';  // Convert 1-based to 0-based
+            PieceType type = PieceType::FLAT;
+            
+            // Check for piece type modifier
+            if (j + 1 < piece_str.length()) {
+              if (piece_str[j + 1] == 'S') {
+                type = PieceType::WALL;
+                j++; // Skip the 'S'
+              } else if (piece_str[j + 1] == 'C') {
+                type = PieceType::CAP;
+                j++; // Skip the 'C'
+              }
+            }
+            
+            sq.add(Piece(owner, type));
+          }
+        }
+        col++;
+      } else {
+        throw std::invalid_argument("Invalid character in TPS string: " + std::string(1, c));
+      }
+    }
+    
+    // Validate that we have exactly SIZE columns
+    if (col != SIZE) {
+      throw std::invalid_argument("Row " + std::to_string(row_idx) + " has " + 
+                                 std::to_string(col) + " columns, expected " + 
+                                 std::to_string(SIZE));
+    }
+  }
+  
+  // Calculate remaining pieces based on what's on the board
+  p0_stones_ = get_board_size_pieces(SIZE);
+  p0_caps_ = get_board_size_capstones(SIZE);
+  p1_stones_ = get_board_size_pieces(SIZE);
+  p1_caps_ = get_board_size_capstones(SIZE);
+  
+  for (const auto& sq : board_) {
+    for (const auto& piece : sq.stack) {
+      if (piece.owner == 0) {
+        if (piece.type == PieceType::CAP) {
+          p0_caps_--;
+        } else {
+          p0_stones_--;
+        }
+      } else {
+        if (piece.type == PieceType::CAP) {
+          p1_caps_--;
+        } else {
+          p1_stones_--;
+        }
+      }
+    }
+  }
 }
 
 template<int SIZE>

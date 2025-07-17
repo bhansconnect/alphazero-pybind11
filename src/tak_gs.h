@@ -4,6 +4,7 @@
 #include <stack>
 #include <cstdint>
 #include <unordered_map>
+#include <string>
 
 #include "dll_export.h"
 #include "game_state.h"
@@ -117,7 +118,7 @@ class DLLEXPORT TakGS : public GameState {
   static constexpr int NUM_MOVES = SIZE * SIZE * 3 + SIZE * SIZE * 4 * SIZE;
   static constexpr std::array<int, 3> CANONICAL_SHAPE = {22, SIZE, SIZE};
   
-  TakGS(bool opening_swap = true, float komi = 0.0f);
+  TakGS(float komi = 0.0f, const std::string& tps_string = "", bool opening_swap = true);
   TakGS(std::vector<Square> board, uint8_t player, uint32_t turn,
         int p0_stones, int p0_caps, int p1_stones, int p1_caps, bool opening_swap, 
         float komi = 0.0f, uint32_t moves_without_placement = 0);
@@ -159,6 +160,9 @@ class DLLEXPORT TakGS : public GameState {
       const PlayHistory& base) const noexcept override;
   
   [[nodiscard]] std::string dump() const noexcept override;
+  
+  // TPS (Tak Positional System) methods
+  [[nodiscard]] std::string to_tps() const noexcept;
   
   void minimize_storage() override {}
   
@@ -208,6 +212,10 @@ class DLLEXPORT TakGS : public GameState {
   
   [[nodiscard]] bool can_move_onto(const Square& sq, const Piece& moving_piece) const noexcept;
   [[nodiscard]] const std::vector<std::vector<int>>& get_valid_drop_patterns(int carry, int distance) const noexcept;
+  
+  // TPS helper methods
+  [[nodiscard]] std::string square_to_tps_string(const Square& sq) const noexcept;
+  void parse_tps_string(const std::string& tps_string);
   
   struct PairHash {
     std::size_t operator()(const std::pair<int, int>& p) const noexcept {

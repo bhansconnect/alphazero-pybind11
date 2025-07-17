@@ -73,7 +73,6 @@ def eval_position(gs, agent):
 
 if __name__ == '__main__':
     import neural_net
-    import game_runner
 
     np.set_printoptions(precision=3, suppress=True)
     nn_folder = os.path.join('data','checkpoint')
@@ -107,7 +106,7 @@ if __name__ == '__main__':
                         raise Exception('Sad')
                 except KeyboardInterrupt:
                     exit()
-                except:
+                except ValueError:
                     print('You suck at typing numbers. Get Gud!')
 
         HEIGHT = Game.CANONICAL_SHAPE()[1]

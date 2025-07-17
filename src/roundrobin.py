@@ -1,7 +1,6 @@
 import neural_net
 from game_runner import GameRunner, GRArgs, RandPlayer, base_params, USE_CUDA
 import glob
-import importlib.util
 import os
 import numpy as np
 import gc

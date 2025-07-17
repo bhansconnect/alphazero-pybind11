@@ -5,6 +5,7 @@ import numpy as np
 import tqdm
 import math
 import matplotlib.pyplot as plt
+import os
 
 if __name__ == '__main__':
     np.set_printoptions(precision=3, suppress=True)
@@ -64,7 +65,7 @@ if __name__ == '__main__':
                                  c_cost=np.average(change_c))
 
     melo -= melo[0]
-    np.savetxt(os.path.join("data','melo.csv", melo, delimiter=",")
+    np.savetxt(os.path.join("data", "melo.csv"), melo, delimiter=",")
     # tmp_melo = np.zeros(len(agents))
     # tmp_c = np.zeros((len(agents), 2))
     # tmp_melo[:len(agents)] = melo[:len(agents)]

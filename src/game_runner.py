@@ -370,7 +370,6 @@ def get_elo(past_elo, win_rates, new_agent):
 
 
 if __name__ == '__main__':
-    import shutil
     import neural_net
 
     def create_init_net(Game, nnargs):
@@ -730,7 +729,7 @@ if __name__ == '__main__':
         else:
             bs = 64
             n = bs*cb
-            for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc=f'Bench new vs old'):
+            for i in tqdm.trange(Game.NUM_PLAYERS(), leave=False, desc='Bench new vs old'):
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
                 params.mcts_depth = [depth] * Game.NUM_PLAYERS()
@@ -787,7 +786,7 @@ if __name__ == '__main__':
             'full_mcts_depth': nn_selfplay_mcts_depth,
             'fast_mcts_depth': nn_selfplay_fast_mcts_depth,
         }
-    except:
+    except ImportError:
         print("aim is used for nice web logging with graphs. I would advise `pip install aim`.")
         print("If on windows, that may fail due to: https://github.com/aimhubio/aim/issues/2064")
         print("Hopefully it gets a fixed one day.")
@@ -888,20 +887,20 @@ if __name__ == '__main__':
                 Game, current_best, i, nn_selfplay_mcts_depth, nn_selfplay_fast_mcts_depth)
             for j in range(len(win_rates)-1):
                 run.track(win_rates[j], name='win_rate',
-                          epoch=i, step=total_train_steps, context={'vs': f'self', 'player': j+1, 'from': 'all_games'})
+                          epoch=i, step=total_train_steps, context={'vs': 'self', 'player': j+1, 'from': 'all_games'})
             for j in range(len(resign_win_rates)-1):
                 run.track(resign_win_rates[j], name='win_rate',
-                          epoch=i, step=total_train_steps, context={'vs': f'self', 'player': j+1, 'from': 'resignation'})
+                          epoch=i, step=total_train_steps, context={'vs': 'self', 'player': j+1, 'from': 'resignation'})
             run.track(resignation_rate, name='resignation_rate',
-                      epoch=i, step=total_train_steps, context={'vs': f'self'})
+                      epoch=i, step=total_train_steps, context={'vs': 'self'})
             run.track(win_rates[-1], name='draw_rate',
-                      epoch=i, step=total_train_steps, context={'vs': f'self', 'from': 'all_games'})
+                      epoch=i, step=total_train_steps, context={'vs': 'self', 'from': 'all_games'})
             run.track(resign_win_rates[-1], name='draw_rate',
-                      epoch=i, step=total_train_steps, context={'vs': f'self', 'from': 'resignation'})
+                      epoch=i, step=total_train_steps, context={'vs': 'self', 'from': 'resignation'})
             run.track(float(hit_rate), name='cache_hit_rate',
-                      epoch=i, step=total_train_steps, context={'vs': f'self'})
+                      epoch=i, step=total_train_steps, context={'vs': 'self'})
             run.track(game_length, name='average_game_length',
-                      epoch=i, step=total_train_steps, context={'vs': f'self'})
+                      epoch=i, step=total_train_steps, context={'vs': 'self'})
             postfix['win_rates'] = list(map(lambda x: f'{x:0.3f}', win_rates))
             pbar.set_postfix(postfix)
             gc.collect()

@@ -824,7 +824,7 @@ if __name__ == '__main__':
     if start == 0:
         create_init_net(Game, nnargs)
         wr = np.empty((total_agents, total_agents))
-        wr[:] = np.NAN
+        wr[:] = np.nan
         elo = np.zeros(total_agents)
         current_best = 0
         total_train_steps = 0
@@ -836,7 +836,7 @@ if __name__ == '__main__':
     else:
         tmp_wr = np.genfromtxt(os.path.join(
             'data', 'win_rate.csv'), delimiter=',')
-        wr = np.full_like(tmp_wr, np.NAN)
+        wr = np.full_like(tmp_wr, np.nan)
         wr[:start+1][:start+1] = tmp_wr[:start+1][:start+1]
         tmp_elo = np.genfromtxt(os.path.join('data', 'elo.csv'), delimiter=',')
         elo = np.zeros_like(tmp_elo)

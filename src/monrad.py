@@ -90,7 +90,7 @@ if __name__ == '__main__':
 
     count = len(agents)
     print(agents)
-    win_matrix = np.full((count, count), np.NAN)
+    win_matrix = np.full((count, count), np.nan)
     elo = np.zeros(count)
     rankings = list(range(count))
     rounds = int(np.ceil(np.log2(count)))

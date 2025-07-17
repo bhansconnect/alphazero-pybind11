@@ -1,6 +1,11 @@
 .vscode
 
 .aim
+.venv
+.cache
+
+.envrc
+.DS_Store
 
 mprofile_*
 

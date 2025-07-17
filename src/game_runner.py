@@ -303,16 +303,16 @@ class GameRunner:
             if size == 0:
                 continue
 
-            cs = self.args.game.CANONICAL_SHAPE()
-            c_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{self.args.data_folder}', f'{self.args.iteration:04d}-{batch:04d}-canonical-{size}.pt'), shared=True, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
-            v_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{self.args.data_folder}', f'{self.args.iteration:04d}-{batch:04d}-v-{size}.pt'), shared=True, size=size*(self.num_players+1))).reshape(size, self.num_players+1)
-            p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{self.args.data_folder}', f'{self.args.iteration:04d}-{batch:04d}-pi-{size}.pt'), shared=True, size=size*(self.args.game.NUM_MOVES()))).reshape(size, self.args.game.NUM_MOVES())
-            c_tensor[:] = self.hist_canonical[:size]
-            v_tensor[:] = self.hist_v[:size]
-            p_tensor[:] = self.hist_pi[:size]
+            # Direct save without creating intermediate tensors
+            torch.save(self.hist_canonical[:size], 
+                      os.path.join(self.args.data_folder, 
+                      f'{self.args.iteration:04d}-{batch:04d}-canonical-{size}.pt'))
+            torch.save(self.hist_v[:size], 
+                      os.path.join(self.args.data_folder, 
+                      f'{self.args.iteration:04d}-{batch:04d}-v-{size}.pt'))
+            torch.save(self.hist_pi[:size], 
+                      os.path.join(self.args.data_folder, 
+                      f'{self.args.iteration:04d}-{batch:04d}-pi-{size}.pt'))
             self.saved_samples += size
             batch += 1
 
@@ -381,17 +381,17 @@ if __name__ == '__main__':
         return int(WINDOW_SIZE_SCALAR*(1 + WINDOW_SIZE_BETA*(((i+1)/WINDOW_SIZE_SCALAR)**WINDOW_SIZE_ALPHA-1)/WINDOW_SIZE_ALPHA))
 
     def maybe_save(Game, c, v, p, size, batch, iteration, location=HIST_LOCATION, name='', force=False):
-        cs = Game.CANONICAL_SHAPE()
         if size == HIST_SIZE or (force and size > 0):
-            c_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{location}', f'{iteration:04d}-{batch:04d}{name}-canonical-{size}.pt'), shared=True, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
-            v_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{location}', f'{iteration:04d}-{batch:04d}{name}-v-{size}.pt'), shared=True, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
-            p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                os.path.join(f'{location}', f'{iteration:04d}-{batch:04d}{name}-pi-{size}.pt'), shared=True, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
-            c_tensor[:] = c[:size]
-            v_tensor[:] = v[:size]
-            p_tensor[:] = p[:size]
+            # Direct save without creating intermediate tensors
+            torch.save(c[:size], 
+                      os.path.join(location, 
+                      f'{iteration:04d}-{batch:04d}{name}-canonical-{size}.pt'))
+            torch.save(v[:size], 
+                      os.path.join(location, 
+                      f'{iteration:04d}-{batch:04d}{name}-v-{size}.pt'))
+            torch.save(p[:size], 
+                      os.path.join(location, 
+                      f'{iteration:04d}-{batch:04d}{name}-pi-{size}.pt'))
             return True
         return False
 
@@ -409,14 +409,10 @@ if __name__ == '__main__':
 
         datasets = []
         for j in range(len(c_names)):
-            size = int(c_names[j].split('-')[-1].split('.')[0])
-            cs = Game.CANONICAL_SHAPE()
-            c_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                c_names[j], shared=False, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
-            v_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                v_names[j], shared=False, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
-            p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                p_names[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+            # Load tensors using memory-mapped loading
+            c_tensor = torch.load(c_names[j], map_location='cpu', mmap=True)
+            v_tensor = torch.load(v_names[j], map_location='cpu', mmap=True)
+            p_tensor = torch.load(p_names[j], map_location='cpu', mmap=True)
             datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
             del c_tensor, v_tensor, p_tensor
 
@@ -473,14 +469,10 @@ if __name__ == '__main__':
 
         datasets = []
         for j in range(len(c_names)):
-            size = int(c_names[j].split('-')[-1].split('.')[0])
-            cs = Game.CANONICAL_SHAPE()
-            c_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                c_names[j], shared=False, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
-            v_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                v_names[j], shared=False, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
-            p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                p_names[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+            # Load tensors using memory-mapped loading
+            c_tensor = torch.load(c_names[j], map_location='cpu', mmap=True)
+            v_tensor = torch.load(v_names[j], map_location='cpu', mmap=True)
+            p_tensor = torch.load(p_names[j], map_location='cpu', mmap=True)
             datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
             del c_tensor, v_tensor, p_tensor
 
@@ -552,14 +544,10 @@ if __name__ == '__main__':
         p = sorted(glob.glob(os.path.join(
             f'{HIST_LOCATION}', f'{iteration:04d}-*-pi-*.pt')))
         for j in range(len(c)):
-            size = int(c[j].split('-')[-1].split('.')[0])
-            cs = Game.CANONICAL_SHAPE()
-            c_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                c[j], shared=False, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
-            v_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                v[j], shared=False, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
-            p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                p[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+            # Load tensors using memory-mapped loading
+            c_tensor = torch.load(c[j], map_location='cpu', mmap=True)
+            v_tensor = torch.load(v[j], map_location='cpu', mmap=True)
+            p_tensor = torch.load(p[j], map_location='cpu', mmap=True)
             datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
             del c_tensor, v_tensor, p_tensor
 
@@ -588,13 +576,10 @@ if __name__ == '__main__':
             for j in range(len(c)):
                 size = int(c[j].split('-')[-1].split('.')[0])
                 total_size += size
-                cs = Game.CANONICAL_SHAPE()
-                c_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                    c[j], shared=False, size=size*cs[0]*cs[1]*cs[2])).reshape(size, cs[0], cs[1], cs[2])
-                v_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                    v[j], shared=False, size=size*(Game.NUM_PLAYERS()+1))).reshape(size, Game.NUM_PLAYERS()+1)
-                p_tensor = torch.FloatTensor(torch.FloatStorage.from_file(
-                    p[j], shared=False, size=size*(Game.NUM_MOVES()))).reshape(size, Game.NUM_MOVES())
+                # Load tensors using memory-mapped loading
+                c_tensor = torch.load(c[j], map_location='cpu', mmap=True)
+                v_tensor = torch.load(v[j], map_location='cpu', mmap=True)
+                p_tensor = torch.load(p[j], map_location='cpu', mmap=True)
                 datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
                 del c_tensor, v_tensor, p_tensor
 

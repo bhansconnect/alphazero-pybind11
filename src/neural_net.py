@@ -316,12 +316,17 @@ class NNWrapper:
     def save_checkpoint(self, folder=os.path.join('data','checkpoint'), filename='checkpoint.pt'):
         filepath = os.path.join(folder, filename)
         os.makedirs(folder, exist_ok=True)
+        
+        # Convert NNArgs namedtuple to dict for safe serialization
+        args_dict = self.args._asdict()
+        
         torch.save({
             'state_dict': self.nnet.state_dict(),
             'opt_state': self.optimizer.state_dict(),
             'sch_state': self.scheduler.state_dict(),
-            'args': self.args,
-            'game': self.game
+            'args': args_dict,  # Save as dict, not namedtuple
+            'game': self.game,
+            'version': '2.0'  # Add version for compatibility
         }, filepath)
 
     @staticmethod
@@ -332,10 +337,20 @@ class NNWrapper:
             filepath = filename
         if not os.path.exists(filepath):
             raise Exception(f"No model in path {filepath}")
-        checkpoint = torch.load(filepath)
-        assert checkpoint[
-            'game'] == Game, f'Mismatching game type when loading model: got: {checkpoint["game"].__name__} want: {Game.__name__}'
-        net = NNWrapper(checkpoint['game'], checkpoint['args'])
+        
+        # Register safe globals for the game class
+        torch.serialization.add_safe_globals([Game])
+        
+        # Load with map_location for device flexibility
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        checkpoint = torch.load(filepath, map_location=device, weights_only=True)
+        
+        assert checkpoint['game'] == Game, f'Mismatching game type when loading model: got: {checkpoint["game"].__name__} want: {Game.__name__}'
+        
+        # Reconstruct NNArgs from dict
+        args = NNArgs(**checkpoint['args'])
+        
+        net = NNWrapper(checkpoint['game'], args)
         net.nnet.load_state_dict(checkpoint['state_dict'])
         net.optimizer.load_state_dict(checkpoint['opt_state'])
         net.scheduler.load_state_dict(checkpoint['sch_state'])

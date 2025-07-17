@@ -7,32 +7,30 @@
 
 namespace alphazero::tak_gs {
 
-thread_local std::unordered_map<std::pair<int, int>, std::vector<std::vector<int>>, TakGS::PairHash> TakGS::drop_patterns_cache_;
-
-TakGS::TakGS(int size, bool opening_swap, float komi) 
-    : size_(size), 
-      board_(size * size),
+template<int SIZE>
+TakGS<SIZE>::TakGS(bool opening_swap, float komi) 
+    : board_(SIZE * SIZE),
       player_(0),
       turn_(0),
-      p0_stones_(get_board_size_pieces(size)),
-      p0_caps_(get_board_size_capstones(size)),
-      p1_stones_(get_board_size_pieces(size)),
-      p1_caps_(get_board_size_capstones(size)),
+      p0_stones_(get_board_size_pieces(SIZE)),
+      p0_caps_(get_board_size_capstones(SIZE)),
+      p1_stones_(get_board_size_pieces(SIZE)),
+      p1_caps_(get_board_size_capstones(SIZE)),
       opening_swap_(opening_swap),
       komi_(komi),
       moves_without_placement_(0),
-      road_connectivity_cache_(size * size, std::vector<bool>(size * size, false)),
+      road_connectivity_cache_(SIZE * SIZE, std::vector<bool>(SIZE * SIZE, false)),
       road_cache_valid_(false),
-      compact_board_cache_(size * size, 0),
+      compact_board_cache_(SIZE * SIZE, 0),
       compact_board_valid_(false) {
-  assert(size >= MIN_SIZE && size <= MAX_SIZE);
+  static_assert(SIZE >= MIN_SIZE && SIZE <= MAX_SIZE);
 }
 
-TakGS::TakGS(int size, std::vector<Square> board, uint8_t player, uint32_t turn,
+template<int SIZE>
+TakGS<SIZE>::TakGS(std::vector<Square> board, uint8_t player, uint32_t turn,
              int p0_stones, int p0_caps, int p1_stones, int p1_caps, bool opening_swap,
              float komi, uint32_t moves_without_placement)
-    : size_(size),
-      board_(std::move(board)),
+    : board_(std::move(board)),
       player_(player),
       turn_(turn),
       p0_stones_(p0_stones),
@@ -42,26 +40,27 @@ TakGS::TakGS(int size, std::vector<Square> board, uint8_t player, uint32_t turn,
       opening_swap_(opening_swap),
       komi_(komi),
       moves_without_placement_(moves_without_placement),
-      road_connectivity_cache_(size * size, std::vector<bool>(size * size, false)),
+      road_connectivity_cache_(SIZE * SIZE, std::vector<bool>(SIZE * SIZE, false)),
       road_cache_valid_(false),
-      compact_board_cache_(size * size, 0),
+      compact_board_cache_(SIZE * SIZE, 0),
       compact_board_valid_(false) {
-  assert(size >= MIN_SIZE && size <= MAX_SIZE);
-  assert(board_.size() == size * size);
+  static_assert(SIZE >= MIN_SIZE && SIZE <= MAX_SIZE);
+  assert(board_.size() == SIZE * SIZE);
 }
 
-std::unique_ptr<GameState> TakGS::copy() const noexcept {
-  return std::make_unique<TakGS>(size_, board_, player_, turn_,
-                                 p0_stones_, p0_caps_, p1_stones_, p1_caps_, 
-                                 opening_swap_, komi_, moves_without_placement_);
+template<int SIZE>
+std::unique_ptr<GameState> TakGS<SIZE>::copy() const noexcept {
+  return std::make_unique<TakGS<SIZE>>(board_, player_, turn_,
+                                       p0_stones_, p0_caps_, p1_stones_, p1_caps_, 
+                                       opening_swap_, komi_, moves_without_placement_);
 }
 
-bool TakGS::operator==(const GameState& other) const noexcept {
-  const auto* other_tak = dynamic_cast<const TakGS*>(&other);
+template<int SIZE>
+bool TakGS<SIZE>::operator==(const GameState& other) const noexcept {
+  const auto* other_tak = dynamic_cast<const TakGS<SIZE>*>(&other);
   if (!other_tak) return false;
   
-  return size_ == other_tak->size_ &&
-         board_ == other_tak->board_ &&
+  return board_ == other_tak->board_ &&
          player_ == other_tak->player_ &&
          turn_ == other_tak->turn_ &&
          p0_stones_ == other_tak->p0_stones_ &&
@@ -73,32 +72,20 @@ bool TakGS::operator==(const GameState& other) const noexcept {
          moves_without_placement_ == other_tak->moves_without_placement_;
 }
 
-void TakGS::hash(absl::HashState h) const {
-  absl::HashState::combine(std::move(h), size_, player_, turn_, 
+template<int SIZE>
+void TakGS<SIZE>::hash(absl::HashState h) const {
+  absl::HashState::combine(std::move(h), SIZE, player_, turn_, 
                            p0_stones_, p0_caps_, p1_stones_, p1_caps_, 
                            opening_swap_, komi_, moves_without_placement_);
 }
 
-uint32_t TakGS::num_moves() const noexcept {
-  int placement_moves = size_ * size_ * 3;
-  int movement_moves = size_ * size_ * 4 * get_carry_limit(size_);
-  return placement_moves + movement_moves;
-}
-
-std::array<int, 3> TakGS::board_shape() const noexcept {
-  return {6, size_, size_};
-}
-
-std::array<int, 3> TakGS::canonical_shape() const noexcept {
-  return {22, size_, size_};
-}
-
-Vector<uint8_t> TakGS::valid_moves() const noexcept {
+template<int SIZE>
+Vector<uint8_t> TakGS<SIZE>::valid_moves() const noexcept {
   Vector<uint8_t> valid(num_moves());
   valid.setZero();
   
   if (opening_swap_ && turn_ == 0) {
-    for (int i = 0; i < size_ * size_; ++i) {
+    for (int i = 0; i < SIZE * SIZE; ++i) {
       if (board_[i].empty()) {
         valid[encode_placement(i, PieceType::FLAT)] = 1;
       }
@@ -109,7 +96,7 @@ Vector<uint8_t> TakGS::valid_moves() const noexcept {
   int my_stones = (player_ == 0) ? p0_stones_ : p1_stones_;
   int my_caps = (player_ == 0) ? p0_caps_ : p1_caps_;
   
-  for (int i = 0; i < size_ * size_; ++i) {
+  for (int i = 0; i < SIZE * SIZE; ++i) {
     if (board_[i].empty()) {
       if (my_stones > 0) {
         valid[encode_placement(i, PieceType::FLAT)] = 1;
@@ -123,11 +110,11 @@ Vector<uint8_t> TakGS::valid_moves() const noexcept {
     }
   }
   
-  for (int from_idx = 0; from_idx < size_ * size_; ++from_idx) {
+  for (int from_idx = 0; from_idx < SIZE * SIZE; ++from_idx) {
     const Square& sq = board_[from_idx];
     if (sq.empty() || sq.top().owner != player_) continue;
     
-    int max_carry = std::min(static_cast<int>(sq.height()), get_carry_limit(size_));
+    int max_carry = std::min(static_cast<int>(sq.height()), get_carry_limit(SIZE));
     
     auto [row, col] = index_to_square(from_idx);
     const int dirs[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
@@ -141,7 +128,7 @@ Vector<uint8_t> TakGS::valid_moves() const noexcept {
                              sq.stack[0].type != PieceType::FLAT) ? 
                              sq.stack[0] : Piece(player_, PieceType::FLAT);
         
-        for (int dist = 1; dist <= size_; ++dist) {
+        for (int dist = 1; dist <= SIZE; ++dist) {
           int new_row = row + dr * dist;
           int new_col = col + dc * dist;
           
@@ -173,7 +160,8 @@ Vector<uint8_t> TakGS::valid_moves() const noexcept {
   return valid;
 }
 
-void TakGS::play_move(uint32_t move) {
+template<int SIZE>
+void TakGS<SIZE>::play_move(uint32_t move) {
   int from_idx, to_idx;
   PieceType place_type;
   int carry_count;
@@ -252,7 +240,8 @@ void TakGS::play_move(uint32_t move) {
   }
 }
 
-std::optional<Vector<float>> TakGS::scores() const noexcept {
+template<int SIZE>
+std::optional<Vector<float>> TakGS<SIZE>::scores() const noexcept {
   Vector<float> result(3);
   result.setZero();
   
@@ -297,13 +286,14 @@ std::optional<Vector<float>> TakGS::scores() const noexcept {
   return std::nullopt;
 }
 
-Tensor<float, 3> TakGS::canonicalized() const noexcept {
+template<int SIZE>
+Tensor<float, 3> TakGS<SIZE>::canonicalized() const noexcept {
   auto shape = canonical_shape();
   Tensor<float, 3> canonical(shape[0], shape[1], shape[2]);
   canonical.setZero();
   
-  for (int row = 0; row < size_; ++row) {
-    for (int col = 0; col < size_; ++col) {
+  for (int row = 0; row < SIZE; ++row) {
+    for (int col = 0; col < SIZE; ++col) {
       int idx = square_to_index(row, col);
       const Square& sq = board_[idx];
       
@@ -326,8 +316,8 @@ Tensor<float, 3> TakGS::canonicalized() const noexcept {
     }
   }
   
-  int max_stones = get_board_size_pieces(size_);
-  int max_caps = get_board_size_capstones(size_);
+  int max_stones = get_board_size_pieces(SIZE);
+  int max_caps = get_board_size_capstones(SIZE);
   
   canonical.chip(18, 0).setConstant(static_cast<float>(p0_stones_) / max_stones);
   canonical.chip(19, 0).setConstant(max_caps > 0 ? static_cast<float>(p0_caps_) / max_caps : 0.0f);
@@ -337,7 +327,8 @@ Tensor<float, 3> TakGS::canonicalized() const noexcept {
   return canonical;
 }
 
-std::vector<PlayHistory> TakGS::symmetries(const PlayHistory& base) const noexcept {
+template<int SIZE>
+std::vector<PlayHistory> TakGS<SIZE>::symmetries(const PlayHistory& base) const noexcept {
   std::vector<PlayHistory> result;
   
   for (int rot = 0; rot < 4; ++rot) {
@@ -351,14 +342,14 @@ std::vector<PlayHistory> TakGS::symmetries(const PlayHistory& base) const noexce
       Tensor<float, 3> rot_canonical(canonical.dimensions());
       
       for (int layer = 0; layer < canonical.dimension(0); ++layer) {
-        for (int row = 0; row < size_; ++row) {
-          for (int col = 0; col < size_; ++col) {
+        for (int row = 0; row < SIZE; ++row) {
+          for (int col = 0; col < SIZE; ++col) {
             int new_row = row;
             int new_col = col;
             for (int r = 0; r < rot; ++r) {
               int temp = new_row;
               new_row = new_col;
-              new_col = size_ - 1 - temp;
+              new_col = SIZE - 1 - temp;
             }
             rot_canonical(layer, new_row, new_col) = canonical(layer, row, col);
           }
@@ -373,10 +364,10 @@ std::vector<PlayHistory> TakGS::symmetries(const PlayHistory& base) const noexce
     
     auto ref_canonical = rotated.canonical;
     for (int layer = 0; layer < ref_canonical.dimension(0); ++layer) {
-      for (int row = 0; row < size_; ++row) {
-        for (int col = 0; col < size_ / 2; ++col) {
+      for (int row = 0; row < SIZE; ++row) {
+        for (int col = 0; col < SIZE / 2; ++col) {
           std::swap(ref_canonical(layer, row, col),
-                   ref_canonical(layer, row, size_ - 1 - col));
+                   ref_canonical(layer, row, SIZE - 1 - col));
         }
       }
     }
@@ -388,15 +379,16 @@ std::vector<PlayHistory> TakGS::symmetries(const PlayHistory& base) const noexce
   return result;
 }
 
-std::string TakGS::dump() const noexcept {
+template<int SIZE>
+std::string TakGS<SIZE>::dump() const noexcept {
   std::ostringstream oss;
-  oss << "Tak " << size_ << "x" << size_ << "\n";
+  oss << "Tak " << SIZE << "x" << SIZE << "\n";
   oss << "Turn: " << turn_ << ", Player: " << static_cast<int>(player_) << "\n";
   oss << "P0: " << p0_stones_ << " stones, " << p0_caps_ << " caps\n";
   oss << "P1: " << p1_stones_ << " stones, " << p1_caps_ << " caps\n";
   
-  for (int row = 0; row < size_; ++row) {
-    for (int col = 0; col < size_; ++col) {
+  for (int row = 0; row < SIZE; ++row) {
+    for (int col = 0; col < SIZE; ++col) {
       const Square& sq = board_[square_to_index(row, col)];
       if (sq.empty()) {
         oss << " . ";
@@ -416,16 +408,17 @@ std::string TakGS::dump() const noexcept {
   return oss.str();
 }
 
-bool TakGS::check_road_win(uint8_t player) const noexcept {
+template<int SIZE>
+bool TakGS<SIZE>::check_road_win(uint8_t player) const noexcept {
   auto is_road_piece = [](const Square& sq, uint8_t p) {
     return !sq.empty() && sq.top().owner == p && 
            (sq.top().type == PieceType::FLAT || sq.top().type == PieceType::CAP);
   };
   
-  std::vector<bool> visited(size_ * size_, false);
+  std::vector<bool> visited(SIZE * SIZE, false);
   std::queue<int> q;
   
-  for (int i = 0; i < size_; ++i) {
+  for (int i = 0; i < SIZE; ++i) {
     if (is_road_piece(board_[i], player)) {
       q.push(i);
       visited[i] = true;
@@ -437,7 +430,7 @@ bool TakGS::check_road_win(uint8_t player) const noexcept {
     q.pop();
     
     auto [row, col] = index_to_square(idx);
-    if (row == size_ - 1) return true;
+    if (row == SIZE - 1) return true;
     
     const int dirs[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
     for (auto [dr, dc] : dirs) {
@@ -454,10 +447,10 @@ bool TakGS::check_road_win(uint8_t player) const noexcept {
     }
   }
   
-  visited.assign(size_ * size_, false);
+  visited.assign(SIZE * SIZE, false);
   while (!q.empty()) q.pop();
   
-  for (int i = 0; i < size_; ++i) {
+  for (int i = 0; i < SIZE; ++i) {
     int idx = square_to_index(0, i);
     if (is_road_piece(board_[idx], player)) {
       q.push(idx);
@@ -470,7 +463,7 @@ bool TakGS::check_road_win(uint8_t player) const noexcept {
     q.pop();
     
     auto [row, col] = index_to_square(idx);
-    if (col == size_ - 1) return true;
+    if (col == SIZE - 1) return true;
     
     const int dirs[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
     for (auto [dr, dc] : dirs) {
@@ -490,7 +483,8 @@ bool TakGS::check_road_win(uint8_t player) const noexcept {
   return false;
 }
 
-int TakGS::count_flats(uint8_t player) const noexcept {
+template<int SIZE>
+int TakGS<SIZE>::count_flats(uint8_t player) const noexcept {
   int count = 0;
   for (const auto& sq : board_) {
     if (!sq.empty() && sq.top().owner == player && sq.top().type == PieceType::FLAT) {
@@ -500,14 +494,16 @@ int TakGS::count_flats(uint8_t player) const noexcept {
   return count;
 }
 
-bool TakGS::is_board_full() const noexcept {
+template<int SIZE>
+bool TakGS<SIZE>::is_board_full() const noexcept {
   for (const auto& sq : board_) {
     if (sq.empty()) return false;
   }
   return true;
 }
 
-bool TakGS::can_move_onto(const Square& sq, const Piece& moving_piece) const noexcept {
+template<int SIZE>
+bool TakGS<SIZE>::can_move_onto(const Square& sq, const Piece& moving_piece) const noexcept {
   if (sq.empty()) return true;
   
   const Piece& top = sq.top();
@@ -519,7 +515,8 @@ bool TakGS::can_move_onto(const Square& sq, const Piece& moving_piece) const noe
   return true;
 }
 
-const std::vector<std::vector<int>>& TakGS::get_valid_drop_patterns(int carry, int distance) const noexcept {
+template<int SIZE>
+const std::vector<std::vector<int>>& TakGS<SIZE>::get_valid_drop_patterns(int carry, int distance) const noexcept {
   auto key = std::make_pair(carry, distance);
   
   auto it = drop_patterns_cache_.find(key);
@@ -555,10 +552,11 @@ const std::vector<std::vector<int>>& TakGS::get_valid_drop_patterns(int carry, i
   return result.first->second;
 }
 
-void TakGS::decode_move(uint32_t move, int& from_idx, int& to_idx, 
+template<int SIZE>
+void TakGS<SIZE>::decode_move(uint32_t move, int& from_idx, int& to_idx, 
                        PieceType& place_type, int& carry_count, 
                        std::vector<int>& drops) const noexcept {
-  uint32_t placement_moves = size_ * size_ * 3;
+  uint32_t placement_moves = SIZE * SIZE * 3;
   
   if (move < placement_moves) {
     from_idx = -1;
@@ -568,15 +566,15 @@ void TakGS::decode_move(uint32_t move, int& from_idx, int& to_idx,
     drops.clear();
   } else {
     move -= placement_moves;
-    from_idx = move / (4 * get_carry_limit(size_));
-    int remainder = move % (4 * get_carry_limit(size_));
-    int direction = remainder / get_carry_limit(size_);
-    carry_count = (remainder % get_carry_limit(size_)) + 1;
+    from_idx = move / (4 * get_carry_limit(SIZE));
+    int remainder = move % (4 * get_carry_limit(SIZE));
+    int direction = remainder / get_carry_limit(SIZE);
+    carry_count = (remainder % get_carry_limit(SIZE)) + 1;
     
     auto [row, col] = index_to_square(from_idx);
     const int dirs[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
     
-    for (int dist = 1; dist <= size_; ++dist) {
+    for (int dist = 1; dist <= SIZE; ++dist) {
       int new_row = row + dirs[direction][0] * dist;
       int new_col = col + dirs[direction][1] * dist;
       
@@ -593,11 +591,13 @@ void TakGS::decode_move(uint32_t move, int& from_idx, int& to_idx,
   }
 }
 
-uint32_t TakGS::encode_placement(int idx, PieceType type) const noexcept {
+template<int SIZE>
+uint32_t TakGS<SIZE>::encode_placement(int idx, PieceType type) const noexcept {
   return idx * 3 + static_cast<int>(type);
 }
 
-uint32_t TakGS::encode_movement(int from_idx, int to_idx, 
+template<int SIZE>
+uint32_t TakGS<SIZE>::encode_movement(int from_idx, int to_idx, 
                                const std::vector<int>& drops) const noexcept {
   auto [from_row, from_col] = index_to_square(from_idx);
   auto [to_row, to_col] = index_to_square(to_idx);
@@ -612,13 +612,14 @@ uint32_t TakGS::encode_movement(int from_idx, int to_idx,
   else if (dc == 1) direction = 3;
   
   int carry = std::accumulate(drops.begin(), drops.end(), 0);
-  int base = size_ * size_ * 3;
+  int base = SIZE * SIZE * 3;
   
-  return base + from_idx * 4 * get_carry_limit(size_) + 
-         direction * get_carry_limit(size_) + (carry - 1);
+  return base + from_idx * 4 * get_carry_limit(SIZE) + 
+         direction * get_carry_limit(SIZE) + (carry - 1);
 }
 
-void TakGS::update_road_cache() const noexcept {
+template<int SIZE>
+void TakGS<SIZE>::update_road_cache() const noexcept {
   if (road_cache_valid_) return;
   
   update_compact_board();
@@ -631,7 +632,7 @@ void TakGS::update_road_cache() const noexcept {
   // Build adjacency for road pieces using compact representation
   const int dirs[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
   
-  for (int idx = 0; idx < size_ * size_; ++idx) {
+  for (int idx = 0; idx < SIZE * SIZE; ++idx) {
     auto [row, col] = index_to_square(idx);
     
     for (auto [dr, dc] : dirs) {
@@ -656,14 +657,23 @@ void TakGS::update_road_cache() const noexcept {
   road_cache_valid_ = true;
 }
 
-void TakGS::update_compact_board() const noexcept {
+template<int SIZE>
+void TakGS<SIZE>::update_compact_board() const noexcept {
   if (compact_board_valid_) return;
   
-  for (int i = 0; i < size_ * size_; ++i) {
+  for (int i = 0; i < SIZE * SIZE; ++i) {
     compact_board_cache_[i] = board_[i].compact_representation();
   }
   
   compact_board_valid_ = true;
 }
+
+template<int SIZE>
+thread_local std::unordered_map<std::pair<int, int>, std::vector<std::vector<int>>, typename TakGS<SIZE>::PairHash> TakGS<SIZE>::drop_patterns_cache_;
+
+// Explicit template instantiations
+template class TakGS<4>;
+template class TakGS<5>;
+template class TakGS<6>;
 
 }  // namespace alphazero::tak_gs

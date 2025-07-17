@@ -110,10 +110,15 @@ inline int get_carry_limit(int size) {
   return size;
 }
 
+template<int SIZE = DEFAULT_SIZE>
 class DLLEXPORT TakGS : public GameState {
  public:
-  TakGS(int size = DEFAULT_SIZE, bool opening_swap = true, float komi = 0.0f);
-  TakGS(int size, std::vector<Square> board, uint8_t player, uint32_t turn,
+  static constexpr int BOARD_SIZE = SIZE;
+  static constexpr int NUM_MOVES = SIZE * SIZE * 3 + SIZE * SIZE * 4 * SIZE;
+  static constexpr std::array<int, 3> CANONICAL_SHAPE = {22, SIZE, SIZE};
+  
+  TakGS(bool opening_swap = true, float komi = 0.0f);
+  TakGS(std::vector<Square> board, uint8_t player, uint32_t turn,
         int p0_stones, int p0_caps, int p1_stones, int p1_caps, bool opening_swap, 
         float komi = 0.0f, uint32_t moves_without_placement = 0);
   
@@ -130,7 +135,9 @@ class DLLEXPORT TakGS : public GameState {
     return turn_;
   }
   
-  [[nodiscard]] uint32_t num_moves() const noexcept override;
+  [[nodiscard]] uint32_t num_moves() const noexcept override {
+    return NUM_MOVES;
+  }
   
   [[nodiscard]] uint8_t num_players() const noexcept override {
     return NUM_PLAYERS;
@@ -155,12 +162,15 @@ class DLLEXPORT TakGS : public GameState {
   
   void minimize_storage() override {}
   
-  [[nodiscard]] int board_size() const noexcept { return size_; }
-  [[nodiscard]] std::array<int, 3> board_shape() const noexcept;
-  [[nodiscard]] std::array<int, 3> canonical_shape() const noexcept;
+  [[nodiscard]] int board_size() const noexcept { return SIZE; }
+  [[nodiscard]] std::array<int, 3> board_shape() const noexcept {
+    return {6, SIZE, SIZE};
+  }
+  [[nodiscard]] std::array<int, 3> canonical_shape() const noexcept {
+    return CANONICAL_SHAPE;
+  }
   
  private:
-  int size_;
   std::vector<Square> board_;
   uint8_t player_;
   uint32_t turn_;
@@ -173,15 +183,15 @@ class DLLEXPORT TakGS : public GameState {
   uint32_t moves_without_placement_;
   
   [[nodiscard]] int square_to_index(int row, int col) const noexcept {
-    return row * size_ + col;
+    return row * SIZE + col;
   }
   
   [[nodiscard]] std::pair<int, int> index_to_square(int index) const noexcept {
-    return {index / size_, index % size_};
+    return {index / SIZE, index % SIZE};
   }
   
   [[nodiscard]] bool is_valid_square(int row, int col) const noexcept {
-    return row >= 0 && row < size_ && col >= 0 && col < size_;
+    return row >= 0 && row < SIZE && col >= 0 && col < SIZE;
   }
   
   [[nodiscard]] bool check_road_win(uint8_t player) const noexcept;

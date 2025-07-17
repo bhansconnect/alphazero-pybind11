@@ -6,7 +6,7 @@ namespace alphazero::tak_gs {
 
 class TakGSTest : public ::testing::Test {
  protected:
-  TakGS game{5};
+  TakGS<5> game{};
 };
 
 TEST_F(TakGSTest, InitialState) {
@@ -129,7 +129,7 @@ TEST_F(TakGSTest, WallPlacement) {
 }
 
 TEST_F(TakGSTest, CapstoneFlattening) {
-  TakGS game_6x6(6);
+  TakGS<6> game_6x6;
   
   game_6x6.play_move(0);   // Opening swap: player 1 flat at (0,0)
   game_6x6.play_move(3);   // Player 0 flat at (0,1)
@@ -202,10 +202,10 @@ TEST_F(TakGSTest, DumpOutput) {
 
 
 TEST_F(TakGSTest, DifferentBoardSizes) {
-  TakGS game4(4);
+  TakGS<4> game4{};
   EXPECT_EQ(game4.num_moves(), 4 * 4 * 3 + 4 * 4 * 4 * 4);
   
-  TakGS game6(6);
+  TakGS<6> game6{};
   EXPECT_EQ(game6.num_moves(), 6 * 6 * 3 + 6 * 6 * 4 * 6);
 }
 
@@ -228,7 +228,7 @@ TEST_F(TakGSTest, VerticalRoadWin) {
 }
 
 TEST_F(TakGSTest, SimultaneousRoadWins) {
-  TakGS game(5, false);  // No opening swap
+  TakGS<5> game{false};  // No opening swap
   
   // Player 0 creates horizontal road at row 0
   game.play_move(0);  // position 0
@@ -251,7 +251,7 @@ TEST_F(TakGSTest, SimultaneousRoadWins) {
 
 TEST_F(TakGSTest, ZigzagRoadWin) {
   // Test complex road connectivity with a true zigzag pattern
-  TakGS game(5, false);
+  TakGS<5> game{false};
   
   // Player 0 creates zigzag road: (0,0)-(0,1)-(1,1)-(1,2)-(0,2)-(0,3)-(0,4)
   game.play_move(0);       // (0,0)
@@ -284,7 +284,7 @@ TEST_F(TakGSTest, ZigzagRoadWin) {
 }
 
 TEST_F(TakGSTest, FlatWinTieBreaker) {
-  TakGS game(4, false);  // No opening swap for clearer control
+  TakGS<4> game{false};  // No opening swap for clearer control
   
   // Fill the entire 4x4 board systematically
   for (int i = 0; i < 16; ++i) {
@@ -305,7 +305,7 @@ TEST_F(TakGSTest, FlatWinTieBreaker) {
 }
 
 TEST_F(TakGSTest, DrawCondition) {
-  TakGS game(4, false);  // No opening swap for precise control
+  TakGS<4> game{false};  // No opening swap for precise control
   
   // Fill board to completion and test draw mechanics
   for (int i = 0; i < 16; ++i) {
@@ -337,7 +337,7 @@ TEST_F(TakGSTest, InvalidPlacementOnOccupiedSquare) {
 }
 
 TEST_F(TakGSTest, MovementBlockedByWall) {
-  TakGS game(5);
+  TakGS<5> game{};
   
   game.play_move(0);   // Player 1 flat at (0,0) due to opening swap
   game.play_move(3);   // Player 0 flat at (0,1)
@@ -364,7 +364,7 @@ TEST_F(TakGSTest, MovementBlockedByWall) {
 }
 
 TEST_F(TakGSTest, MovementOntoCapstoneBlocked) {
-  TakGS game(6);
+  TakGS<6> game{};
   
   game.play_move(0);
   game.play_move(3);
@@ -386,7 +386,7 @@ TEST_F(TakGSTest, MovementOntoCapstoneBlocked) {
 }
 
 TEST_F(TakGSTest, CapstoneFlattensWall) {
-  TakGS game(6);
+  TakGS<6> game{};
   
   game.play_move(0);
   game.play_move(3);
@@ -401,7 +401,7 @@ TEST_F(TakGSTest, CapstoneFlattensWall) {
 }
 
 TEST_F(TakGSTest, MaxStackHeight) {
-  TakGS game(5);
+  TakGS<5> game{};
   
   game.play_move(0);
   game.play_move(3);
@@ -416,7 +416,7 @@ TEST_F(TakGSTest, MaxStackHeight) {
 }
 
 TEST_F(TakGSTest, StackHeightEncoding) {
-  TakGS game(5);
+  TakGS<5> game{};
   
   game.play_move(0);
   game.play_move(3);
@@ -447,7 +447,7 @@ TEST_F(TakGSTest, StackHeightEncoding) {
 }
 
 TEST_F(TakGSTest, AllDirectionsMovement) {
-  TakGS game(5);
+  TakGS<5> game{};
   
   game.play_move(0);
   game.play_move(3);
@@ -468,7 +468,7 @@ TEST_F(TakGSTest, AllDirectionsMovement) {
 }
 
 TEST_F(TakGSTest, CarryLimitEnforcement) {
-  TakGS game(5);
+  TakGS<5> game{};
   
   game.play_move(0);
   game.play_move(3);
@@ -483,7 +483,7 @@ TEST_F(TakGSTest, CarryLimitEnforcement) {
 }
 
 TEST_F(TakGSTest, PieceExhaustion) {
-  TakGS game(4);
+  TakGS<4> game{};
   
   game.play_move(0);
   
@@ -519,14 +519,14 @@ TEST_F(TakGSTest, SecondMoveValidation) {
 }
 
 TEST_F(TakGSTest, CapstoneCountValidation) {
-  TakGS game4(4);
+  TakGS<4> game4{};
   auto valid4 = game4.valid_moves();
   
   for (int i = 2; i < 48; i += 3) {
     EXPECT_EQ(valid4[i], 0);
   }
   
-  TakGS game5(5);
+  TakGS<5> game5{};
   game5.play_move(0);
   auto valid5 = game5.valid_moves();
   
@@ -556,7 +556,7 @@ TEST_F(TakGSTest, GameStateConsistency) {
 }
 
 TEST_F(TakGSTest, LongGameSequence) {
-  TakGS game(5);
+  TakGS<5> game{};
   
   for (int i = 0; i < 50; ++i) {
     auto valid = game.valid_moves();
@@ -579,7 +579,7 @@ TEST_F(TakGSTest, LongGameSequence) {
 }
 
 TEST_F(TakGSTest, BoundaryMovementValidation) {
-  TakGS game(5);
+  TakGS<5> game{};
   
   game.play_move(0);
   game.play_move(3);
@@ -601,7 +601,7 @@ TEST_F(TakGSTest, BoundaryMovementValidation) {
 }
 
 TEST_F(TakGSTest, ComplexStackMovement) {
-  TakGS game(5);
+  TakGS<5> game{};
   
   game.play_move(0);
   game.play_move(3);
@@ -625,7 +625,7 @@ TEST_F(TakGSTest, ComplexStackMovement) {
 }
 
 TEST_F(TakGSTest, RoadWinPriority) {
-  TakGS game(5);
+  TakGS<5> game{};
   
   game.play_move(0);
   for (int i = 1; i < 25; ++i) {
@@ -650,8 +650,8 @@ TEST_F(TakGSTest, RoadWinPriority) {
 }
 
 TEST_F(TakGSTest, ConfigurableOpeningSwap) {
-  TakGS game_with_swap(5, true);
-  TakGS game_without_swap(5, false);
+  TakGS<5> game_with_swap{true};
+  TakGS<5> game_without_swap{false};
   
   auto valid_with = game_with_swap.valid_moves();
   auto valid_without = game_without_swap.valid_moves();
@@ -661,8 +661,8 @@ TEST_F(TakGSTest, ConfigurableOpeningSwap) {
 }
 
 TEST_F(TakGSTest, KomiSystem) {
-  TakGS game_no_komi(4, false, 0.0f);   // No komi
-  TakGS game_with_komi(4, false, 2.5f); // Player 0 gets significant komi
+  TakGS<4> game_no_komi{false, 0.0f};   // No komi
+  TakGS<4> game_with_komi{false, 2.5f}; // Player 0 gets significant komi
   
   // Fill boards identically
   for (int i = 0; i < 16; ++i) {
@@ -687,7 +687,7 @@ TEST_F(TakGSTest, KomiSystem) {
 }
 
 TEST_F(TakGSTest, TwentyFiveMoveDrawRule) {
-  TakGS game(5);
+  TakGS<5> game{};
   
   // Place some initial pieces
   game.play_move(0);   // opening swap
@@ -720,7 +720,7 @@ TEST_F(TakGSTest, TwentyFiveMoveDrawRule) {
 }
 
 TEST_F(TakGSTest, HouseRulesCombination) {
-  TakGS game(5, false, 1.5f);
+  TakGS<5> game{false, 1.5f};
   
   EXPECT_EQ(game.board_size(), 5);
   
@@ -729,7 +729,7 @@ TEST_F(TakGSTest, HouseRulesCombination) {
 }
 
 TEST_F(TakGSTest, MaxStackHeightBoundary) {
-  TakGS game(5);
+  TakGS<5> game{};
   
   game.play_move(0);  // Opening swap
   game.play_move(3);  // Regular move
@@ -750,7 +750,7 @@ TEST_F(TakGSTest, MaxStackHeightBoundary) {
 }
 
 TEST_F(TakGSTest, CarryLimitBoundaryTest) {
-  TakGS game(5);  // Carry limit is 5
+  TakGS<5> game{};  // Carry limit is 5
   
   game.play_move(0);  // Opening swap
   game.play_move(3);
@@ -778,7 +778,7 @@ TEST_F(TakGSTest, CarryLimitBoundaryTest) {
 }
 
 TEST_F(TakGSTest, PieceExhaustionBoundary) {
-  TakGS game(4);  // 15 stones, 0 capstones per player
+  TakGS<4> game{};  // 15 stones, 0 capstones per player
   
   game.play_move(0);  // Opening swap
   
@@ -826,7 +826,7 @@ TEST_F(TakGSTest, InvalidMoveAttempts) {
 }
 
 TEST_F(TakGSTest, CapstoneFlattensWallMechanic) {
-  TakGS game(6);
+  TakGS<6> game{};
   
   game.play_move(0);   // Opening swap: player 1 flat at (0,0)
   game.play_move(3);   // Player 0 flat at (0,1)
@@ -844,7 +844,7 @@ TEST_F(TakGSTest, CapstoneFlattensWallMechanic) {
 }
 
 TEST_F(TakGSTest, FiftyMoveRule) {
-  TakGS game(5);
+  TakGS<5> game{};
   
   // Set up a position where we can make movement-only moves
   game.play_move(0);   // Opening swap
@@ -898,8 +898,8 @@ TEST_F(TakGSTest, SymmetryPreservation) {
 
 TEST_F(TakGSTest, BoardSizeLimits) {
   // Test minimum and maximum board sizes
-  TakGS game4(4);
-  TakGS game6(6);
+  TakGS<4> game4{};
+  TakGS<6> game6{};
   
   EXPECT_EQ(game4.board_size(), 4);
   EXPECT_EQ(game6.board_size(), 6);

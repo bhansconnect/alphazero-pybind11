@@ -375,14 +375,35 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("CANONICAL_SHAPE",
                   [] { return PhotosynthesisGS<4>::CANONICAL_SHAPE; });
 
-  py::class_<TakGS, GameState>(m, "TakGS")
+  py::class_<TakGS<4>, GameState>(m, "TakGS4")
       .def(py::init<>())
-      .def(py::init<int>())
-      .def(py::init<int, bool>())
-      .def(py::init<int, bool, float>())
-      .def("board_size", &TakGS::board_size)
+      .def(py::init<bool>())
+      .def(py::init<bool, float>())
+      .def("board_size", &TakGS<4>::board_size)
       .def_static("NUM_PLAYERS", [] { return tak_gs::NUM_PLAYERS; })
-      .def_static("NUM_SYMMETRIES", [] { return tak_gs::NUM_SYMMETRIES; });
+      .def_static("NUM_MOVES", [] { return TakGS<4>::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return tak_gs::NUM_SYMMETRIES; })
+      .def_static("CANONICAL_SHAPE", [] { return TakGS<4>::CANONICAL_SHAPE; });
+  
+  py::class_<TakGS<5>, GameState>(m, "TakGS5")
+      .def(py::init<>())
+      .def(py::init<bool>())
+      .def(py::init<bool, float>())
+      .def("board_size", &TakGS<5>::board_size)
+      .def_static("NUM_PLAYERS", [] { return tak_gs::NUM_PLAYERS; })
+      .def_static("NUM_MOVES", [] { return TakGS<5>::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return tak_gs::NUM_SYMMETRIES; })
+      .def_static("CANONICAL_SHAPE", [] { return TakGS<5>::CANONICAL_SHAPE; });
+  
+  py::class_<TakGS<6>, GameState>(m, "TakGS6")
+      .def(py::init<>())
+      .def(py::init<bool>())
+      .def(py::init<bool, float>())
+      .def("board_size", &TakGS<6>::board_size)
+      .def_static("NUM_PLAYERS", [] { return tak_gs::NUM_PLAYERS; })
+      .def_static("NUM_MOVES", [] { return TakGS<6>::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return tak_gs::NUM_SYMMETRIES; })
+      .def_static("CANONICAL_SHAPE", [] { return TakGS<6>::CANONICAL_SHAPE; });
 }
 
 }  // namespace alphazero

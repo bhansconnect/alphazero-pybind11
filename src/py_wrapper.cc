@@ -10,6 +10,7 @@
 #include "pybind11/numpy.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
+#include "tak_gs.h"
 #include "tawlbwrdd_gs.h"
 
 // This file deals with exposing C++ to Python.
@@ -23,6 +24,7 @@ using connect4_gs::Connect4GS;
 using onitama_gs::OnitamaGS;
 using opentafl_gs::OpenTaflGS;
 using photosynthesis_gs::PhotosynthesisGS;
+using tak_gs::TakGS;
 using tawlbwrdd_gs::TawlbwrddGS;
 
 // NOLINTNEXTLINE
@@ -372,6 +374,15 @@ PYBIND11_MODULE(alphazero, m) {
                   [] { return photosynthesis_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return PhotosynthesisGS<4>::CANONICAL_SHAPE; });
+
+  py::class_<TakGS, GameState>(m, "TakGS")
+      .def(py::init<>())
+      .def(py::init<int>())
+      .def(py::init<int, bool>())
+      .def(py::init<int, bool, float>())
+      .def("board_size", &TakGS::board_size)
+      .def_static("NUM_PLAYERS", [] { return tak_gs::NUM_PLAYERS; })
+      .def_static("NUM_SYMMETRIES", [] { return tak_gs::NUM_SYMMETRIES; });
 }
 
 }  // namespace alphazero

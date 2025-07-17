@@ -104,6 +104,21 @@ photosynthesis_gs_test = executable(
 )
 test('gtest tests', photosynthesis_gs_test)
 
+tak_gs = library(
+    'tak_gs',
+    'tak_gs.cc',
+    dependencies: [eigen_dep, absl_hash_dep, absl_container_dep],
+    cpp_args: lib_args,
+)
+
+tak_gs_test = executable(
+  'tak_gs_test',
+  'tak_gs_test.cc',
+  dependencies: [gtest_dep, eigen_dep, absl_hash_dep, absl_container_dep],
+  link_with: [tak_gs],
+)
+test('gtest tests', tak_gs_test)
+
 mcts = library(
     'mcts',
     'mcts.cc',
@@ -161,6 +176,6 @@ play_manager_bench = executable(
 py3_install.extension_module(
   'alphazero',
   sources: ['py_wrapper.cc'],
-  link_with: [connect4_gs, onitama_gs, brandubh_gs, opentafl_gs, tawlbwrdd_gs, play_manager, mcts],
+  link_with: [connect4_gs, onitama_gs, brandubh_gs, opentafl_gs, tawlbwrdd_gs, tak_gs, play_manager, mcts],
   dependencies : [pybind11_dep, py3_dep, eigen_dep, absl_container_dep, absl_hash_dep],
 )

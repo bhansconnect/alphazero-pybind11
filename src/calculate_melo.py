@@ -7,25 +7,25 @@ import math
 import matplotlib.pyplot as plt
 import os
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     np.set_printoptions(precision=3, suppress=True)
 
-    wr = np.genfromtxt(os.path.join('data','win_rate.csv'), delimiter=',')
+    wr = np.genfromtxt(os.path.join("data", "win_rate.csv"), delimiter=",")
 
     size = wr.shape[0]
     agents = set()
     matchups = set()
     for i in range(wr.shape[0]):
-        for j in range(i+1, wr.shape[0]):
+        for j in range(i + 1, wr.shape[0]):
             if not math.isnan(wr[i, j]):
                 agents.add(i)
                 agents.add(j)
                 matchups.add((i, j))
 
-    alpha = math.log(10)/400
+    alpha = math.log(10) / 400
 
     def sig(x):
-        return 1.0 / (1.0 + math.exp(-alpha*x))
+        return 1.0 / (1.0 + math.exp(-alpha * x))
 
     def melo2_update(K, i, j, p_ij, r, c):
         p_hat_ij = sig(r[i] - r[j] + c[i, 0] * c[j, 1] - c[j, 0] * c[i, 1])
@@ -34,7 +34,7 @@ if __name__ == '__main__':
         # r has higher learning rate than c
         c_update = [
             [+delta * c[j, 1], -delta * c[j, 0]],
-            [-delta * c[i, 1], +delta * c[i, 0]]
+            [-delta * c[i, 1], +delta * c[i, 0]],
         ]
         return r_update, c_update
 
@@ -47,9 +47,8 @@ if __name__ == '__main__':
                 print(flush=True)
             change_elo = np.zeros_like(melo)
             change_c = np.zeros_like(c)
-            for (i, j) in matchups:
-                melo_update, c_update = melo2_update(
-                    1, i, j, wr[i, j], melo, c)
+            for i, j in matchups:
+                melo_update, c_update = melo2_update(1, i, j, wr[i, j], melo, c)
                 melo[i] += melo_update[0]
                 melo[j] += melo_update[1]
                 c[i] += c_update[0]
@@ -61,8 +60,9 @@ if __name__ == '__main__':
             # Weight decay of c. This makes the algorithm converge to elo if their are no cycles
             c *= 0.995
             if it % 100 == 0:
-                pbar.set_postfix(elo_cost=np.average(change_elo),
-                                 c_cost=np.average(change_c))
+                pbar.set_postfix(
+                    elo_cost=np.average(change_elo), c_cost=np.average(change_c)
+                )
 
     melo -= melo[0]
     np.savetxt(os.path.join("data", "melo.csv"), melo, delimiter=",")
@@ -76,8 +76,9 @@ if __name__ == '__main__':
     print(melo)
 
     fig, ax1 = plt.subplots()
-    ax1.plot(sorted(agents)[:len(agents)],
-             melo[:len(agents)], '-o', color='tab:orange')
-    ax1.set_xlabel('iteration')
-    ax1.set_ylabel('elo rating')
+    ax1.plot(
+        sorted(agents)[: len(agents)], melo[: len(agents)], "-o", color="tab:orange"
+    )
+    ax1.set_xlabel("iteration")
+    ax1.set_ylabel("elo rating")
     plt.show()

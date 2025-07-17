@@ -29,8 +29,7 @@ def calc_temp(turn):
 
 
 def eval_position(gs, agent):
-    mcts = alphazero.MCTS(CPUCT, gs.num_players(),
-                          gs.num_moves(), 0, 1.4, 0.25)
+    mcts = alphazero.MCTS(CPUCT, gs.num_players(), gs.num_moves(), 0, 1.4, 0.25)
     global bf
     global bfc
     bf += np.sum(gs.valid_moves())
@@ -45,41 +44,39 @@ def eval_position(gs, agent):
         pi = pi.cpu().numpy()
         mcts.process_result(gs, v, pi, False)
         sims += 1
-    print(f'\tRan {sims} simulations in {round(time.time()-start, 3)} seconds')
+    print(f"\tRan {sims} simulations in {round(time.time() - start, 3)} seconds")
     # print('Press enter for ai analysis')
     # input()
     v, pi = agent.predict(torch.from_numpy(gs.canonicalized()))
     v = v.cpu().numpy()
     pi = pi.cpu().numpy()
-    print(f'\tRaw Score: {v}')
-    thing = {x: round(100*pi[x], 1) for x in reversed(np.argsort(pi)[-10:])}
-    print(f'\tRaw Top Probs: {thing}')
-    print(f'\tRaw Best: {np.argmax(pi)}')
-    print(f'\tRaw Rand: {np.random.choice(pi.shape[0], p=pi)}')
+    print(f"\tRaw Score: {v}")
+    thing = {x: round(100 * pi[x], 1) for x in reversed(np.argsort(pi)[-10:])}
+    print(f"\tRaw Top Probs: {thing}")
+    print(f"\tRaw Best: {np.argmax(pi)}")
+    print(f"\tRaw Rand: {np.random.choice(pi.shape[0], p=pi)}")
 
-    print(f'\tMCTS Current Player WLD: {mcts.root_value()}')
+    print(f"\tMCTS Current Player WLD: {mcts.root_value()}")
     counts = mcts.counts()
     thing = {x: counts[x] for x in reversed(np.argsort(counts)[-10:])}
-    print(f'\tMCTS Top Counts: {thing}')
+    print(f"\tMCTS Top Counts: {thing}")
     probs = mcts.probs(calc_temp(gs.current_turn()))
-    thing = {x: round(100*probs[x], 1)
-             for x in reversed(np.argsort(probs)[-10:])}
-    print(f'\tMCTS Top Probs: {thing}')
-    print(f'\tMCTS Best: {np.argmax(probs)}')
+    thing = {x: round(100 * probs[x], 1) for x in reversed(np.argsort(probs)[-10:])}
+    print(f"\tMCTS Top Probs: {thing}")
+    print(f"\tMCTS Best: {np.argmax(probs)}")
     rand = np.random.choice(probs.shape[0], p=probs)
-    print(f'\tMCTS Rand: {rand}')
+    print(f"\tMCTS Rand: {rand}")
     return rand
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import neural_net
 
     np.set_printoptions(precision=3, suppress=True)
-    nn_folder = os.path.join('data','checkpoint')
-    nn_file = os.path.basename(
-        sorted(glob.glob(os.path.join(nn_folder, '*.pt')))[-1])
+    nn_folder = os.path.join("data", "checkpoint")
+    nn_file = os.path.basename(sorted(glob.glob(os.path.join(nn_folder, "*.pt")))[-1])
 
-    print(f'Using network: {nn_file}')
+    print(f"Using network: {nn_file}")
     nn = neural_net.NNWrapper.load_checkpoint(Game, nn_folder, nn_file)
     gs = Game()
     pc = 0
@@ -98,16 +95,16 @@ if __name__ == '__main__':
             valid = False
             while not valid:
                 try:
-                    print(f'Enter {stuff}: ', end='')
+                    print(f"Enter {stuff}: ", end="")
                     selection = int(input())
                     if -1 <= selection <= max_stuff:
                         return selection
                     else:
-                        raise Exception('Sad')
+                        raise Exception("Sad")
                 except KeyboardInterrupt:
                     exit()
                 except ValueError:
-                    print('You suck at typing numbers. Get Gud!')
+                    print("You suck at typing numbers. Get Gud!")
 
         HEIGHT = Game.CANONICAL_SHAPE()[1]
         WIDTH = Game.CANONICAL_SHAPE()[2]
@@ -115,14 +112,25 @@ if __name__ == '__main__':
         def print_ref_board():
             for h in range(7):
                 for w in range(7):
-                    if not ((h == 0 and w == 0) or (h == 1 and w == 0) or (h == 0 and w == 1) or
-                            (h == 1 and w == 1) or (h == 2 and w == 0) or (h == 0 and w == 2) or
-                            (h == 6 and w == 6) or (h == 5 and w == 6) or (h == 6 and w == 5) or
-                            (h == 5 and w == 5) or (h == 4 and w == 6) or (h == 6 and w == 4)):
-                        print(f'{w+h*7:2d}', end=' ')
+                    if not (
+                        (h == 0 and w == 0)
+                        or (h == 1 and w == 0)
+                        or (h == 0 and w == 1)
+                        or (h == 1 and w == 1)
+                        or (h == 2 and w == 0)
+                        or (h == 0 and w == 2)
+                        or (h == 6 and w == 6)
+                        or (h == 5 and w == 6)
+                        or (h == 6 and w == 5)
+                        or (h == 5 and w == 5)
+                        or (h == 4 and w == 6)
+                        or (h == 6 and w == 4)
+                    ):
+                        print(f"{w + h * 7:2d}", end=" ")
                     else:
-                        print('  ', end=' ')
+                        print("  ", end=" ")
                 print()
+
         valid = False
         move = 0
 
@@ -338,7 +346,7 @@ if __name__ == '__main__':
 
     print(gs)
     print(gs.scores())
-    print('Passes:', pc)
-    print('BranchFactor:', bf/bfc)
+    print("Passes:", pc)
+    print("BranchFactor:", bf / bfc)
     print(bf)
     print(bfc)

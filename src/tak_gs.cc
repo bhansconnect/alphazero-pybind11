@@ -7,7 +7,7 @@
 
 namespace alphazero::tak_gs {
 
-std::unordered_map<std::pair<int, int>, std::vector<std::vector<int>>, TakGS::PairHash> TakGS::drop_patterns_cache_;
+thread_local std::unordered_map<std::pair<int, int>, std::vector<std::vector<int>>, TakGS::PairHash> TakGS::drop_patterns_cache_;
 
 TakGS::TakGS(int size, bool opening_swap, float komi) 
     : size_(size), 

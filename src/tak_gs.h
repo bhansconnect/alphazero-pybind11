@@ -205,7 +205,7 @@ class DLLEXPORT TakGS : public GameState {
     }
   };
   
-  static std::unordered_map<std::pair<int, int>, std::vector<std::vector<int>>, PairHash> drop_patterns_cache_;
+  static thread_local std::unordered_map<std::pair<int, int>, std::vector<std::vector<int>>, PairHash> drop_patterns_cache_;
   
   // Cached road connectivity for performance optimization
   mutable std::vector<std::vector<bool>> road_connectivity_cache_;

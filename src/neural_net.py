@@ -3,7 +3,6 @@ import os
 import torch
 from torch import optim, nn
 from torch.autograd import profiler
-from torch.optim.swa_utils import AveragedModel
 from tqdm import tqdm
 import numpy as np
 from load_lib import load_alphazero

@@ -1,4 +1,3 @@
-import glob
 import os
 from multiprocessing.pool import ThreadPool
 import threading

@@ -3,7 +3,6 @@
 
 from load_lib import load_alphazero
 import argparse
-import game_runner
 import neural_net
 import time
 import glob

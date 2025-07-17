@@ -959,9 +959,9 @@ TEST_F(TakGSTest, TPSParsingAfterFirstMove) {
 
 TEST_F(TakGSTest, TPSWithWalls) {
   TakGS<5> game{};
-  game.play_move(0);   // Opening swap: player 1 flat at (0,0)
-  game.play_move(3);   // Player 0 flat at (0,1)
-  game.play_move(7);   // Player 1 wall at (0,2)
+  game.play_move(game.ptn_to_move_index("a1"));   // Opening swap: player 1 flat at a1
+  game.play_move(game.ptn_to_move_index("b1"));   // Player 0 flat at b1
+  game.play_move(game.ptn_to_move_index("Sc1"));  // Player 1 wall at c1
   
   std::string tps = game.to_tps();
   EXPECT_EQ(tps, "x5/x5/x5/x5/2,1,2S,x2 1 4");  // Player 1 flat at (0,0), player 0 flat at (0,1), player 1 wall at (0,2)
@@ -982,9 +982,9 @@ TEST_F(TakGSTest, TPSParsingWithWalls) {
 
 TEST_F(TakGSTest, TPSWithCapstones) {
   TakGS<5> game{};
-  game.play_move(0);   // Opening swap: player 1 flat at (0,0)
-  game.play_move(3);   // Player 0 flat at (0,1)
-  game.play_move(8);   // Player 1 capstone at (0,2)
+  game.play_move(game.ptn_to_move_index("a1"));   // Opening swap: player 1 flat at a1
+  game.play_move(game.ptn_to_move_index("b1"));   // Player 0 flat at b1
+  game.play_move(game.ptn_to_move_index("Cc1"));  // Player 1 capstone at c1
   
   std::string tps = game.to_tps();
   EXPECT_EQ(tps, "x5/x5/x5/x5/2,1,2C,x2 1 4");  // Player 1 flat at (0,0), player 0 flat at (0,1), player 1 capstone at (0,2)
@@ -1005,11 +1005,11 @@ TEST_F(TakGSTest, TPSParsingWithCapstones) {
 
 TEST_F(TakGSTest, TPSComplexStack) {
   TakGS<5> game{};
-  game.play_move(0);   // Opening swap: player 1 flat at (0,0)
-  game.play_move(3);   // Player 0 flat at (0,1)
-  game.play_move(6);   // Player 1 flat at (0,2)
-  game.play_move(15);  // Player 0 flat at (1,0)
-  game.play_move(18);  // Player 1 flat at (1,1)
+  game.play_move(game.ptn_to_move_index("a1"));   // Opening swap: player 1 flat at a1
+  game.play_move(game.ptn_to_move_index("b1"));   // Player 0 flat at b1
+  game.play_move(game.ptn_to_move_index("c1"));   // Player 1 flat at c1
+  game.play_move(game.ptn_to_move_index("a2"));   // Player 0 flat at a2
+  game.play_move(game.ptn_to_move_index("b2"));   // Player 1 flat at b2
   
   std::string tps = game.to_tps();
   EXPECT_EQ(tps, "x5/x5/x5/1,2,x3/2,1,2,x2 1 6");  // Row 3: player 0 at (1,0), player 1 at (1,1); Row 4: player 1 at (0,0), player 0 at (0,1), player 1 at (0,2)
@@ -1155,6 +1155,140 @@ TEST_F(TakGSTest, TPSPrintingInDump) {
   // Check that it contains the expected TPS
   std::string expected_tps = game.to_tps();
   EXPECT_TRUE(dump.find(expected_tps) != std::string::npos);
+}
+
+// PTN (Portable Tak Notation) Tests
+TEST_F(TakGSTest, PTNPlacementMoves) {
+  TakGS<5> game{};
+  
+  // Test basic placement moves
+  EXPECT_EQ(game.ptn_to_move_index("a1"), 0);   // Flat at (0,0)
+  EXPECT_EQ(game.ptn_to_move_index("Sa1"), 1);  // Wall at (0,0)
+  EXPECT_EQ(game.ptn_to_move_index("Ca1"), 2);  // Cap at (0,0)
+  
+  EXPECT_EQ(game.ptn_to_move_index("b1"), 3);   // Flat at (0,1)
+  EXPECT_EQ(game.ptn_to_move_index("Sb1"), 4);  // Wall at (0,1)
+  EXPECT_EQ(game.ptn_to_move_index("Cb1"), 5);  // Cap at (0,1)
+  
+  EXPECT_EQ(game.ptn_to_move_index("a2"), 15);  // Flat at (1,0)
+  EXPECT_EQ(game.ptn_to_move_index("Sa2"), 16); // Wall at (1,0)
+  EXPECT_EQ(game.ptn_to_move_index("Ca2"), 17); // Cap at (1,0)
+  
+  EXPECT_EQ(game.ptn_to_move_index("e5"), 72);  // Flat at (4,4)
+  EXPECT_EQ(game.ptn_to_move_index("Se5"), 73); // Wall at (4,4)
+  EXPECT_EQ(game.ptn_to_move_index("Ce5"), 74); // Cap at (4,4)
+}
+
+TEST_F(TakGSTest, PTNMovementMoves) {
+  TakGS<5> game{};
+  
+  // Set up a position for movement testing
+  game.play_move(game.ptn_to_move_index("a1"));  // Player 1 flat at a1
+  game.play_move(game.ptn_to_move_index("b1"));  // Player 0 flat at b1
+  
+  // Test basic movement - single stone
+  uint32_t move_right = game.ptn_to_move_index("a1>");
+  uint32_t move_left = game.ptn_to_move_index("b1<");
+  uint32_t move_up = game.ptn_to_move_index("a2+");
+  uint32_t move_down = game.ptn_to_move_index("a2-");
+  
+  // These should be valid movement moves (indices >= 75 for 5x5 board)
+  EXPECT_GE(move_right, 75);
+  EXPECT_GE(move_left, 75);
+  EXPECT_GE(move_up, 75);
+  EXPECT_GE(move_down, 75);
+}
+
+TEST_F(TakGSTest, PTNMovementWithDrops) {
+  TakGS<5> game{};
+  
+  // Set up a position with stacks for testing
+  game.play_move(game.ptn_to_move_index("a1"));  // Player 1 flat at a1
+  game.play_move(game.ptn_to_move_index("b1"));  // Player 0 flat at b1
+  game.play_move(game.ptn_to_move_index("a2"));  // Player 1 flat at a2
+  game.play_move(game.ptn_to_move_index("b2"));  // Player 0 flat at b2
+  
+  // Test movement with carry count and drops
+  uint32_t move_2_stones = game.ptn_to_move_index("2a1>");
+  uint32_t move_with_drops = game.ptn_to_move_index("2a1>11");
+  
+  // These should be valid movement moves
+  EXPECT_GE(move_2_stones, 75);
+  EXPECT_GE(move_with_drops, 75);
+}
+
+TEST_F(TakGSTest, PTNAnnotationRemoval) {
+  TakGS<5> game{};
+  
+  // Test that annotations are properly removed
+  EXPECT_EQ(game.ptn_to_move_index("a1"), game.ptn_to_move_index("a1'"));
+  EXPECT_EQ(game.ptn_to_move_index("a1"), game.ptn_to_move_index("a1!"));
+  EXPECT_EQ(game.ptn_to_move_index("a1"), game.ptn_to_move_index("a1?"));
+  EXPECT_EQ(game.ptn_to_move_index("a1"), game.ptn_to_move_index("a1*"));
+  EXPECT_EQ(game.ptn_to_move_index("a1"), game.ptn_to_move_index("a1''"));
+  
+  // Test with wall and cap moves
+  EXPECT_EQ(game.ptn_to_move_index("Sa1"), game.ptn_to_move_index("Sa1!"));
+  EXPECT_EQ(game.ptn_to_move_index("Ca1"), game.ptn_to_move_index("Ca1?"));
+}
+
+TEST_F(TakGSTest, PTNErrorHandling) {
+  TakGS<5> game{};
+  
+  // Test invalid square notations
+  EXPECT_THROW(game.ptn_to_move_index(""), std::invalid_argument);
+  EXPECT_THROW(game.ptn_to_move_index("z1"), std::invalid_argument);  // Column out of bounds
+  EXPECT_THROW(game.ptn_to_move_index("a0"), std::invalid_argument);  // Row out of bounds
+  EXPECT_THROW(game.ptn_to_move_index("a6"), std::invalid_argument);  // Row out of bounds
+  EXPECT_THROW(game.ptn_to_move_index("f1"), std::invalid_argument);  // Column out of bounds
+  
+  // Test invalid piece types
+  EXPECT_THROW(game.ptn_to_move_index("Xa1"), std::invalid_argument);
+  
+  // Test invalid movement directions
+  EXPECT_THROW(game.ptn_to_move_index("a1@"), std::invalid_argument);
+  
+  // Test invalid carry counts
+  EXPECT_THROW(game.ptn_to_move_index("0a1>"), std::invalid_argument);
+  
+  // Test mismatched carry and drop counts
+  EXPECT_THROW(game.ptn_to_move_index("2a1>1"), std::invalid_argument);  // 2 carry, 1 drop
+  EXPECT_THROW(game.ptn_to_move_index("1a1>12"), std::invalid_argument); // 1 carry, 3 drops
+}
+
+TEST_F(TakGSTest, PTNAlgebraicParsing) {
+  TakGS<5> game{};
+  
+  // Test algebraic notation parsing
+  EXPECT_EQ(game.parse_ptn_algebraic("a1"), std::make_pair(0, 0));
+  EXPECT_EQ(game.parse_ptn_algebraic("b1"), std::make_pair(0, 1));
+  EXPECT_EQ(game.parse_ptn_algebraic("a2"), std::make_pair(1, 0));
+  EXPECT_EQ(game.parse_ptn_algebraic("e5"), std::make_pair(4, 4));
+  
+  // Test double-digit rows (but within bounds for 5x5)
+  EXPECT_EQ(game.parse_ptn_algebraic("a5"), std::make_pair(4, 0));
+  EXPECT_EQ(game.parse_ptn_algebraic("c4"), std::make_pair(3, 2));
+  
+  // Test error cases
+  EXPECT_THROW(game.parse_ptn_algebraic(""), std::invalid_argument);
+  EXPECT_THROW(game.parse_ptn_algebraic("1"), std::invalid_argument);
+  EXPECT_THROW(game.parse_ptn_algebraic("aa"), std::invalid_argument);
+}
+
+TEST_F(TakGSTest, PTNBoardSizeCompatibility) {
+  // Test that PTN works for different board sizes
+  TakGS<4> game4{};
+  TakGS<6> game6{};
+  
+  // Test 4x4 board
+  EXPECT_EQ(game4.ptn_to_move_index("a1"), 0);
+  EXPECT_EQ(game4.ptn_to_move_index("d4"), 45);  // (3,3) * 3 = 45
+  EXPECT_THROW(game4.ptn_to_move_index("e1"), std::invalid_argument);  // Column out of bounds
+  
+  // Test 6x6 board
+  EXPECT_EQ(game6.ptn_to_move_index("a1"), 0);
+  EXPECT_EQ(game6.ptn_to_move_index("f6"), 105); // (5,5) * 3 = 105
+  EXPECT_THROW(game6.ptn_to_move_index("g1"), std::invalid_argument);  // Column out of bounds
 }
 
 }  // namespace alphazero::tak_gs

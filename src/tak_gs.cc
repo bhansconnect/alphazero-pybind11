@@ -901,6 +901,142 @@ void TakGS<SIZE>::parse_tps_string(const std::string& tps_string) {
 }
 
 template<int SIZE>
+std::pair<int, int> TakGS<SIZE>::parse_ptn_algebraic(const std::string& square) const {
+  if (square.length() < 2) {
+    throw std::invalid_argument("Invalid square notation: " + square);
+  }
+  
+  char col_char = square[0];
+  if (col_char < 'a' || col_char > 'z') {
+    throw std::invalid_argument("Invalid column in square notation: " + square);
+  }
+  
+  int col = col_char - 'a';
+  if (col >= SIZE) {
+    throw std::invalid_argument("Column out of bounds for " + std::to_string(SIZE) + "x" + std::to_string(SIZE) + " board: " + square);
+  }
+  
+  std::string row_str = square.substr(1);
+  int row;
+  try {
+    row = std::stoi(row_str) - 1;  // Convert to 0-based
+  } catch (const std::exception&) {
+    throw std::invalid_argument("Invalid row in square notation: " + square);
+  }
+  
+  if (row < 0 || row >= SIZE) {
+    throw std::invalid_argument("Row out of bounds for " + std::to_string(SIZE) + "x" + std::to_string(SIZE) + " board: " + square);
+  }
+  
+  return {row, col};
+}
+
+template<int SIZE>
+uint32_t TakGS<SIZE>::ptn_to_move_index(const std::string& ptn_move) const {
+  if (ptn_move.empty()) {
+    throw std::invalid_argument("Empty PTN move");
+  }
+  
+  // Remove common annotations
+  std::string clean_move = ptn_move;
+  // Remove trailing annotations
+  while (!clean_move.empty() && (clean_move.back() == '\'' || clean_move.back() == '!' || 
+                                 clean_move.back() == '?' || clean_move.back() == '*')) {
+    clean_move.pop_back();
+  }
+  
+  if (clean_move.empty()) {
+    throw std::invalid_argument("Invalid PTN move: " + ptn_move);
+  }
+  
+  // Check for placement moves: [CS]?[a-z][1-9]+
+  std::regex placement_regex(R"(^([CS]?)([a-z][1-9]\d*)$)");
+  std::smatch placement_match;
+  
+  if (std::regex_match(clean_move, placement_match, placement_regex)) {
+    std::string piece_prefix = placement_match[1].str();
+    std::string square_str = placement_match[2].str();
+    
+    auto [row, col] = parse_ptn_algebraic(square_str);
+    int board_idx = square_to_index(row, col);
+    
+    PieceType piece_type = PieceType::FLAT;
+    if (piece_prefix == "S") {
+      piece_type = PieceType::WALL;
+    } else if (piece_prefix == "C") {
+      piece_type = PieceType::CAP;
+    }
+    
+    return encode_placement(board_idx, piece_type);
+  }
+  
+  // Check for movement moves: (\\d*)([a-z][1-9]+)([<>+-])(\\d*)
+  std::regex movement_regex(R"(^([1-9]\d*)?([a-z][1-9]\d*)([<>+-])(\d*)$)");
+  std::smatch movement_match;
+  
+  if (std::regex_match(clean_move, movement_match, movement_regex)) {
+    std::string count_str = movement_match[1].str();
+    std::string from_square = movement_match[2].str();
+    std::string direction = movement_match[3].str();
+    std::string drops_str = movement_match[4].str();
+    
+    int carry_count = count_str.empty() ? 1 : std::stoi(count_str);
+    auto [from_row, from_col] = parse_ptn_algebraic(from_square);
+    
+    // Parse direction
+    int dr = 0, dc = 0;
+    if (direction == "<") {
+      dr = 0; dc = -1;  // West
+    } else if (direction == ">") {
+      dr = 0; dc = 1;   // East
+    } else if (direction == "+") {
+      dr = -1; dc = 0;  // North
+    } else if (direction == "-") {
+      dr = 1; dc = 0;   // South
+    } else {
+      throw std::invalid_argument("Invalid direction: " + direction);
+    }
+    
+    // Parse drop pattern
+    std::vector<int> drops;
+    if (drops_str.empty()) {
+      drops.push_back(carry_count);  // Default: drop all stones
+    } else {
+      for (char c : drops_str) {
+        if (c >= '1' && c <= '9') {
+          drops.push_back(c - '0');
+        } else {
+          throw std::invalid_argument("Invalid drop pattern: " + drops_str);
+        }
+      }
+    }
+    
+    // Validate carry count matches drop total
+    int total_drops = std::accumulate(drops.begin(), drops.end(), 0);
+    if (total_drops != carry_count) {
+      throw std::invalid_argument("Carry count (" + std::to_string(carry_count) + 
+                                 ") doesn't match drop total (" + std::to_string(total_drops) + ")");
+    }
+    
+    // Calculate destination
+    int distance = static_cast<int>(drops.size());
+    int to_row = from_row + dr * distance;
+    int to_col = from_col + dc * distance;
+    
+    if (!is_valid_square(to_row, to_col)) {
+      throw std::invalid_argument("Movement destination out of bounds");
+    }
+    
+    int from_idx = square_to_index(from_row, from_col);
+    int to_idx = square_to_index(to_row, to_col);
+    
+    return encode_movement(from_idx, to_idx, drops);
+  }
+  
+  throw std::invalid_argument("Invalid PTN move format: " + ptn_move);
+}
+
+template<int SIZE>
 thread_local std::unordered_map<std::pair<int, int>, std::vector<std::vector<int>>, typename TakGS<SIZE>::PairHash> TakGS<SIZE>::drop_patterns_cache_;
 
 // Explicit template instantiations

@@ -12,7 +12,17 @@ from load_lib import load_alphazero
 torch.backends.cudnn.benchmark = True
 
 NNArgs = namedtuple('NNArgs', ['num_channels', 'depth', 'kernel_size', 'lr_milestone', 'dense_net',
-                               'lr', 'cv', 'cuda'], defaults=(40, False, 0.01, 1.5, torch.cuda.is_available()))
+                               'lr', 'cv'], defaults=(40, False, 0.01, 1.5))
+
+
+def get_device():
+    """Get the best available device for computation (CUDA > MPS > CPU)"""
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        return torch.device('mps')
+    else:
+        return torch.device('cpu')
 
 
 def conv(in_channels, out_channels, stride=1, kernel_size=3):
@@ -177,10 +187,9 @@ class NNWrapper:
             self.optimizer, lr_lambda=lr_lambda)
         # self.scheduler = optim.lr_scheduler.MultiStepLR(
         #     self.optimizer, milestones=args.lr_milestones, gamma=0.1)
-        self.cuda = args.cuda
+        self.device = get_device()
         self.cv = args.cv
-        if self.cuda:
-            self.nnet.cuda()
+        self.nnet.to(self.device)
 
     def losses(self, dataset):
         self.nnet.eval()
@@ -188,10 +197,9 @@ class NNWrapper:
         l_pi = 0
         for batch in tqdm(dataset, desc='Calculating Sample Loss', leave=False):
             canonical, target_vs, target_pis = batch
-            if self.cuda:
-                canonical = canonical.contiguous().cuda()
-                target_vs = target_vs.contiguous().cuda()
-                target_pis = target_pis.contiguous().cuda()
+            canonical = canonical.contiguous().to(self.device, non_blocking=True)
+            target_vs = target_vs.contiguous().to(self.device, non_blocking=True)
+            target_pis = target_pis.contiguous().to(self.device, non_blocking=True)
 
             out_v, out_pi = self.nnet(canonical)
             l_v += self.loss_v(target_vs, out_v).item()
@@ -204,10 +212,9 @@ class NNWrapper:
         i = 0
         for batch in tqdm(dataset, desc='Calculating Sample Loss', leave=False):
             canonical, target_vs, target_pis = batch
-            if self.cuda:
-                canonical = canonical.contiguous().cuda()
-                target_vs = target_vs.contiguous().cuda()
-                target_pis = target_pis.contiguous().cuda()
+            canonical = canonical.contiguous().to(self.device, non_blocking=True)
+            target_vs = target_vs.contiguous().to(self.device, non_blocking=True)
+            target_pis = target_pis.contiguous().to(self.device, non_blocking=True)
 
             out_v, out_pi = self.nnet(canonical)
             l_v = self.sample_loss_v(target_vs, out_v)
@@ -235,10 +242,9 @@ class NNWrapper:
                 if current_step == steps_to_train:
                     break
                 canonical, target_vs, target_pis = batch
-                if self.cuda:
-                    canonical = canonical.contiguous().cuda()
-                    target_vs = target_vs.contiguous().cuda()
-                    target_pis = target_pis.contiguous().cuda()
+                canonical = canonical.contiguous().to(self.device, non_blocking=True)
+                target_vs = target_vs.contiguous().to(self.device, non_blocking=True)
+                target_pis = target_pis.contiguous().to(self.device, non_blocking=True)
 
                 # reset grad
                 self.optimizer.zero_grad()
@@ -289,8 +295,7 @@ class NNWrapper:
         # start = torch.cuda.Event(enable_timing=True)
         # end = torch.cuda.Event(enable_timing=True)
         # start.record()
-        if self.cuda:
-            batch = batch.contiguous().cuda()
+        batch = batch.contiguous().to(self.device, non_blocking=True)
         self.nnet.eval()
         with torch.no_grad():
             v, pi = self.nnet(batch)
@@ -342,7 +347,7 @@ class NNWrapper:
         torch.serialization.add_safe_globals([Game])
         
         # Load with map_location for device flexibility
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = get_device()
         checkpoint = torch.load(filepath, map_location=device, weights_only=True)
         
         assert checkpoint['game'] == Game, f'Mismatching game type when loading model: got: {checkpoint["game"].__name__} want: {Game.__name__}'
@@ -372,8 +377,8 @@ def bench_network():
     cs = Game.CANONICAL_SHAPE()
     dummy_input = torch.randn(
         batch_size, cs[0], cs[1], cs[2], dtype=torch.float)
-    if nnargs.cuda:
-        dummy_input = dummy_input.contiguous().cuda()
+    device = get_device()
+    dummy_input = dummy_input.contiguous().to(device, non_blocking=True)
 
     starter, ender = torch.cuda.Event(
         enable_timing=True), torch.cuda.Event(enable_timing=True)

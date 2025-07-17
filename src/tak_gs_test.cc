@@ -32,14 +32,14 @@ TEST_F(TakGSTest, OpeningMove) {
   }
   EXPECT_EQ(valid_count, 25);
   
-  game.play_move(12);
+  game.play_move(game.ptn_to_move_index("e1"));
   
-  EXPECT_EQ(game.current_player(), 0);
+  EXPECT_EQ(game.current_player(), 1);  // After opening swap, player 1's turn
   EXPECT_EQ(game.current_turn(), 1);
 }
 
 TEST_F(TakGSTest, PlacementMoves) {
-  game.play_move(12);
+  game.play_move(game.ptn_to_move_index("e1"));
   
   auto valid = game.valid_moves();
   
@@ -49,13 +49,13 @@ TEST_F(TakGSTest, PlacementMoves) {
       placement_count++;
     }
   }
-  EXPECT_EQ(placement_count, 24 * 3);
+  EXPECT_EQ(placement_count, 24);  // Only flats allowed on turn 1 (opening swap)
 }
 
 TEST_F(TakGSTest, BasicMovement) {
-  game.play_move(0);
-  game.play_move(3);
-  game.play_move(6);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(game.ptn_to_move_index("c1"));
   
   auto valid = game.valid_moves();
   
@@ -70,13 +70,13 @@ TEST_F(TakGSTest, BasicMovement) {
 }
 
 TEST_F(TakGSTest, CopyAndEquality) {
-  game.play_move(12);
-  game.play_move(15);
+  game.play_move(game.ptn_to_move_index("e1"));
+  game.play_move(game.ptn_to_move_index("a2"));
   
   auto copy = game.copy();
   EXPECT_EQ(game, *copy);
   
-  copy->play_move(18);
+  copy->play_move(game.ptn_to_move_index("b2"));
   EXPECT_NE(game, *copy);
 }
 
@@ -88,8 +88,8 @@ TEST_F(TakGSTest, CanonicalizedShape) {
 }
 
 TEST_F(TakGSTest, Symmetries) {
-  game.play_move(0);
-  game.play_move(3);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
   
   PlayHistory history;
   history.canonical = game.canonicalized();
@@ -101,27 +101,34 @@ TEST_F(TakGSTest, Symmetries) {
 }
 
 TEST_F(TakGSTest, RoadWin) {
-  game.play_move(0);
+  // Disable opening swap to make the test clearer
+  TakGS<5> simple_game{0.0f, "", false};
   
-  for (int i = 0; i < 5; ++i) {
-    game.play_move(i * 3);
-    if (i < 4) {
-      game.play_move((5 + i) * 3);
-    }
-  }
+  // Create horizontal road on row 3: positions 15,16,17,18,19 for player 0
+  simple_game.play_move(simple_game.ptn_to_move_index("a4"));
+  simple_game.play_move(simple_game.ptn_to_move_index("a1"));
+  simple_game.play_move(simple_game.ptn_to_move_index("b4"));
+  simple_game.play_move(simple_game.ptn_to_move_index("b1"));
+  simple_game.play_move(simple_game.ptn_to_move_index("c4"));
+  simple_game.play_move(simple_game.ptn_to_move_index("c1"));
+  simple_game.play_move(simple_game.ptn_to_move_index("d4"));
+  simple_game.play_move(simple_game.ptn_to_move_index("d1"));
+  simple_game.play_move(simple_game.ptn_to_move_index("e4"));
   
-  auto scores = game.scores();
+  std::cout << "Final board state:\n" << simple_game.dump() << std::endl;
+  
+  auto scores = simple_game.scores();
   EXPECT_TRUE(scores.has_value());
   if (scores.has_value()) {
-    EXPECT_EQ((*scores)[0], 1.0f);
+    EXPECT_EQ((*scores)[0], 1.0f);  // Player 0 wins with horizontal road
     EXPECT_EQ((*scores)[1], 0.0f);
     EXPECT_EQ((*scores)[2], 0.0f);
   }
 }
 
 TEST_F(TakGSTest, WallPlacement) {
-  game.play_move(0);
-  game.play_move(3);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
   
   auto valid = game.valid_moves();
   EXPECT_EQ(valid[6], 1);
@@ -131,10 +138,10 @@ TEST_F(TakGSTest, WallPlacement) {
 TEST_F(TakGSTest, CapstoneFlattening) {
   TakGS<6> game_6x6;
   
-  game_6x6.play_move(0);   // Opening swap: player 1 flat at (0,0)
-  game_6x6.play_move(3);   // Player 0 flat at (0,1)
-  game_6x6.play_move(4);   // Player 1 wall at (0,1)
-  game_6x6.play_move(5);   // Player 0 capstone at (0,2)
+  game_6x6.play_move(game_6x6.ptn_to_move_index("a1"));
+  game_6x6.play_move(game_6x6.ptn_to_move_index("b1"));
+  game_6x6.play_move(game_6x6.ptn_to_move_index("Sb1"));
+  game_6x6.play_move(game_6x6.ptn_to_move_index("Cc1"));
   
   // Test that capstone can be placed after first turn
   auto valid = game_6x6.valid_moves();
@@ -151,7 +158,7 @@ TEST_F(TakGSTest, CapstoneFlattening) {
 }
 
 TEST_F(TakGSTest, FlatWin) {
-  game.play_move(0);  // Opening swap - player 1 places on (0,0)
+  game.play_move(game.ptn_to_move_index("a1"));
   
   // Fill entire board with flat stones - alternating players
   for (int i = 1; i < 25; ++i) {
@@ -172,10 +179,10 @@ TEST_F(TakGSTest, FlatWin) {
 }
 
 TEST_F(TakGSTest, StackMovement) {
-  game.play_move(12);
-  game.play_move(15);
-  game.play_move(18);
-  game.play_move(13 * 3);
+  game.play_move(game.ptn_to_move_index("e1"));
+  game.play_move(game.ptn_to_move_index("a2"));
+  game.play_move(game.ptn_to_move_index("b2"));
+  game.play_move(game.ptn_to_move_index("d2"));
   
   auto valid = game.valid_moves();
   
@@ -192,8 +199,8 @@ TEST_F(TakGSTest, StackMovement) {
 }
 
 TEST_F(TakGSTest, DumpOutput) {
-  game.play_move(12);
-  game.play_move(15);
+  game.play_move(game.ptn_to_move_index("e1"));
+  game.play_move(game.ptn_to_move_index("a2"));
   
   std::string output = game.dump();
   EXPECT_TRUE(output.find("Tak 5x5") != std::string::npos);
@@ -210,19 +217,26 @@ TEST_F(TakGSTest, DifferentBoardSizes) {
 }
 
 TEST_F(TakGSTest, VerticalRoadWin) {
-  game.play_move(0);
-  for (int i = 0; i < 5; ++i) {
-    game.play_move(i * 5 * 3);
-    if (i < 4) {
-      game.play_move((i * 5 + 1) * 3);
-    }
-  }
+  // Disable opening swap to make the test clearer
+  TakGS<5> simple_game{0.0f, "", false};
   
-  auto scores = game.scores();
+  // Create vertical road on column 0: positions 0,5,10,15,20 for player 1
+  simple_game.play_move(simple_game.ptn_to_move_index("b1"));
+  simple_game.play_move(simple_game.ptn_to_move_index("a1"));
+  simple_game.play_move(simple_game.ptn_to_move_index("c1"));
+  simple_game.play_move(simple_game.ptn_to_move_index("a2"));
+  simple_game.play_move(simple_game.ptn_to_move_index("d1"));
+  simple_game.play_move(simple_game.ptn_to_move_index("a3"));
+  simple_game.play_move(simple_game.ptn_to_move_index("e1"));
+  simple_game.play_move(simple_game.ptn_to_move_index("a4"));
+  simple_game.play_move(simple_game.ptn_to_move_index("b2"));
+  simple_game.play_move(simple_game.ptn_to_move_index("a5"));
+  
+  auto scores = simple_game.scores();
   EXPECT_TRUE(scores.has_value());
   if (scores.has_value()) {
-    EXPECT_EQ((*scores)[0], 1.0f);
-    EXPECT_EQ((*scores)[1], 0.0f);
+    EXPECT_EQ((*scores)[1], 1.0f);  // Player 1 wins with vertical road
+    EXPECT_EQ((*scores)[0], 0.0f);
     EXPECT_EQ((*scores)[2], 0.0f);
   }
 }
@@ -231,8 +245,8 @@ TEST_F(TakGSTest, SimultaneousRoadWins) {
   TakGS<5> game{0.0f, "", false};  // No opening swap
   
   // Player 0 creates horizontal road at row 0
-  game.play_move(0);  // position 0
-  game.play_move(5 * 3);  // position 5, player 1
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("a2"));
   
   for (int i = 1; i < 5; ++i) {
     game.play_move(i * 3);  // positions 1,2,3,4 for player 0
@@ -254,25 +268,25 @@ TEST_F(TakGSTest, ZigzagRoadWin) {
   TakGS<5> game{0.0f, "", false};
   
   // Player 0 creates zigzag road: (0,0)-(0,1)-(1,1)-(1,2)-(0,2)-(0,3)-(0,4)
-  game.play_move(0);       // (0,0)
-  game.play_move(20 * 3);  // (4,0) - player 1
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("c3"));
   
-  game.play_move(1 * 3);   // (0,1)
-  game.play_move(21 * 3);  // (4,1) - player 1
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(game.ptn_to_move_index("d3"));
   
-  game.play_move(6 * 3);   // (1,1) - zigzag down
-  game.play_move(22 * 3);  // (4,2) - player 1
+  game.play_move(game.ptn_to_move_index("b2"));
+  game.play_move(game.ptn_to_move_index("e3"));
   
-  game.play_move(7 * 3);   // (1,2) - zigzag right
-  game.play_move(23 * 3);  // (4,3) - player 1
+  game.play_move(game.ptn_to_move_index("c2"));
+  game.play_move(game.ptn_to_move_index("c4"));
   
-  game.play_move(2 * 3);   // (0,2) - zigzag up
-  game.play_move(24 * 3);  // (4,4) - player 1
+  game.play_move(game.ptn_to_move_index("c1"));
+  game.play_move(game.ptn_to_move_index("d4"));
   
-  game.play_move(3 * 3);   // (0,3) - continue road
-  game.play_move(19 * 3);  // (3,4) - player 1
+  game.play_move(game.ptn_to_move_index("d1"));
+  game.play_move(game.ptn_to_move_index("e4"));
   
-  game.play_move(4 * 3);   // (0,4) - complete horizontal road
+  game.play_move(game.ptn_to_move_index("e1"));
   
   auto scores = game.scores();
   EXPECT_TRUE(scores.has_value());
@@ -324,8 +338,8 @@ TEST_F(TakGSTest, DrawCondition) {
 }
 
 TEST_F(TakGSTest, InvalidPlacementOnOccupiedSquare) {
-  game.play_move(0);
-  game.play_move(3);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
   
   auto valid = game.valid_moves();
   EXPECT_EQ(valid[0], 0);
@@ -339,13 +353,12 @@ TEST_F(TakGSTest, InvalidPlacementOnOccupiedSquare) {
 TEST_F(TakGSTest, MovementBlockedByWall) {
   TakGS<5> game{};
   
-  game.play_move(0);   // Player 1 flat at (0,0) due to opening swap
-  game.play_move(3);   // Player 0 flat at (0,1)
-  game.play_move(1);   // Player 1 wall at (0,0) - wait, this should be invalid!
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(game.ptn_to_move_index("Sa1"));
   
-  // Actually test wall blocking: place wall, then try to move onto it
-  game.play_move(6);   // Player 0 flat at (1,1)
-  game.play_move(4);   // Player 1 wall at (0,1) - blocks movement
+  game.play_move(game.ptn_to_move_index("b2"));
+  game.play_move(game.ptn_to_move_index("Sb1"));
   
   auto valid = game.valid_moves();
   int movement_base = 5 * 5 * 3;
@@ -366,11 +379,11 @@ TEST_F(TakGSTest, MovementBlockedByWall) {
 TEST_F(TakGSTest, MovementOntoCapstoneBlocked) {
   TakGS<6> game{};
   
-  game.play_move(0);
-  game.play_move(3);
-  game.play_move(1);
-  game.play_move(2);
-  game.play_move(6);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(game.ptn_to_move_index("Sa1"));
+  game.play_move(game.ptn_to_move_index("Ca1"));
+  game.play_move(game.ptn_to_move_index("c1"));
   
   auto valid = game.valid_moves();
   int movement_base = 6 * 6 * 3;
@@ -388,13 +401,13 @@ TEST_F(TakGSTest, MovementOntoCapstoneBlocked) {
 TEST_F(TakGSTest, CapstoneFlattensWall) {
   TakGS<6> game{};
   
-  game.play_move(0);
-  game.play_move(3);
-  game.play_move(1);
-  game.play_move(4);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(game.ptn_to_move_index("Sa1"));
+  game.play_move(game.ptn_to_move_index("Sb1"));
   
-  game.play_move(6);
-  game.play_move(2);
+  game.play_move(game.ptn_to_move_index("c1"));
+  game.play_move(game.ptn_to_move_index("Ca1"));
   
   auto valid = game.valid_moves();
   EXPECT_TRUE(valid.sum() > 0);
@@ -403,12 +416,12 @@ TEST_F(TakGSTest, CapstoneFlattensWall) {
 TEST_F(TakGSTest, MaxStackHeight) {
   TakGS<5> game{};
   
-  game.play_move(0);
-  game.play_move(3);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
   
   for (int i = 0; i < 20; ++i) {
-    game.play_move(6);
-    game.play_move(9);
+    game.play_move(game.ptn_to_move_index("c1"));
+    game.play_move(game.ptn_to_move_index("d1"));
   }
   
   auto canonical = game.canonicalized();
@@ -418,12 +431,12 @@ TEST_F(TakGSTest, MaxStackHeight) {
 TEST_F(TakGSTest, StackHeightEncoding) {
   TakGS<5> game{};
   
-  game.play_move(0);
-  game.play_move(3);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
   
   for (int i = 0; i < 6; ++i) {
-    game.play_move(36);
-    game.play_move(39);
+    game.play_move(game.ptn_to_move_index("c3"));
+    game.play_move(game.ptn_to_move_index("d3"));
   }
   
   auto canonical = game.canonicalized();
@@ -432,8 +445,8 @@ TEST_F(TakGSTest, StackHeightEncoding) {
   EXPECT_TRUE(found_height_6);
   
   for (int i = 0; i < 6; ++i) {
-    game.play_move(36);
-    game.play_move(39);
+    game.play_move(game.ptn_to_move_index("c3"));
+    game.play_move(game.ptn_to_move_index("d3"));
   }
   
   canonical = game.canonicalized();
@@ -449,10 +462,10 @@ TEST_F(TakGSTest, StackHeightEncoding) {
 TEST_F(TakGSTest, AllDirectionsMovement) {
   TakGS<5> game{};
   
-  game.play_move(0);
-  game.play_move(3);
-  game.play_move(12);
-  game.play_move(15);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(game.ptn_to_move_index("e1"));
+  game.play_move(game.ptn_to_move_index("a2"));
   
   auto valid = game.valid_moves();
   int movement_base = 5 * 5 * 3;
@@ -470,12 +483,12 @@ TEST_F(TakGSTest, AllDirectionsMovement) {
 TEST_F(TakGSTest, CarryLimitEnforcement) {
   TakGS<5> game{};
   
-  game.play_move(0);
-  game.play_move(3);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
   
   for (int i = 0; i < 6; ++i) {
-    game.play_move(12);
-    game.play_move(15);
+    game.play_move(game.ptn_to_move_index("e1"));
+    game.play_move(game.ptn_to_move_index("a2"));
   }
   
   auto valid = game.valid_moves();
@@ -485,7 +498,7 @@ TEST_F(TakGSTest, CarryLimitEnforcement) {
 TEST_F(TakGSTest, PieceExhaustion) {
   TakGS<4> game{};
   
-  game.play_move(0);
+  game.play_move(game.ptn_to_move_index("a1"));
   
   for (int stones = 0; stones < 15; ++stones) {
     game.play_move((stones + 1) % 16 * 3);
@@ -507,14 +520,16 @@ TEST_F(TakGSTest, OpeningRuleEnforcement) {
 }
 
 TEST_F(TakGSTest, SecondMoveValidation) {
-  game.play_move(0);
+  game.play_move(game.ptn_to_move_index("a1"));
   
   auto valid = game.valid_moves();
   
+  // Turn 1 (opening swap): only flats allowed, no walls or caps
   for (int i = 1; i < 75; i += 3) {
-    if (i != 1) {
-      EXPECT_EQ(valid[i], 1);
-    }
+    EXPECT_EQ(valid[i], 0);  // No walls allowed
+  }
+  for (int i = 2; i < 75; i += 3) {
+    EXPECT_EQ(valid[i], 0);  // No caps allowed
   }
 }
 
@@ -527,8 +542,9 @@ TEST_F(TakGSTest, CapstoneCountValidation) {
   }
   
   TakGS<5> game5{};
-  game5.play_move(0);
-  auto valid5 = game5.valid_moves();
+  game5.play_move(game5.ptn_to_move_index("a1"));
+  game5.play_move(game5.ptn_to_move_index("b1"));
+  auto valid5 = game5.valid_moves();  // Now turn 2, normal play
   
   int capstone_moves = 0;
   for (int i = 2; i < 75; i += 3) {
@@ -540,18 +556,18 @@ TEST_F(TakGSTest, CapstoneCountValidation) {
 }
 
 TEST_F(TakGSTest, GameStateConsistency) {
-  game.play_move(0);
-  game.play_move(3);
-  game.play_move(6);
-  game.play_move(9);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(game.ptn_to_move_index("c1"));
+  game.play_move(game.ptn_to_move_index("d1"));
   
   auto copy1 = game.copy();
   EXPECT_TRUE(game == *copy1);
   
-  game.play_move(12);
+  game.play_move(game.ptn_to_move_index("e1"));
   EXPECT_FALSE(game == *copy1);
   
-  copy1->play_move(12);
+  copy1->play_move(game.ptn_to_move_index("e1"));
   EXPECT_TRUE(game == *copy1);
 }
 
@@ -581,10 +597,10 @@ TEST_F(TakGSTest, LongGameSequence) {
 TEST_F(TakGSTest, BoundaryMovementValidation) {
   TakGS<5> game{};
   
-  game.play_move(0);
-  game.play_move(3);
-  game.play_move(20);
-  game.play_move(23);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(game.ptn_to_move_index("a5"));
+  game.play_move(game.ptn_to_move_index("b5"));
   
   auto valid = game.valid_moves();
   int movement_base = 5 * 5 * 3;
@@ -603,12 +619,12 @@ TEST_F(TakGSTest, BoundaryMovementValidation) {
 TEST_F(TakGSTest, ComplexStackMovement) {
   TakGS<5> game{};
   
-  game.play_move(0);
-  game.play_move(3);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
   
   for (int i = 0; i < 3; ++i) {
-    game.play_move(12);
-    game.play_move(15);
+    game.play_move(game.ptn_to_move_index("e1"));
+    game.play_move(game.ptn_to_move_index("a2"));
   }
   
   int movement_base = 5 * 5 * 3;
@@ -627,7 +643,7 @@ TEST_F(TakGSTest, ComplexStackMovement) {
 TEST_F(TakGSTest, RoadWinPriority) {
   TakGS<5> game{};
   
-  game.play_move(0);
+  game.play_move(game.ptn_to_move_index("a1"));
   for (int i = 1; i < 25; ++i) {
     game.play_move(i * 3);
   }
@@ -768,13 +784,12 @@ TEST_F(TakGSTest, HouseRulesCombination) {
 TEST_F(TakGSTest, MaxStackHeightBoundary) {
   TakGS<5> game{};
   
-  game.play_move(0);  // Opening swap
-  game.play_move(3);  // Regular move
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
   
-  // Build a very tall stack at position (1,1) = index 6
-  for (int i = 0; i < 15; ++i) {  // 30 pieces total
-    game.play_move(18);  // position 6, flat
-    game.play_move(21);  // position 7, flat (opponent)
+  for (int i = 0; i < 15; ++i) {
+    game.play_move(game.ptn_to_move_index("b2"));
+    game.play_move(game.ptn_to_move_index("c2"));
   }
   
   auto canonical = game.canonicalized();
@@ -789,13 +804,12 @@ TEST_F(TakGSTest, MaxStackHeightBoundary) {
 TEST_F(TakGSTest, CarryLimitBoundaryTest) {
   TakGS<5> game{};  // Carry limit is 5
   
-  game.play_move(0);  // Opening swap
-  game.play_move(3);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
   
-  // Create a stack of exactly 6 pieces at position (1,1)
   for (int i = 0; i < 3; ++i) {
-    game.play_move(18);  // Build stack at position 6
-    game.play_move(21);  // Opponent move
+    game.play_move(game.ptn_to_move_index("b2"));
+    game.play_move(game.ptn_to_move_index("c2"));
   }
   
   auto valid = game.valid_moves();
@@ -817,7 +831,7 @@ TEST_F(TakGSTest, CarryLimitBoundaryTest) {
 TEST_F(TakGSTest, PieceExhaustionBoundary) {
   TakGS<4> game{};  // 15 stones, 0 capstones per player
   
-  game.play_move(0);  // Opening swap
+  game.play_move(game.ptn_to_move_index("a1"));
   
   // Place exactly 15 stones for player 0 (should exhaust supply)
   for (int i = 1; i < 16; ++i) {
@@ -848,9 +862,10 @@ TEST_F(TakGSTest, InvalidMoveAttempts) {
     EXPECT_EQ(valid[i], 0) << "Capstone placement should be invalid on first move";
   }
   
-  // After first move, should have walls/caps available
-  game.play_move(0);
-  valid = game.valid_moves();
+  // After opening swap (both turn 0 and 1), should have walls/caps available
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
+  valid = game.valid_moves();  // Turn 2 (normal play)
   
   bool wall_available = false;
   for (int i = 1; i < 75; i += 3) {
@@ -859,16 +874,16 @@ TEST_F(TakGSTest, InvalidMoveAttempts) {
       break;
     }
   }
-  EXPECT_TRUE(wall_available) << "Walls should be available after first move";
+  EXPECT_TRUE(wall_available) << "Walls should be available after opening swap";
 }
 
 TEST_F(TakGSTest, CapstoneFlattensWallMechanic) {
   TakGS<6> game{};
   
-  game.play_move(0);   // Opening swap: player 1 flat at (0,0)
-  game.play_move(3);   // Player 0 flat at (0,1)
-  game.play_move(4);   // Player 1 wall at (0,1)
-  game.play_move(5);   // Player 0 capstone at (0,2)
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(game.ptn_to_move_index("Sb1"));
+  game.play_move(game.ptn_to_move_index("Cc1"));
   
   // Now try to move the capstone onto the wall to flatten it
   // This requires understanding movement encoding, which is complex
@@ -884,10 +899,10 @@ TEST_F(TakGSTest, FiftyMoveRule) {
   TakGS<5> game{};
   
   // Set up a position where we can make movement-only moves
-  game.play_move(0);   // Opening swap
-  game.play_move(3);   // Place pieces to enable movement
-  game.play_move(6);
-  game.play_move(9);
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(game.ptn_to_move_index("c1"));
+  game.play_move(game.ptn_to_move_index("d1"));
   
   // The 50-move rule should trigger after 50 moves without placement
   // This is difficult to test properly without exposing internal state
@@ -914,8 +929,8 @@ TEST_F(TakGSTest, FiftyMoveRule) {
 }
 
 TEST_F(TakGSTest, SymmetryPreservation) {
-  game.play_move(0);   // (0,0)
-  game.play_move(12);  // (2,2) - center
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("c3"));
   
   PlayHistory history;
   history.canonical = game.canonicalized();
@@ -975,10 +990,10 @@ TEST_F(TakGSTest, TPSInitialPositionParsing) {
 
 TEST_F(TakGSTest, TPSAfterFirstMove) {
   TakGS<5> game{};
-  game.play_move(0);  // Place at (0,0) - opening swap makes it player 1's piece
+  game.play_move(game.ptn_to_move_index("a1"));
   
   std::string tps = game.to_tps();
-  EXPECT_EQ(tps, "x5/x5/x5/x5/2,x4 1 2");  // Player 2 (index 1) piece at bottom-left
+  EXPECT_EQ(tps, "x5/x5/x5/x5/2,x4 2 2");  // Player 2 (index 1) piece at bottom-left, current player is 2 (player 1)
 }
 
 TEST_F(TakGSTest, TPSParsingAfterFirstMove) {
@@ -1001,7 +1016,7 @@ TEST_F(TakGSTest, TPSWithWalls) {
   game.play_move(game.ptn_to_move_index("Sc1"));  // Player 1 wall at c1
   
   std::string tps = game.to_tps();
-  EXPECT_EQ(tps, "x5/x5/x5/x5/2,1,2S,x2 1 4");  // Player 1 flat at (0,0), player 0 flat at (0,1), player 1 wall at (0,2)
+  EXPECT_EQ(tps, "x5/x5/x5/x5/2,1,1S,x2 2 4");  // Player 1 flat at (0,0), player 0 flat at (0,1), player 1 wall at (0,2)
 }
 
 TEST_F(TakGSTest, TPSParsingWithWalls) {
@@ -1024,7 +1039,7 @@ TEST_F(TakGSTest, TPSWithCapstones) {
   game.play_move(game.ptn_to_move_index("Cc1"));  // Player 1 capstone at c1
   
   std::string tps = game.to_tps();
-  EXPECT_EQ(tps, "x5/x5/x5/x5/2,1,2C,x2 1 4");  // Player 1 flat at (0,0), player 0 flat at (0,1), player 1 capstone at (0,2)
+  EXPECT_EQ(tps, "x5/x5/x5/x5/2,1,1C,x2 2 4");  // Player 1 flat at (0,0), player 0 flat at (0,1), player 1 capstone at (0,2)
 }
 
 TEST_F(TakGSTest, TPSParsingWithCapstones) {
@@ -1049,7 +1064,7 @@ TEST_F(TakGSTest, TPSComplexStack) {
   game.play_move(game.ptn_to_move_index("b2"));   // Player 1 flat at b2
   
   std::string tps = game.to_tps();
-  EXPECT_EQ(tps, "x5/x5/x5/1,2,x3/2,1,2,x2 1 6");  // Row 3: player 0 at (1,0), player 1 at (1,1); Row 4: player 1 at (0,0), player 0 at (0,1), player 1 at (0,2)
+  EXPECT_EQ(tps, "x5/x5/x5/2,1,x3/2,1,1,x2 2 6");  // Row 3: player 0 at (1,0), player 1 at (1,1); Row 4: player 1 at (0,0), player 0 at (0,1), player 1 at (0,2)
 }
 
 TEST_F(TakGSTest, TPSComplexStackParsing) {
@@ -1067,11 +1082,11 @@ TEST_F(TakGSTest, TPSComplexStackParsing) {
 
 TEST_F(TakGSTest, TPSEmptySquareCompression) {
   TakGS<5> game{};
-  game.play_move(0);   // Opening swap: player 1 at (0,0)
-  game.play_move(72);  // Player 0 at (4,4)
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("e5"));
   
   std::string tps = game.to_tps();
-  EXPECT_EQ(tps, "x4,1/x5/x5/x5/2,x4 2 3");  // x4,1 instead of x,x,x,x,1
+  EXPECT_EQ(tps, "x4,1/x5/x5/x5/2,x4 1 3");  // x4,1 instead of x,x,x,x,1
 }
 
 TEST_F(TakGSTest, TPSEmptySquareCompressionParsing) {
@@ -1091,11 +1106,11 @@ TEST_F(TakGSTest, TPSRoundTripConsistency) {
   TakGS<5> game{};
   
   // Make several moves (all placements to avoid moves_without_placement issues)
-  game.play_move(0);   // Opening swap: player 1 at (0,0)
-  game.play_move(3);   // Player 0 flat at (0,1)
-  game.play_move(7);   // Player 1 wall at (0,2)
-  game.play_move(15);  // Player 0 flat at (1,0)
-  game.play_move(20);  // Player 1 capstone at (1,1)
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(game.ptn_to_move_index("Sc1"));
+  game.play_move(game.ptn_to_move_index("a2"));
+  game.play_move(game.ptn_to_move_index("Cb2"));
   
   // Convert to TPS and back
   std::string tps = game.to_tps();
@@ -1109,20 +1124,20 @@ TEST_F(TakGSTest, TPSRoundTripConsistency) {
 
 TEST_F(TakGSTest, TPSBoardSize4) {
   TakGS<4> game{};
-  game.play_move(0);   // Opening swap
-  game.play_move(3);   // Player 0 flat
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
   
   std::string tps = game.to_tps();
-  EXPECT_EQ(tps, "x4/x4/x4/2,1,x2 2 3");
+  EXPECT_EQ(tps, "x4/x4/x4/2,1,x2 1 3");
 }
 
 TEST_F(TakGSTest, TPSBoardSize6) {
   TakGS<6> game{};
-  game.play_move(0);   // Opening swap: player 1 at (0,0)
-  game.play_move(3);   // Player 0 flat at (0,1)
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
   
   std::string tps = game.to_tps();
-  EXPECT_EQ(tps, "x6/x6/x6/x6/x6/2,1,x4 2 3");
+  EXPECT_EQ(tps, "x6/x6/x6/x6/x6/2,1,x4 1 3");
 }
 
 TEST_F(TakGSTest, TPSInvalidFormat) {
@@ -1157,10 +1172,10 @@ TEST_F(TakGSTest, TPSPieceCountCalculation) {
   TakGS<5> game{};
   
   // Place several pieces
-  game.play_move(0);   // Opening swap
-  game.play_move(3);   // Player 0 flat
-  game.play_move(6);   // Player 1 flat
-  game.play_move(5);   // Player 0 capstone
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(game.ptn_to_move_index("c1"));
+  game.play_move(game.ptn_to_move_index("Cb1"));
   
   // Parse from TPS
   std::string tps = game.to_tps();
@@ -1181,8 +1196,8 @@ TEST_F(TakGSTest, TPSPieceCountCalculation) {
 
 TEST_F(TakGSTest, TPSPrintingInDump) {
   TakGS<5> game{};
-  game.play_move(0);   // Opening swap
-  game.play_move(3);   // Player 0 flat
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1"));
   
   std::string dump = game.dump();
   

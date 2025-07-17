@@ -486,7 +486,7 @@ bool TakGS<SIZE>::check_road_win(uint8_t player) const noexcept {
   while (!q.empty()) q.pop();
   
   for (int i = 0; i < SIZE; ++i) {
-    int idx = square_to_index(0, i);
+    int idx = square_to_index(i, 0);
     if (is_road_piece(board_[idx], player)) {
       q.push(idx);
       visited[idx] = true;

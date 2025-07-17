@@ -32,6 +32,7 @@ TEST(Node, Basic) {
   }
   root.n = 1;
   auto* n = root.best_child(CPUCT, 0);
+  ASSERT_NE(n, nullptr);
   EXPECT_EQ(1, n->move);
 }
 

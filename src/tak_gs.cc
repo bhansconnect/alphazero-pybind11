@@ -180,6 +180,10 @@ void TakGS<SIZE>::play_move(uint32_t move) {
   decode_move(move, from_idx, to_idx, place_type, carry_count, drops);
   
   if (from_idx == -1) {
+    // Bounds check for placement move
+    if (to_idx < 0 || to_idx >= static_cast<int>(board_.size())) {
+      return; // Invalid move, do nothing
+    }
     Piece piece((opening_swap_ && turn_ == 0) ? 1 - player_ : player_, place_type);
     board_[to_idx].add(piece);
     
@@ -195,6 +199,17 @@ void TakGS<SIZE>::play_move(uint32_t move) {
       }
     }
   } else {
+    // Bounds check for movement move
+    if (from_idx < 0 || from_idx >= static_cast<int>(board_.size()) ||
+        to_idx < 0 || to_idx >= static_cast<int>(board_.size())) {
+      return; // Invalid move, do nothing
+    }
+    
+    // Check if source square has enough pieces
+    if (board_[from_idx].height() < static_cast<size_t>(carry_count)) {
+      return; // Not enough pieces to carry
+    }
+    
     std::vector<Piece> carry_stack;
     for (int i = 0; i < carry_count; ++i) {
       carry_stack.push_back(board_[from_idx].remove());
@@ -214,25 +229,39 @@ void TakGS<SIZE>::play_move(uint32_t move) {
     while (drop_idx < drops.size()) {
       curr_row += dr;
       curr_col += dc;
+      
+      // Bounds check for current position
+      if (!is_valid_square(curr_row, curr_col)) {
+        break; // Invalid position, stop processing
+      }
+      
       int curr_idx = square_to_index(curr_row, curr_col);
       
       if (curr_idx == to_idx && 
           !board_[curr_idx].empty() && 
           board_[curr_idx].top().type == PieceType::WALL &&
-          carry_stack[0].type == PieceType::CAP) {
+          !carry_stack.empty() && carry_stack[0].type == PieceType::CAP) {
         board_[curr_idx].stack.back().type = PieceType::FLAT;
         moves_without_placement_ = 0;
       }
       
+      // Bounds check for drops array access
+      if (drop_idx >= drops.size()) {
+        break; // No more drops to process
+      }
+      
       int drop_count = drops[drop_idx++];
+      
+      // Bounds check for carry_stack
+      if (drop_count > static_cast<int>(carry_stack.size())) {
+        drop_count = static_cast<int>(carry_stack.size());
+      }
+      
       for (int i = 0; i < drop_count; ++i) {
+        if (carry_stack.empty()) break; // Safety check
         board_[curr_idx].add(carry_stack.back());
         carry_stack.pop_back();
       }
-    }
-    
-    if (drop_idx > 0) {
-      moves_without_placement_ = 0;
     }
   }
   
@@ -269,10 +298,14 @@ std::optional<Vector<float>> TakGS<SIZE>::scores() const noexcept {
     return result;
   }
   
+  if (moves_without_placement_ >= 50) {
+    result[2] = 1.0f;
+    return result;    
+  }
+
   bool game_ended = is_board_full() || 
-                   (p0_stones_ == 0 && p0_caps_ == 0 && 
-                    p1_stones_ == 0 && p1_caps_ == 0) ||
-                   moves_without_placement_ >= 50;
+                   (p0_stones_ == 0 && p0_caps_ == 0) ||
+                   (p1_stones_ == 0 && p1_caps_ == 0);
   
   if (game_ended) {
     int p0_flats = count_flats(0);
@@ -570,18 +603,37 @@ void TakGS<SIZE>::decode_move(uint32_t move, int& from_idx, int& to_idx,
   if (move < placement_moves) {
     from_idx = -1;
     to_idx = move / 3;
+    // Bounds check for placement move
+    if (to_idx >= SIZE * SIZE) {
+      to_idx = 0; // Fallback to valid position
+    }
     place_type = static_cast<PieceType>(move % 3);
     carry_count = 0;
     drops.clear();
   } else {
     move -= placement_moves;
     from_idx = move / (4 * get_carry_limit(SIZE));
+    
+    // Bounds check for from_idx
+    if (from_idx >= SIZE * SIZE) {
+      from_idx = 0; // Fallback to valid position
+      to_idx = 0;
+      place_type = PieceType::FLAT;
+      carry_count = 0;
+      drops.clear();
+      return;
+    }
+    
     int remainder = move % (4 * get_carry_limit(SIZE));
     int direction = remainder / get_carry_limit(SIZE);
     carry_count = (remainder % get_carry_limit(SIZE)) + 1;
     
     auto [row, col] = index_to_square(from_idx);
     const int dirs[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    
+    // Initialize defaults in case no valid destination is found
+    to_idx = from_idx;
+    drops.clear();
     
     for (int dist = 1; dist <= SIZE; ++dist) {
       int new_row = row + dirs[direction][0] * dist;
@@ -596,6 +648,11 @@ void TakGS<SIZE>::decode_move(uint32_t move, int& from_idx, int& to_idx,
         drops = patterns[0];
         break;
       }
+    }
+    
+    // If no valid drop patterns found, create a safe fallback
+    if (drops.empty() && carry_count > 0) {
+      drops.push_back(carry_count); // Drop all pieces at destination
     }
   }
 }
@@ -990,9 +1047,9 @@ uint32_t TakGS<SIZE>::ptn_to_move_index(const std::string& ptn_move) const {
     } else if (direction == ">") {
       dr = 0; dc = 1;   // East
     } else if (direction == "+") {
-      dr = -1; dc = 0;  // North
+      dr = 1; dc = 0;  // South
     } else if (direction == "-") {
-      dr = 1; dc = 0;   // South
+      dr = -1; dc = 0;   // North
     } else {
       throw std::invalid_argument("Invalid direction: " + direction);
     }

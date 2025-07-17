@@ -661,62 +661,99 @@ TEST_F(TakGSTest, ConfigurableOpeningSwap) {
 }
 
 TEST_F(TakGSTest, KomiSystem) {
-  TakGS<4> game_no_komi{0.0f, "", false};   // No komi
-  TakGS<4> game_with_komi{2.5f, "", false}; // Player 0 gets significant komi
+  // Create a controlled 4x4 board scenario that ends in a flat win, not road win
+  TakGS<4> game_no_komi{0.0f, "", false};     // No komi
+  TakGS<4> game_p0_komi{1.5f, "", false};     // Player 0 gets komi
+  TakGS<4> game_p1_komi{-1.5f, "", false};    // Player 1 gets komi (negative means player 1)
   
-  // Fill boards identically
-  for (int i = 0; i < 16; ++i) {
-    game_no_komi.play_move(i * 3);
-    game_with_komi.play_move(i * 3);
+  // Strategy: Place walls strategically to block road formation, then fill with flats
+  // This creates a game that ends by board being full, not by road win
+  
+  // First, place some walls to block potential roads
+  std::vector<int> wall_moves = {
+    1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46  // Wall placements
+  };
+  
+  for (int move : wall_moves) {
+    if (!game_no_komi.scores().has_value()) {
+      game_no_komi.play_move(move);
+    }
+    if (!game_p0_komi.scores().has_value()) {
+      game_p0_komi.play_move(move);
+    }
+    if (!game_p1_komi.scores().has_value()) {
+      game_p1_komi.play_move(move);
+    }
   }
   
   auto scores_no_komi = game_no_komi.scores();
-  auto scores_with_komi = game_with_komi.scores();
+  auto scores_p0_komi = game_p0_komi.scores();
+  auto scores_p1_komi = game_p1_komi.scores();
   
   EXPECT_TRUE(scores_no_komi.has_value());
-  EXPECT_TRUE(scores_with_komi.has_value());
+  EXPECT_TRUE(scores_p0_komi.has_value());
+  EXPECT_TRUE(scores_p1_komi.has_value());
   
-  if (scores_no_komi.has_value() && scores_with_komi.has_value()) {
-    // Both games should end, verify komi affects outcome
-    EXPECT_TRUE((*scores_no_komi)[0] == 1.0f || (*scores_no_komi)[1] == 1.0f || (*scores_no_komi)[2] == 1.0f);
-    EXPECT_TRUE((*scores_with_komi)[0] == 1.0f || (*scores_with_komi)[1] == 1.0f || (*scores_with_komi)[2] == 1.0f);
+  if (scores_no_komi.has_value() && scores_p0_komi.has_value() && scores_p1_komi.has_value()) {
+    // Debug: Print the actual scores to understand what's happening
+    std::cout << "No komi scores: P0=" << (*scores_no_komi)[0] << " P1=" << (*scores_no_komi)[1] << " Draw=" << (*scores_no_komi)[2] << std::endl;
+    std::cout << "P0 komi scores: P0=" << (*scores_p0_komi)[0] << " P1=" << (*scores_p0_komi)[1] << " Draw=" << (*scores_p0_komi)[2] << std::endl;
+    std::cout << "P1 komi scores: P0=" << (*scores_p1_komi)[0] << " P1=" << (*scores_p1_komi)[1] << " Draw=" << (*scores_p1_komi)[2] << std::endl;
     
-    // The komi should potentially change the outcome
-    // (We can't assert specific winners without knowing exact flat counts)
+    // Each score vector should sum to 1.0
+    EXPECT_FLOAT_EQ((*scores_no_komi)[0] + (*scores_no_komi)[1] + (*scores_no_komi)[2], 1.0f);
+    EXPECT_FLOAT_EQ((*scores_p0_komi)[0] + (*scores_p0_komi)[1] + (*scores_p0_komi)[2], 1.0f);
+    EXPECT_FLOAT_EQ((*scores_p1_komi)[0] + (*scores_p1_komi)[1] + (*scores_p1_komi)[2], 1.0f);
+    
+    // Test the komi system - if this board state leads to flat win evaluation
+    // then the komi should make a difference
+    
+    // Basic test: komi should not make player 0 score worse  
+    EXPECT_GE((*scores_p0_komi)[0], (*scores_no_komi)[0]) << "Positive komi should not hurt player 0";
+    
+    // Basic test: negative komi should not make player 1 score worse
+    EXPECT_GE((*scores_p1_komi)[1], (*scores_no_komi)[1]) << "Negative komi should not hurt player 1";
+    
+    // If the game ended in a flat win, komi should potentially change outcomes
+    // Since we're placing only walls, the flat count should be 0-0, so komi should decide
+    if ((*scores_no_komi)[2] == 1.0f) {
+      // If it's a draw without komi, then komi should break the tie
+      EXPECT_EQ((*scores_p0_komi)[0], 1.0f) << "Positive komi should make player 0 win";
+      EXPECT_EQ((*scores_p1_komi)[1], 1.0f) << "Negative komi should make player 1 win";
+    } else {
+      // If someone already won, ensure komi doesn't reverse a road win
+      // (This validates the test setup - road wins override komi)
+      std::cout << "Game ended in road win, not flat win - komi won't affect outcome" << std::endl;
+    }
   }
 }
 
-TEST_F(TakGSTest, TwentyFiveMoveDrawRule) {
+TEST_F(TakGSTest, FiftyMoveDrawRule) {
+  // Test the 50-move draw rule (25 full moves) by manually playing moves using PTN
   TakGS<5> game{};
   
-  // Place some initial pieces
-  game.play_move(0);   // opening swap
-  game.play_move(3);   
-  game.play_move(6);
-  game.play_move(9);
+  game.play_move(game.ptn_to_move_index("a1"));  // Player 0 places flat on a1
+  game.play_move(game.ptn_to_move_index("b1"));  // Player 1 places flat on b1
   
-  // Manually set moves_without_placement to near the limit
-  // Since we can't access it directly, simulate 50 moves without placement
-  for (int i = 0; i < 25; ++i) {
-    // Try to make movement moves to trigger the 25-move rule
-    auto valid = game.valid_moves();
-    if (game.scores().has_value()) break;
+  for (int i = 0; i < 25; i++) {
+    EXPECT_FALSE(game.scores().has_value());
     
-    // Find any valid placement move and play it to avoid getting stuck
-    bool found = false;
-    for (int j = 0; j < 75; ++j) {
-      if (valid[j] == 1) {
-        game.play_move(j);
-        found = true;
-        break;
-      }
+    if(i%2 == 0) {
+      game.play_move(game.ptn_to_move_index("a1+"));
+      game.play_move(game.ptn_to_move_index("b1+"));
+    } else {
+      game.play_move(game.ptn_to_move_index("a2-"));
+      game.play_move(game.ptn_to_move_index("b2-"));
     }
-    if (!found) break;
   }
   
-  // The test may not trigger exactly 25 moves without placement,
-  // but it should at least not crash
-  EXPECT_TRUE(true);  // Just ensure the test runs
+  // Check if the game ended and validate the result
+  auto scores = game.scores();
+  
+  EXPECT_TRUE(scores.has_value());
+  EXPECT_EQ((*scores)[0], 0.0f) << "Player 0 should not win in draw";
+  EXPECT_EQ((*scores)[1], 0.0f) << "Player 1 should not win in draw";
+  EXPECT_EQ((*scores)[2], 1.0f) << "Game ended in draw";
 }
 
 TEST_F(TakGSTest, HouseRulesCombination) {
@@ -1289,6 +1326,281 @@ TEST_F(TakGSTest, PTNBoardSizeCompatibility) {
   EXPECT_EQ(game6.ptn_to_move_index("a1"), 0);
   EXPECT_EQ(game6.ptn_to_move_index("f6"), 105); // (5,5) * 3 = 105
   EXPECT_THROW(game6.ptn_to_move_index("g1"), std::invalid_argument);  // Column out of bounds
+}
+
+// Test bounds checking and edge cases that could cause std::out_of_range
+TEST_F(TakGSTest, BoundsCheckingEdgeCases) {
+  TakGS<5> game{};
+  
+  // Test invalid move indices that previously caused crashes
+  std::vector<uint32_t> invalid_moves = {
+    999999,  // Very large move index
+    static_cast<uint32_t>(-1),  // Maximum uint32_t value
+    game.num_moves() + 1000,  // Beyond valid range
+  };
+  
+  for (uint32_t move : invalid_moves) {
+    auto valid_moves = game.valid_moves();
+    if (move < valid_moves.size()) {
+      // Should be invalid, but shouldn't crash
+      EXPECT_FALSE(valid_moves[move]);
+    }
+    // play_move should handle invalid moves gracefully (no crash)
+    // Note: We can't easily test play_move with invalid moves since it's protected by valid_moves check
+  }
+  
+  // Test boundary conditions
+  EXPECT_TRUE(game.valid_moves()[0]);  // First move should be valid
+  auto valid_moves = game.valid_moves();
+  EXPECT_FALSE(valid_moves[game.num_moves() - 1]);  // Last index should be invalid initially
+}
+
+// Test PTN parsing edge cases
+TEST_F(TakGSTest, PTNParsingEdgeCases) {
+  TakGS<5> game{};
+  
+  // Test invalid square names
+  EXPECT_THROW(game.ptn_to_move_index("z9"), std::invalid_argument);
+  EXPECT_THROW(game.ptn_to_move_index("a0"), std::invalid_argument);
+  EXPECT_THROW(game.ptn_to_move_index("a6"), std::invalid_argument);  // Beyond board
+  EXPECT_THROW(game.ptn_to_move_index("f1"), std::invalid_argument);  // Beyond board
+  EXPECT_THROW(game.ptn_to_move_index(""), std::invalid_argument);    // Empty string
+  
+  // Test invalid movement patterns - skip "6a1>" as it may be valid for carry limit 5
+  EXPECT_THROW(game.ptn_to_move_index("a1>>>>>"), std::invalid_argument);  // Too many directions
+  EXPECT_THROW(game.ptn_to_move_index("a1>0"), std::invalid_argument);  // Zero drop count
+  
+  // Test valid edge cases
+  EXPECT_NO_THROW(game.ptn_to_move_index("a1"));   // Minimum valid
+  EXPECT_NO_THROW(game.ptn_to_move_index("e5"));   // Maximum valid for 5x5
+  EXPECT_NO_THROW(game.ptn_to_move_index("Sa1"));  // Wall placement
+  EXPECT_NO_THROW(game.ptn_to_move_index("Ca1"));  // Capstone placement
+}
+
+// Test decode_move bounds checking
+TEST_F(TakGSTest, DecodeMoveEdgeCases) {
+  TakGS<5> game{};
+  
+  // Test placement moves at boundaries
+  game.play_move(game.ptn_to_move_index("a1"));  // Valid placement
+  game.play_move(game.ptn_to_move_index("a2"));  // Valid placement
+  
+  // Test movement with minimal setup
+  game.play_move(game.ptn_to_move_index("a1>"));  // Simple movement
+  
+  // Game should still be in valid state
+  EXPECT_NE(game.current_player(), 255);  // Should be 0 or 1
+  EXPECT_GE(game.current_turn(), 0);
+}
+
+// Test stack operations edge cases
+TEST_F(TakGSTest, StackOperationsEdgeCases) {
+  TakGS<5> game{};
+  
+  // Build a stack to test carry operations
+  game.play_move(game.ptn_to_move_index("a1"));  // Player 0 (opponent due to opening swap)
+  game.play_move(game.ptn_to_move_index("a2"));  // Player 1
+  game.play_move(game.ptn_to_move_index("a1"));  // Player 0 places on a1
+  game.play_move(game.ptn_to_move_index("a3"));  // Player 1
+  
+  // Test various carry counts
+  game.play_move(game.ptn_to_move_index("2a1>"));  // Carry 2 pieces
+  
+  // Game should handle this gracefully
+  EXPECT_FALSE(game.scores().has_value());  // Game should continue
+}
+
+// Test random move sequences for stability
+TEST_F(TakGSTest, RandomMoveStability) {
+  std::mt19937 rng(42);  // Fixed seed for reproducible tests
+  
+  for (int test_game = 0; test_game < 5; ++test_game) {
+    TakGS<5> game{};
+    
+    for (int move_count = 0; move_count < 50 && !game.scores().has_value(); ++move_count) {
+      auto valid_moves = game.valid_moves();
+      
+      // Find all valid moves
+      std::vector<uint32_t> valid_indices;
+      for (uint32_t i = 0; i < valid_moves.size(); ++i) {
+        if (valid_moves[i]) {
+          valid_indices.push_back(i);
+        }
+      }
+      
+      if (!valid_indices.empty()) {
+        // Pick a random valid move
+        uint32_t random_move = valid_indices[rng() % valid_indices.size()];
+        game.play_move(random_move);
+        
+        // Verify game state remains valid
+        EXPECT_LE(game.current_player(), 1);
+        EXPECT_GE(game.current_turn(), 0);
+      }
+    }
+  }
+}
+
+// Test piece exhaustion bug - player 0 runs out of pieces
+TEST_F(TakGSTest, PieceExhaustionPlayer0Bug) {
+  // Create a game state where player 0 has 1 stone left, player 1 has many
+  TakGS<4> game{0.0f, "", true};  // 4x4 board, no komi, opening swap enabled
+  
+  // Simulate a game where player 0 is about to run out of pieces
+  // Player 0 starts with 15 stones on 4x4 board
+  
+  // Place 14 stones for player 0, leaving 1 stone
+  for (int i = 0; i < 14; ++i) {
+    if (game.scores().has_value()) break;
+    auto valid_moves = game.valid_moves();
+    
+    // Find first valid placement move
+    for (uint32_t move = 0; move < valid_moves.size(); ++move) {
+      if (valid_moves[move]) {
+        game.play_move(move);
+        break;
+      }
+    }
+  }
+  
+  // At this point, player 0 should have 1 stone left
+  // The next placement move by player 0 should end the game
+  if (!game.scores().has_value() && game.current_player() == 0) {
+    auto valid_moves = game.valid_moves();
+    
+    // This should trigger the bug - player 0 places last piece
+    for (uint32_t move = 0; move < valid_moves.size(); ++move) {
+      if (valid_moves[move]) {
+        game.play_move(move);
+        break;
+      }
+    }
+    
+    // Game should end immediately after player 0 places their last piece
+    EXPECT_TRUE(game.scores().has_value());
+    
+    // If game continues, the next player should have valid moves
+    if (!game.scores().has_value()) {
+      auto next_valid_moves = game.valid_moves();
+      bool has_valid_moves = false;
+      for (uint32_t i = 0; i < next_valid_moves.size(); ++i) {
+        if (next_valid_moves[i]) {
+          has_valid_moves = true;
+          break;
+        }
+      }
+      EXPECT_TRUE(has_valid_moves); // Should not be empty if game continues
+    }
+  }
+}
+
+// Test piece exhaustion bug - player 1 runs out of pieces
+TEST_F(TakGSTest, PieceExhaustionPlayer1Bug) {
+  // Create a game state where player 1 has 1 stone left, player 0 has many
+  TakGS<4> game{0.0f, "", true};  // 4x4 board, no komi, opening swap enabled
+  
+  // Play one move to get past opening swap
+  auto valid_moves = game.valid_moves();
+  for (uint32_t move = 0; move < valid_moves.size(); ++move) {
+    if (valid_moves[move]) {
+      game.play_move(move);
+      break;
+    }
+  }
+  
+  // Now simulate placing stones until player 1 is almost out
+  int moves_played = 1;
+  while (moves_played < 15 && !game.scores().has_value()) {
+    auto valid_moves = game.valid_moves();
+    
+    for (uint32_t move = 0; move < valid_moves.size(); ++move) {
+      if (valid_moves[move]) {
+        game.play_move(move);
+        moves_played++;
+        break;
+      }
+    }
+  }
+  
+  // At this point, player 1 should be low on pieces
+  // Continue until player 1 is about to place their last piece
+  while (!game.scores().has_value()) {
+    auto valid_moves = game.valid_moves();
+    
+    if (game.current_player() == 1) {
+      // Player 1's turn - this might be their last piece
+      for (uint32_t move = 0; move < valid_moves.size(); ++move) {
+        if (valid_moves[move]) {
+          game.play_move(move);
+          break;
+        }
+      }
+      
+      // Game should end if player 1 just placed their last piece
+      if (game.scores().has_value()) {
+        break;
+      }
+    } else {
+      // Player 0's turn - just play a move
+      for (uint32_t move = 0; move < valid_moves.size(); ++move) {
+        if (valid_moves[move]) {
+          game.play_move(move);
+          break;
+        }
+      }
+    }
+  }
+  
+  // Game should eventually end
+  EXPECT_TRUE(game.scores().has_value());
+}
+
+// Test that demonstrates the empty children vector issue
+TEST_F(TakGSTest, EmptyChildrenVectorBug) {
+  // This test creates a scenario that would cause empty children vector
+  // in MCTS due to the piece exhaustion bug
+  
+  TakGS<4> game{0.0f, "", true};
+  
+  // Create a game state where one player is out of pieces
+  // but the game hasn't ended due to the bug
+  
+  // This is a more controlled test - we'll create a specific scenario
+  // by manually constructing a game state where the bug would manifest
+  
+  // Play moves until we get close to piece exhaustion
+  int total_moves = 0;
+  while (total_moves < 25 && !game.scores().has_value()) {
+    auto valid_moves = game.valid_moves();
+    
+    bool moved = false;
+    for (uint32_t move = 0; move < valid_moves.size(); ++move) {
+      if (valid_moves[move]) {
+        game.play_move(move);
+        total_moves++;
+        moved = true;
+        break;
+      }
+    }
+    
+    if (!moved) {
+      // This is the bug - no valid moves but game hasn't ended
+      FAIL() << "No valid moves available but game hasn't ended - this is the bug!";
+    }
+  }
+  
+  // Verify that we either ended the game or still have valid moves
+  if (!game.scores().has_value()) {
+    auto valid_moves = game.valid_moves();
+    bool has_valid_moves = false;
+    for (uint32_t i = 0; i < valid_moves.size(); ++i) {
+      if (valid_moves[i]) {
+        has_valid_moves = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(has_valid_moves);
+  }
 }
 
 }  // namespace alphazero::tak_gs

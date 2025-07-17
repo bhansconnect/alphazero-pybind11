@@ -12,6 +12,7 @@ import queue
 import numpy as np
 import gc
 from load_lib import load_alphazero
+from neural_net import get_device
 
 alphazero = load_alphazero()
 
@@ -20,7 +21,7 @@ HIST_LOCATION = os.path.join('data', 'history')
 TMP_HIST_LOCATION = os.path.join('data', 'tmp_history')
 CHECKPOINT_LOCATION = os.path.join('data', 'checkpoint')
 GRArgs = namedtuple(
-    'GRArgs', ['title', 'game', 'max_batch_size', 'cuda', 'iteration',  'data_save_size', 'data_folder', 'concurrent_batches', 'batch_workers', 'nn_workers', 'result_workers', 'mcts_workers'], defaults=(0, HIST_SIZE, TMP_HIST_LOCATION, 0, 0, 1, 1, os.cpu_count() - 1))
+    'GRArgs', ['title', 'game', 'max_batch_size', 'iteration',  'data_save_size', 'data_folder', 'concurrent_batches', 'batch_workers', 'nn_workers', 'result_workers', 'mcts_workers'], defaults=(0, HIST_SIZE, TMP_HIST_LOCATION, 0, 0, 1, 1, os.cpu_count() - 1))
 
 # In some games, setting this to max out your memory can have huge performance gains.
 # That said, some games get a lot of cache misses and the cache contention makes it slower.
@@ -40,7 +41,6 @@ WINDOW_SIZE_SCALAR = 6  # This ends up being approximately first time history do
 
 RESULT_WORKERS = 2
 DATA_WORKERS = os.cpu_count() - 1
-USE_CUDA = torch.cuda.is_available()
 
 # The traditional alphazero parameters.
 EXPECTED_OPENING_LENGTH = 10
@@ -121,6 +121,7 @@ class GameRunner:
         self.players = players
         self.pm = pm
         self.args = args
+        self.device = get_device()
         self.num_players = self.args.game.NUM_PLAYERS()
         self.batch_workers = self.args.batch_workers
         if self.batch_workers == 0:
@@ -158,7 +159,7 @@ class GameRunner:
             self.batches.append(torch.zeros(shape))
             self.v.append(torch.zeros((self.num_players+1)))
             self.pi.append(torch.zeros((self.args.game.NUM_MOVES())))
-            if self.args.cuda:
+            if str(self.device) == 'cuda':
                 self.batches[i].pin_memory()
                 self.v[i].pin_memory()
                 self.pi[i].pin_memory()
@@ -261,8 +262,7 @@ class GameRunner:
             game_indices = self.pm.build_batch(
                 batch_index % self.num_players, batch, self.batch_workers)
             out = batch[:len(game_indices)]
-            if self.args.cuda:
-                out = out.contiguous().cuda()
+            out = out.contiguous().to(self.device, non_blocking=True)
             self.batch_queue.put((out, batch_index, game_indices))
 
     def player_executor(self):
@@ -629,9 +629,8 @@ if __name__ == '__main__':
                 Game, CHECKPOINT_LOCATION, f'{best:04d}-{run_name}.pt')
 
         pm = alphazero.PlayManager(new_game(), params)
-        use_cuda = (USE_CUDA and not use_rand)
         grargs = GRArgs(title='Self Play', game=Game, iteration=iteration,
-                        max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS, cuda=use_cuda)
+                        max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
 
         players = []
         for _ in range(Game.NUM_PLAYERS()):
@@ -682,7 +681,7 @@ if __name__ == '__main__':
                 pm = alphazero.PlayManager(new_game(), params)
 
                 grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
-                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS, cuda=USE_CUDA)
+                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
                 players = []
                 for _ in range(Game.NUM_PLAYERS()):
                     players.append(nn_past)
@@ -706,7 +705,7 @@ if __name__ == '__main__':
                 pm = alphazero.PlayManager(new_game(), params)
 
                 grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
-                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS, cuda=USE_CUDA)
+                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
                 players = []
                 for _ in range(Game.NUM_PLAYERS()):
                     players.append(nn)
@@ -738,7 +737,7 @@ if __name__ == '__main__':
                 pm = alphazero.PlayManager(new_game(), params)
 
                 grargs = GRArgs(title=f'Bench {iteration} v {past_iter} as p{i+1}', game=Game, iteration=iteration,
-                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS, cuda=USE_CUDA)
+                                max_batch_size=bs, concurrent_batches=cb, result_workers=RESULT_WORKERS)
                 players = []
                 for _ in range(Game.NUM_PLAYERS()):
                     players.append(nn_past)

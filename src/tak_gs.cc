@@ -424,16 +424,16 @@ std::string TakGS<SIZE>::dump() const noexcept {
   
   for (int row = 0; row < SIZE; ++row) {
     for (int col = 0; col < SIZE; ++col) {
-      const Square& sq = board_[square_to_index(row, col)];
+      const Square& sq = board_[square_to_index(SIZE - row - 1, col)];
       if (sq.empty()) {
         oss << " . ";
       } else {
         const Piece& top = sq.top();
         char c = (top.owner == 0) ? 
-                 (top.type == PieceType::FLAT ? 'O' : 
-                  top.type == PieceType::WALL ? '|' : 'C') :
-                 (top.type == PieceType::FLAT ? 'X' : 
-                  top.type == PieceType::WALL ? '/' : 'c');
+                 (top.type == PieceType::FLAT ? 'o' : 
+                  top.type == PieceType::WALL ? 'O' : 'C') :
+                 (top.type == PieceType::FLAT ? 'x' : 
+                  top.type == PieceType::WALL ? 'X' : 'c');
         oss << " " << c << " ";
       }
     }

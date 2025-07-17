@@ -92,7 +92,7 @@ Vector<uint8_t> TakGS<SIZE>::valid_moves() const noexcept {
   Vector<uint8_t> valid(num_moves());
   valid.setZero();
   
-  if (opening_swap_ && turn_ == 0) {
+  if (opening_swap_ && turn_ <= 1) {
     for (int i = 0; i < SIZE * SIZE; ++i) {
       if (board_[i].empty()) {
         valid[encode_placement(i, PieceType::FLAT)] = 1;
@@ -108,11 +108,9 @@ Vector<uint8_t> TakGS<SIZE>::valid_moves() const noexcept {
     if (board_[i].empty()) {
       if (my_stones > 0) {
         valid[encode_placement(i, PieceType::FLAT)] = 1;
-        if (turn_ >= 1 || !opening_swap_) {
-          valid[encode_placement(i, PieceType::WALL)] = 1;
-        }
+        valid[encode_placement(i, PieceType::WALL)] = 1;
       }
-      if (my_caps > 0 && (turn_ >= 1 || !opening_swap_)) {
+      if (my_caps > 0) {
         valid[encode_placement(i, PieceType::CAP)] = 1;
       }
     }
@@ -184,19 +182,18 @@ void TakGS<SIZE>::play_move(uint32_t move) {
     if (to_idx < 0 || to_idx >= static_cast<int>(board_.size())) {
       return; // Invalid move, do nothing
     }
-    Piece piece((opening_swap_ && turn_ == 0) ? 1 - player_ : player_, place_type);
+    const auto player_played = (opening_swap_ && turn_ <= 1) ? 1 - player_ : player_;
+    Piece piece(player_played, place_type);
     board_[to_idx].add(piece);
     
     moves_without_placement_ = 0;
     
-    if (!(opening_swap_ && turn_ == 0)) {
-      if (place_type == PieceType::CAP) {
-        if (player_ == 0) p0_caps_--;
-        else p1_caps_--;
-      } else {
-        if (player_ == 0) p0_stones_--;
-        else p1_stones_--;
-      }
+    if (place_type == PieceType::CAP) {
+      if (player_played == 0) p0_caps_--;
+      else p1_caps_--;
+    } else {
+      if (player_played == 0) p0_stones_--;
+      else p1_stones_--;
     }
   } else {
     // Bounds check for movement move
@@ -265,11 +262,7 @@ void TakGS<SIZE>::play_move(uint32_t move) {
     }
   }
   
-  if (opening_swap_ && turn_ == 0) {
-    opening_swap_ = false;
-  } else {
-    player_ = 1 - player_;
-  }
+  player_ = 1 - player_;
   turn_++;
   
   if (from_idx != -1) {

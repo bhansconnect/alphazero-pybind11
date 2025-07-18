@@ -11,7 +11,7 @@ THINK_TIME = 9.5
 CPUCT = 1.25
 START_TEMP = 1
 END_TEMP = 0.2
-TEMP_DECAY_HALF_LIFE = 10
+TEMP_DECAY_HALF_LIFE = 6
 
 Game = alphazero.TakGS4
 
@@ -49,6 +49,24 @@ def eval_position(gs, agent):
 
 # PTN parsing is now handled by C++ - no need for Python PTN parser class
 
+def get_game_mode():
+    """Get game mode choice from user"""
+    while True:
+        try:
+            print("\nSelect game mode:")
+            print("1. Human vs AI")
+            print("2. AI vs AI")
+            choice = input("Enter choice (1 or 2): ").strip()
+            
+            if choice == '1':
+                return 'human_vs_ai'
+            elif choice == '2':
+                return 'ai_vs_ai'
+            else:
+                print("Invalid choice. Please enter 1 or 2.")
+        except KeyboardInterrupt:
+            exit()
+
 def get_player_choice():
     """Get player's choice for who goes first"""
     while True:
@@ -64,6 +82,23 @@ def get_player_choice():
                 return 'ai'
             else:
                 print("Invalid choice. Please enter 1 or 2.")
+        except KeyboardInterrupt:
+            exit()
+
+def get_thinking_time():
+    """Get AI thinking time from user"""
+    while True:
+        try:
+            time_input = input("Enter AI thinking time in seconds (default 9.5): ").strip()
+            if time_input == '':
+                return 9.5
+            time_val = float(time_input)
+            if time_val > 0:
+                return time_val
+            else:
+                print("Thinking time must be positive.")
+        except ValueError:
+            print("Please enter a valid number.")
         except KeyboardInterrupt:
             exit()
 
@@ -88,7 +123,16 @@ def main():
     
     # Get game configuration
     board_size = get_board_size()
-    first_player = get_player_choice()
+    game_mode = get_game_mode()
+    
+    # Get thinking time
+    global THINK_TIME
+    THINK_TIME = get_thinking_time()
+    
+    # Get first player if human vs AI
+    first_player = None
+    if game_mode == 'human_vs_ai':
+        first_player = get_player_choice()
     
     # Load neural network
     nn_folder = os.path.join("data", "checkpoint")
@@ -96,7 +140,10 @@ def main():
     
     print(f"\nUsing network: {nn_file}")
     print(f"Board size: {board_size}x{board_size}")
-    print(f"First player: {first_player}")
+    print(f"Game mode: {game_mode}")
+    print(f"AI thinking time: {THINK_TIME}s")
+    if game_mode == 'human_vs_ai':
+        print(f"First player: {first_player}")
     
     # Map board size to appropriate TakGS class
     game_classes = {4: alphazero.TakGS4, 5: alphazero.TakGS5, 6: alphazero.TakGS6}
@@ -106,9 +153,10 @@ def main():
     gs = GameClass()
     
     # Determine if human is player 0 or 1
-    human_is_player_0 = (first_player == 'human')
+    human_is_player_0 = (game_mode == 'human_vs_ai' and first_player == 'human')
     
     hist = []
+    moves_ptn = []  # Track moves in PTN format
     
     while gs.scores() is None:
         hist.append(gs.copy())
@@ -117,8 +165,9 @@ def main():
         print(f"Current player: {gs.current_player()}")
         print(f"Turn: {gs.current_turn()}")
         
-        current_is_human = (gs.current_player() == 0 and human_is_player_0) or \
-                          (gs.current_player() == 1 and not human_is_player_0)
+        current_is_human = (game_mode == 'human_vs_ai') and \
+                          ((gs.current_player() == 0 and human_is_player_0) or \
+                           (gs.current_player() == 1 and not human_is_player_0))
         
         if current_is_human:
             # Human player's turn
@@ -142,6 +191,8 @@ def main():
                         if len(hist) >= 2:
                             gs = hist[-2].copy()
                             hist = hist[:-2]
+                            if moves_ptn:
+                                moves_ptn.pop()  # Remove last move from PTN
                             print("Move undone.")
                             break
                         else:
@@ -155,6 +206,7 @@ def main():
                     if valids[move]:
                         gs.play_move(move)
                         valid_move = True
+                        moves_ptn.append(user_input)
                         print(f"Played move: {user_input}")
                     else:
                         print(f"Invalid move: {user_input}")
@@ -171,6 +223,7 @@ def main():
             ai_move = eval_position(gs, nn)
             ai_move_ptn = gs.move_index_to_ptn(ai_move)
             gs.play_move(ai_move)
+            moves_ptn.append(ai_move_ptn)
             print(f"AI played move: {ai_move_ptn}")
     
     print("\n" + "="*50)
@@ -180,14 +233,74 @@ def main():
     
     # Determine winner
     scores = gs.scores()
-    if scores[0] > scores[1]:
-        winner = "Player 0" if not human_is_player_0 else "You"
-    elif scores[1] > scores[0]:
-        winner = "Player 1" if human_is_player_0 else "You"
+    if game_mode == 'ai_vs_ai':
+        if scores[0] > scores[1]:
+            winner = "Player 0 (AI)"
+        elif scores[1] > scores[0]:
+            winner = "Player 1 (AI)"
+        else:
+            winner = "Draw"
     else:
-        winner = "Draw"
+        if scores[0] > scores[1]:
+            winner = "Player 0" if not human_is_player_0 else "You"
+        elif scores[1] > scores[0]:
+            winner = "Player 1" if human_is_player_0 else "You"
+        else:
+            winner = "Draw"
     
     print(f"Winner: {winner}")
+    
+    # Print complete PTN
+    print("\n" + "="*50)
+    print("COMPLETE GAME PTN:")
+    print("="*50)
+    
+    # PTN header
+    print(f'[Size "{board_size}"]')
+    if game_mode == 'human_vs_ai':
+        if human_is_player_0:
+            print('[Player1 "Human"]')
+            print('[Player2 "AI"]')
+        else:
+            print('[Player1 "AI"]')
+            print('[Player2 "Human"]')
+    else:
+        print('[Player1 "AI"]')
+        print('[Player2 "AI"]')
+    
+    # Determine result with correct PTN notation
+    p0_road = gs.check_road_win(0)
+    p1_road = gs.check_road_win(1)
+    
+    if p0_road and not p1_road:
+        result = "R-0"  # Player 0 road win
+    elif p1_road and not p0_road:
+        result = "0-R"  # Player 1 road win
+    elif p0_road and p1_road:
+        # Both have road wins, current player wins
+        if gs.current_player() == 0:
+            result = "R-0"
+        else:
+            result = "0-R"
+    elif scores[0] > scores[1]:
+        result = "F-0"  # Player 0 flat win
+    elif scores[1] > scores[0]:
+        result = "0-F"  # Player 1 flat win
+    else:
+        result = "1/2-1/2"  # Draw
+    
+    print(f'[Result "{result}"]')
+    print()
+    
+    # Print moves in PTN format (numbered pairs)
+    for i in range(0, len(moves_ptn), 2):
+        move_num = (i // 2) + 1
+        if i + 1 < len(moves_ptn):
+            print(f"{move_num}. {moves_ptn[i]} {moves_ptn[i+1]}")
+        else:
+            print(f"{move_num}. {moves_ptn[i]}")
+    
+    print(f"{result}")
 
 if __name__ == "__main__":
     main()

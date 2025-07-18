@@ -179,6 +179,10 @@ class DLLEXPORT TakGS : public GameState {
     return CANONICAL_SHAPE;
   }
   
+  // Game state query methods
+  [[nodiscard]] bool check_road_win(uint8_t player) const noexcept;
+  [[nodiscard]] int count_flats(uint8_t player) const noexcept;
+  
  private:
   std::vector<Square> board_;
   uint8_t player_;
@@ -203,8 +207,6 @@ class DLLEXPORT TakGS : public GameState {
     return row >= 0 && row < SIZE && col >= 0 && col < SIZE;
   }
   
-  [[nodiscard]] bool check_road_win(uint8_t player) const noexcept;
-  [[nodiscard]] int count_flats(uint8_t player) const noexcept;
   [[nodiscard]] bool is_board_full() const noexcept;
   
   void decode_move(uint32_t move, int& from_idx, int& to_idx, 

@@ -169,8 +169,9 @@ def main():
             # AI player's turn
             print("\nAI thinking...")
             ai_move = eval_position(gs, nn)
+            ai_move_ptn = gs.move_index_to_ptn(ai_move)
             gs.play_move(ai_move)
-            print(f"AI played move: {ai_move}")
+            print(f"AI played move: {ai_move_ptn}")
     
     print("\n" + "="*50)
     print("GAME OVER")

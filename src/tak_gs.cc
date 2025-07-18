@@ -1086,6 +1086,80 @@ uint32_t TakGS<SIZE>::ptn_to_move_index(const std::string& ptn_move) const {
 }
 
 template<int SIZE>
+std::string TakGS<SIZE>::move_index_to_ptn(uint32_t move) const {
+  int from_idx, to_idx;
+  PieceType place_type;
+  int carry_count;
+  std::vector<int> drops;
+  
+  decode_move(move, from_idx, to_idx, place_type, carry_count, drops);
+  
+  if (from_idx == -1) {
+    // Placement move
+    auto [row, col] = index_to_square(to_idx);
+    
+    // Convert to algebraic notation: column (a-z) + row (1-based)
+    char col_char = 'a' + col;
+    std::string square = std::string(1, col_char) + std::to_string(row + 1);
+    
+    // Add piece type prefix
+    if (place_type == PieceType::WALL) {
+      return "S" + square;
+    } else if (place_type == PieceType::CAP) {
+      return "C" + square;
+    } else {
+      return square;  // Flat stone, no prefix
+    }
+  } else {
+    // Movement move
+    auto [from_row, from_col] = index_to_square(from_idx);
+    auto [to_row, to_col] = index_to_square(to_idx);
+    
+    // From square in algebraic notation
+    char from_col_char = 'a' + from_col;
+    std::string from_square = std::string(1, from_col_char) + std::to_string(from_row + 1);
+    
+    // Direction
+    std::string direction;
+    if (to_row > from_row) {
+      direction = "+";  // South
+    } else if (to_row < from_row) {
+      direction = "-";  // North
+    } else if (to_col > from_col) {
+      direction = ">";  // East
+    } else {
+      direction = "<";  // West
+    }
+    
+    // Build PTN string
+    std::string result;
+    
+    // Add carry count if > 1
+    if (carry_count > 1) {
+      result += std::to_string(carry_count);
+    }
+    
+    result += from_square + direction;
+    
+    // Add drop pattern only if it's not the PTN default
+    // PTN default: single square movement drops all stones at destination
+    // Multi-square movements must specify the drop pattern
+    if (drops.size() > 1) {
+      // Multi-square movement - always include drop pattern
+      for (int drop : drops) {
+        result += std::to_string(drop);
+      }
+    } else if (drops.size() == 1 && drops[0] != carry_count) {
+      // Single square but not dropping all stones (shouldn't happen in normal Tak)
+      result += std::to_string(drops[0]);
+    }
+    // If drops.size() == 1 && drops[0] == carry_count, it's the PTN default - omit drop pattern
+    
+    return result;
+  }
+}
+
+template<int SIZE>
 thread_local std::unordered_map<std::pair<int, int>, std::vector<std::vector<int>>, typename TakGS<SIZE>::PairHash> TakGS<SIZE>::drop_patterns_cache_;
 
 // Explicit template instantiations

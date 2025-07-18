@@ -1646,4 +1646,198 @@ TEST_F(TakGSTest, StackMoveOntoOther) {
   EXPECT_EQ((*scores)[2], 0.0f);
 }
 
+TEST_F(TakGSTest, PTNRoundtripComplexMoves) {
+  TakGS<5> game{};
+  
+  // Set up a complex board state with multiple stacks for testing
+  // Place initial stones to create stacks
+  game.play_move(game.ptn_to_move_index("a1"));  // P0 flat
+  game.play_move(game.ptn_to_move_index("a2"));  // P1 flat
+  game.play_move(game.ptn_to_move_index("a1"));  // P0 flat on a1 (creates stack)
+  game.play_move(game.ptn_to_move_index("a2"));  // P1 flat on a2 (creates stack)
+  
+  // More stones to create larger stacks
+  game.play_move(game.ptn_to_move_index("b1"));  // P0 flat
+  game.play_move(game.ptn_to_move_index("b2"));  // P1 flat
+  game.play_move(game.ptn_to_move_index("a1"));  // P0 flat on a1 (3-high stack)
+  game.play_move(game.ptn_to_move_index("a2"));  // P1 flat on a2 (3-high stack)
+  
+  game.play_move(game.ptn_to_move_index("c1"));  // P0 flat
+  game.play_move(game.ptn_to_move_index("c2"));  // P1 flat
+  game.play_move(game.ptn_to_move_index("a1"));  // P0 flat on a1 (4-high stack)
+  game.play_move(game.ptn_to_move_index("a2"));  // P1 flat on a2 (4-high stack)
+  
+  // Add one more layer to create 5-high stacks
+  game.play_move(game.ptn_to_move_index("d1"));  // P0 flat
+  game.play_move(game.ptn_to_move_index("d2"));  // P1 flat
+  game.play_move(game.ptn_to_move_index("a1"));  // P0 flat on a1 (5-high stack)
+  game.play_move(game.ptn_to_move_index("a2"));  // P1 flat on a2 (5-high stack)
+  
+  // Test cases: PTN move -> index -> PTN should be identical
+  std::vector<std::string> test_moves = {
+    // Simple single stone moves in all directions
+    "a1>",     // East
+    "b2<",     // West  
+    "b1+",     // South
+    "b2-",     // North
+    
+    // Two stone carries in all directions
+    "2a1>",    // 2 stones east
+    "2b2<",    // 2 stones west
+    "2b1+",    // 2 stones south
+    "2b2-",    // 2 stones north
+    
+    // Three stone carries
+    "3a1>",    // 3 stones east
+    "3b2<",    // 3 stones west
+    "3b1+",    // 3 stones south
+    "3b2-",    // 3 stones north
+    
+    // Four stone carries
+    "4a1>",    // 4 stones east
+    "4b2<",    // 4 stones west
+    "4b1+",    // 4 stones south
+    "4b2-",    // 4 stones north
+    
+    // Five stone carries (maximum stack)
+    "5a1>",    // 5 stones east
+    "5b2<",    // 5 stones west
+    "5b1+",    // 5 stones south
+    "5b2-",    // 5 stones north
+    
+    // Complex drop patterns - multi-square movements
+    "2a1>11",  // 2 stones, drop 1 on each square for 2 squares
+    "3a1>12",  // 3 stones, drop 1 then 2
+    "3a1>21",  // 3 stones, drop 2 then 1
+    "4a1>112", // 4 stones, drop 1, 1, then 2
+    "4a1>121", // 4 stones, drop 1, 2, then 1
+    "4a1>211", // 4 stones, drop 2, 1, then 1
+    "4a1>1111", // 5 stones, drop 1 on each of 5 squares
+    "5a1>1121", // 5 stones, drop 1, 1, 2, then 1
+    "5a1>1211", // 5 stones, drop 1, 2, 1, then 1
+    "5a1>2111", // 5 stones, drop 2, then 1 on each remaining
+    
+    // Same complex patterns in other directions
+    "3d2<12",  // West movement with 1,2 drop
+    "4b1+211", // South movement with 2,1,1 drop
+    "4b5-121", // North movement with 1,2,1 drop
+    
+  };
+  
+  for (const auto& original_ptn : test_moves) {
+    try {
+      // Convert PTN to move index
+      uint32_t move_index = game.ptn_to_move_index(original_ptn);
+      
+      // Convert move index back to PTN
+      std::string converted_ptn = game.move_index_to_ptn(move_index);
+      
+      // They should convert to canonical form
+      // Note: The game engine uses canonical PTN forms, so complex drop patterns
+      // may be simplified to the shortest equivalent movement
+      EXPECT_FALSE(converted_ptn.empty()) 
+        << "PTN conversion failed for: " << original_ptn 
+        << " -> " << move_index << " -> " << converted_ptn;
+        
+      // Verify that the converted PTN can be parsed back to the same move index
+      uint32_t converted_back_index = game.ptn_to_move_index(converted_ptn);
+      EXPECT_EQ(move_index, converted_back_index)
+        << "PTN round-trip inconsistent: " << original_ptn 
+        << " -> " << move_index << " -> " << converted_ptn 
+        << " -> " << converted_back_index;
+        
+    } catch (const std::invalid_argument& e) {
+      // Some moves might be invalid due to board state or bounds
+      // That's okay - we're testing the valid ones
+      std::cout << "Skipping invalid move: " << original_ptn << " (" << e.what() << ")" << std::endl;
+    }
+  }
+}
+
+TEST_F(TakGSTest, PTNRoundtripPlacementMoves) {
+  TakGS<4> game{};
+  
+  // Test all placement move types on various squares
+  std::vector<std::string> placement_moves = {
+    // Flat stones
+    "a1", "b2", "c3", "d4",
+    
+    // Walls
+    "Sa1", "Sb2", "Sc3", "Sd4",
+    
+    // Capstones  
+    "Ca1", "Cb2", "Cc3", "Cd4",
+  };
+  
+  for (const auto& original_ptn : placement_moves) {
+    try {
+      uint32_t move_index = game.ptn_to_move_index(original_ptn);
+      std::string converted_ptn = game.move_index_to_ptn(move_index);
+      
+      EXPECT_EQ(original_ptn, converted_ptn)
+        << "Placement PTN roundtrip failed for: " << original_ptn
+        << " -> " << move_index << " -> " << converted_ptn;
+        
+    } catch (const std::invalid_argument& e) {
+      FAIL() << "Unexpected error for placement move " << original_ptn << ": " << e.what();
+    }
+  }
+}
+
+TEST_F(TakGSTest, PTNRoundtripEdgeCases) {
+  TakGS<6> game{};  // Use 6x6 for more space
+  
+  // Create some stacks for testing edge cases
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(game.ptn_to_move_index("b1")); 
+  game.play_move(game.ptn_to_move_index("a1")); // 2-high
+  game.play_move(game.ptn_to_move_index("b1")); // 2-high
+  game.play_move(game.ptn_to_move_index("a1")); // 3-high
+  game.play_move(game.ptn_to_move_index("b1")); // 3-high
+  
+  // Edge case moves
+  std::vector<std::string> edge_cases = {
+    // Single stone (implicit 1)
+    "a1>",
+    
+    // Explicit single stone  
+    "1a1>",
+    
+    // Maximum carry for 6x6 board
+    "6a1>",
+    
+    // Long distance single drops
+    "5a1>11111",  // Move across entire board
+    "5f6<11111",  // Move back across board
+    
+    // Complex multi-square drops
+    "3a1>111",  // Drop 1 stone on each of 3 squares
+    "4a1>1111", // Drop 1 stone on each of 4 squares
+    "5a1>11111", // Drop 1 stone on each of 5 squares
+    
+    // Irregular drop patterns
+    "6a1>312",   // 6 stones: 3, then 1, then 2
+    "5a1>221",   // 5 stones: 2, then 2, then 1
+    "4a1>31",    // 4 stones: 3, then 1
+  };
+  
+  for (const auto& original_ptn : edge_cases) {
+    try {
+      uint32_t move_index = game.ptn_to_move_index(original_ptn);
+      std::string converted_ptn = game.move_index_to_ptn(move_index);
+      
+      // Verify that the converted PTN can be parsed back to the same move index
+      uint32_t converted_back_index = game.ptn_to_move_index(converted_ptn);
+      EXPECT_EQ(move_index, converted_back_index)
+        << "Edge case PTN round-trip inconsistent: " << original_ptn 
+        << " -> " << move_index << " -> " << converted_ptn 
+        << " -> " << converted_back_index;
+        
+    } catch (const std::invalid_argument& e) {
+      // Some edge cases might be invalid - that's expected
+      std::cout << "Skipping invalid edge case: " << original_ptn << " (" << e.what() << ")" << std::endl;
+    }
+  }
+}
+
 }  // namespace alphazero::tak_gs

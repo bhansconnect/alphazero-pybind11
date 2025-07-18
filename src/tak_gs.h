@@ -166,6 +166,7 @@ class DLLEXPORT TakGS : public GameState {
   
   // PTN (Portable Tak Notation) methods
   [[nodiscard]] uint32_t ptn_to_move_index(const std::string& ptn_move) const;
+  [[nodiscard]] std::string move_index_to_ptn(uint32_t move) const;
   [[nodiscard]] std::pair<int, int> parse_ptn_algebraic(const std::string& square) const;
   
   void minimize_storage() override {}

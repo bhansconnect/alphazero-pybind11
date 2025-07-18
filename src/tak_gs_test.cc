@@ -1618,4 +1618,32 @@ TEST_F(TakGSTest, EmptyChildrenVectorBug) {
   }
 }
 
+TEST_F(TakGSTest, StackMoveOntoOther) {
+  TakGS<4> game{};
+  
+  // Set up a position with stacks for testing
+  game.play_move(game.ptn_to_move_index("a1"));
+  game.play_move(42);
+  game.play_move(game.ptn_to_move_index("b1"));
+  game.play_move(24);
+  game.play_move(game.ptn_to_move_index("b2"));
+  game.play_move(12);
+  game.play_move(game.ptn_to_move_index("b2<"));
+  game.play_move(15);
+  game.play_move(game.ptn_to_move_index("2a2>"));
+
+  game.play_move(game.ptn_to_move_index("d1"));
+  game.play_move(game.ptn_to_move_index("b3"));
+
+  game.play_move(game.ptn_to_move_index("d2"));
+  game.play_move(game.ptn_to_move_index("b4"));
+
+  std::cout << game.dump();
+  auto scores = game.scores();
+  EXPECT_TRUE(scores.has_value());
+  EXPECT_EQ((*scores)[0], 1.0f);  // Player 0 wins with horizontal road
+  EXPECT_EQ((*scores)[1], 0.0f);
+  EXPECT_EQ((*scores)[2], 0.0f);
+}
+
 }  // namespace alphazero::tak_gs

@@ -211,7 +211,6 @@ void TakGS<SIZE>::play_move(uint32_t move) {
     for (int i = 0; i < carry_count; ++i) {
       carry_stack.push_back(board_[from_idx].remove());
     }
-    std::reverse(carry_stack.begin(), carry_stack.end());
     
     auto [from_row, from_col] = index_to_square(from_idx);
     auto [to_row, to_col] = index_to_square(to_idx);

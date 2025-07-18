@@ -15,7 +15,7 @@ constexpr const int DEFAULT_SIZE = 5;
 constexpr const int MIN_SIZE = 4;
 constexpr const int MAX_SIZE = 6;
 
-constexpr const int MAX_HEIGHT = 30;
+constexpr const int MAX_HEIGHT = 32;
 constexpr const int NN_MAX_HEIGHT = 10;
 
 constexpr const int NUM_PLAYERS = 2;

@@ -3,9 +3,7 @@ from multiprocessing.pool import ThreadPool
 import threading
 import time
 import numpy as np
-from load_lib import load_alphazero
-
-alphazero = load_alphazero()
+import alphazero
 
 Game = alphazero.Connect4GS
 

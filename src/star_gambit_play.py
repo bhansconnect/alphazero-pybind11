@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Interactive Star Gambit player for testing and validation."""
 
-import sys
-sys.path.insert(0, 'build/src')
 import alphazero
 import numpy as np
 

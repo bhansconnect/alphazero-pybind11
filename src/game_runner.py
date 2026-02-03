@@ -11,10 +11,8 @@ import tqdm
 import queue
 import numpy as np
 import gc
-from load_lib import load_alphazero
+import alphazero
 from neural_net import get_device
-
-alphazero = load_alphazero()
 
 HIST_SIZE = 30_000
 HIST_LOCATION = os.path.join("data", "history")

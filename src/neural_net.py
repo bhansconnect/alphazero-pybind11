@@ -5,7 +5,7 @@ from torch import optim, nn
 from torch.autograd import profiler
 from tqdm import tqdm
 import numpy as np
-from load_lib import load_alphazero
+import alphazero
 
 # This is an autotuner for network speed.
 torch.backends.cudnn.benchmark = True
@@ -416,7 +416,6 @@ class NNWrapper:
 
 
 def bench_network():
-    alphazero = load_alphazero()
 
     Game = alphazero.OpenTaflGS
     depth = 4

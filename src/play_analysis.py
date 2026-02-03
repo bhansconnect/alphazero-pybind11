@@ -3,9 +3,7 @@ import os
 import torch
 import numpy as np
 import neural_net
-from load_lib import load_alphazero
-
-alphazero = load_alphazero()
+import alphazero
 
 Game = alphazero.Connect4GS
 

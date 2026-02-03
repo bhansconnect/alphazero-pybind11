@@ -1375,6 +1375,15 @@ std::string StarGambitGS<Config>::dump() const noexcept {
     out << "\n";
   };
 
+  // === Helper to calculate x position for a hex ===
+  auto hex_to_x = [&](int q, int r) {
+    int indent = std::abs(r) * ROW_INDENT_SCALE;
+    auto row_hexes = get_row_hexes(r, Config::BOARD_SIDE);
+    if (row_hexes.empty()) return -1;
+    int first_q = row_hexes[0].q;
+    return indent + (q - first_q) * H_STEP;
+  };
+
   // === Render diagonal edge line between rows r_above and r_below ===
   auto render_diagonal_line = [&](int r_above, int r_below) {
     std::vector<Hex> hexes_above = get_row_hexes(r_above, Config::BOARD_SIDE);
@@ -1396,36 +1405,46 @@ std::string StarGambitGS<Config>::dump() const noexcept {
     std::vector<std::string> line(line_width, " ");
 
     // Place arrows from hexes_above firing down (SE=5, SW=4)
-    if (!hexes_above.empty()) {
-      int first_q_above = hexes_above[0].q;
-      for (const auto& h : hexes_above) {
-        int idx = hex_to_index(h, Config::BOARD_SIDE);
-        int hex_x = indent_above + (h.q - first_q_above) * H_STEP;
+    // Arrow positioned at midpoint between source and target hex centers
+    for (const auto& h : hexes_above) {
+      int idx = hex_to_index(h, Config::BOARD_SIDE);
 
-        if (cannon_arrows.count({idx, 5})) {  // SE
-          int arrow_x = hex_x + HEX_WIDTH;
+      if (cannon_arrows.count({idx, 5})) {  // SE: target is (q, r+1)
+        int source_x = hex_to_x(h.q, r_above);
+        int target_x = hex_to_x(h.q, r_below);
+        if (source_x >= 0 && target_x >= 0) {
+          // Midpoint of hex centers: (source + HEX_WIDTH/2 + target + HEX_WIDTH/2) / 2
+          int arrow_x = (source_x + target_x) / 2 + HEX_WIDTH / 2;
           if (arrow_x >= 0 && arrow_x < line_width) line[arrow_x] = ARROWS[5];
         }
-        if (cannon_arrows.count({idx, 4})) {  // SW
-          int arrow_x = hex_x + 1;
+      }
+      if (cannon_arrows.count({idx, 4})) {  // SW: target is (q-1, r+1)
+        int source_x = hex_to_x(h.q, r_above);
+        int target_x = hex_to_x(h.q - 1, r_below);
+        if (source_x >= 0 && target_x >= 0) {
+          int arrow_x = (source_x + target_x) / 2 + HEX_WIDTH / 2;
           if (arrow_x >= 0 && arrow_x < line_width) line[arrow_x] = ARROWS[4];
         }
       }
     }
 
     // Place arrows from hexes_below firing up (NE=1, NW=2)
-    if (!hexes_below.empty()) {
-      int first_q_below = hexes_below[0].q;
-      for (const auto& h : hexes_below) {
-        int idx = hex_to_index(h, Config::BOARD_SIDE);
-        int hex_x = indent_below + (h.q - first_q_below) * H_STEP;
+    for (const auto& h : hexes_below) {
+      int idx = hex_to_index(h, Config::BOARD_SIDE);
 
-        if (cannon_arrows.count({idx, 1})) {  // NE
-          int arrow_x = hex_x + HEX_WIDTH;
+      if (cannon_arrows.count({idx, 1})) {  // NE: target is (q+1, r-1)
+        int source_x = hex_to_x(h.q, r_below);
+        int target_x = hex_to_x(h.q + 1, r_above);
+        if (source_x >= 0 && target_x >= 0) {
+          int arrow_x = (source_x + target_x) / 2 + HEX_WIDTH / 2;
           if (arrow_x >= 0 && arrow_x < line_width) line[arrow_x] = ARROWS[1];
         }
-        if (cannon_arrows.count({idx, 2})) {  // NW
-          int arrow_x = hex_x + 1;
+      }
+      if (cannon_arrows.count({idx, 2})) {  // NW: target is (q, r-1)
+        int source_x = hex_to_x(h.q, r_below);
+        int target_x = hex_to_x(h.q, r_above);
+        if (source_x >= 0 && target_x >= 0) {
+          int arrow_x = (source_x + target_x) / 2 + HEX_WIDTH / 2;
           if (arrow_x >= 0 && arrow_x < line_width) line[arrow_x] = ARROWS[2];
         }
       }

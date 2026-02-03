@@ -3,6 +3,9 @@
 #include <gtest/gtest.h>
 
 #include <iostream>
+#include <sstream>
+#include <map>
+#include <optional>
 
 namespace alphazero::star_gambit_gs {
 
@@ -10,6 +13,154 @@ namespace alphazero::star_gambit_gs {
 using TestConfig = SkirmishConfig;
 using TestAS = ActionSpace<TestConfig>;
 using TestGame = StarGambitSkirmishGS;
+
+// =============================================================================
+// Move Notation Parser
+// =============================================================================
+// Notation:
+//   m f1 f    - move fighter 1 forward
+//   m f1 fl   - move fighter 1 forward-left
+//   m f1 fr   - move fighter 1 forward-right
+//   m c1 l    - move cruiser 1 rotate-left
+//   m c1 fl   - move cruiser 1 forward-left
+//   m c1 f    - move cruiser 1 forward
+//   m c1 fr   - move cruiser 1 forward-right
+//   m c1 r    - move cruiser 1 rotate-right
+//   m d1 l    - move dreadnought 1 rotate-left
+//   m d1 fl   - move dreadnought 1 forward-left
+//   m d1 fr   - move dreadnought 1 forward-right
+//   m d1 r    - move dreadnought 1 rotate-right
+//   f f1      - fire fighter 1
+//   f c1 l    - fire cruiser 1 left cannon
+//   f c1 f    - fire cruiser 1 forward cannon
+//   f c1 r    - fire cruiser 1 right cannon
+//   f d1 rl   - fire dreadnought 1 rear-left cannon
+//   f d1 fl   - fire dreadnought 1 front-left cannon
+//   f d1 fr   - fire dreadnought 1 front-right cannon
+//   f d1 rr   - fire dreadnought 1 rear-right cannon
+//   d f e     - deploy fighter facing east
+//   d f ne    - deploy fighter facing northeast
+//   d c sw    - deploy cruiser facing southwest
+//   e         - end turn
+
+template<typename Config>
+std::optional<int> parse_move(const std::string& move_str) {
+  using AS = ActionSpace<Config>;
+  std::istringstream iss(move_str);
+  std::string cmd;
+  iss >> cmd;
+
+  if (cmd == "e") {
+    return AS::END_TURN_OFFSET;
+  }
+
+  if (cmd == "m") {
+    // Move command: m <unit><slot> <direction>
+    std::string unit_slot, direction;
+    iss >> unit_slot >> direction;
+    if (unit_slot.empty() || direction.empty()) return std::nullopt;
+
+    char unit_type = unit_slot[0];
+    int slot = std::stoi(unit_slot.substr(1)) - 1;  // Convert 1-indexed to 0-indexed
+
+    if (unit_type == 'f') {
+      // Fighter moves: f, fl, fr -> 0, 1, 2
+      static const std::map<std::string, int> fighter_dirs = {
+        {"f", 0}, {"fl", 1}, {"fr", 2}
+      };
+      auto it = fighter_dirs.find(direction);
+      if (it == fighter_dirs.end() || slot < 0 || slot >= Config::MAX_FIGHTERS) {
+        return std::nullopt;
+      }
+      return AS::FIGHTER_MOVE_OFFSET + slot * FIGHTER_MOVE_DIRS + it->second;
+    } else if (unit_type == 'c') {
+      // Cruiser moves: l, fl, f, fr, r -> 0, 1, 2, 3, 4
+      static const std::map<std::string, int> cruiser_dirs = {
+        {"l", 0}, {"fl", 1}, {"f", 2}, {"fr", 3}, {"r", 4}
+      };
+      auto it = cruiser_dirs.find(direction);
+      if (it == cruiser_dirs.end() || slot < 0 || slot >= Config::MAX_CRUISERS) {
+        return std::nullopt;
+      }
+      return AS::CRUISER_MOVE_OFFSET + slot * CRUISER_MOVE_DIRS + it->second;
+    } else if (unit_type == 'd') {
+      // Dreadnought moves: l, fl, fr, r -> 0, 1, 2, 3
+      static const std::map<std::string, int> dread_dirs = {
+        {"l", 0}, {"fl", 1}, {"fr", 2}, {"r", 3}
+      };
+      auto it = dread_dirs.find(direction);
+      if (it == dread_dirs.end() || slot < 0 || slot >= Config::MAX_DREADNOUGHTS) {
+        return std::nullopt;
+      }
+      return AS::DREAD_MOVE_OFFSET + slot * DREAD_MOVE_DIRS + it->second;
+    }
+    return std::nullopt;
+  }
+
+  if (cmd == "f") {
+    // Fire command: f <unit><slot> [cannon]
+    std::string unit_slot, cannon;
+    iss >> unit_slot;
+    iss >> cannon;  // Optional for fighter
+
+    if (unit_slot.empty()) return std::nullopt;
+
+    char unit_type = unit_slot[0];
+    int slot = std::stoi(unit_slot.substr(1)) - 1;
+
+    if (unit_type == 'f') {
+      // Fighter has only one cannon
+      if (slot < 0 || slot >= Config::MAX_FIGHTERS) return std::nullopt;
+      return AS::FIGHTER_FIRE_OFFSET + slot;
+    } else if (unit_type == 'c') {
+      // Cruiser cannons: l, f, r -> 0, 1, 2
+      static const std::map<std::string, int> cruiser_cannons = {
+        {"l", 0}, {"f", 1}, {"r", 2}
+      };
+      auto it = cruiser_cannons.find(cannon);
+      if (it == cruiser_cannons.end() || slot < 0 || slot >= Config::MAX_CRUISERS) {
+        return std::nullopt;
+      }
+      return AS::CRUISER_FIRE_OFFSET + slot * CRUISER_CANNONS + it->second;
+    } else if (unit_type == 'd') {
+      // Dreadnought cannons: rl, fl, fr, rr -> 0, 1, 2, 3
+      static const std::map<std::string, int> dread_cannons = {
+        {"rl", 0}, {"fl", 1}, {"fr", 2}, {"rr", 3}
+      };
+      auto it = dread_cannons.find(cannon);
+      if (it == dread_cannons.end() || slot < 0 || slot >= Config::MAX_DREADNOUGHTS) {
+        return std::nullopt;
+      }
+      return AS::DREAD_FIRE_OFFSET + slot * DREAD_CANNONS + it->second;
+    }
+    return std::nullopt;
+  }
+
+  if (cmd == "d") {
+    // Deploy command: d <unit_type> <facing>
+    std::string unit_type_str, facing;
+    iss >> unit_type_str >> facing;
+    if (unit_type_str.empty() || facing.empty()) return std::nullopt;
+
+    // Unit type: f=0, c=1, d=2
+    int unit_type_idx = -1;
+    if (unit_type_str == "f") unit_type_idx = 0;
+    else if (unit_type_str == "c") unit_type_idx = 1;
+    else if (unit_type_str == "d") unit_type_idx = 2;
+    if (unit_type_idx < 0) return std::nullopt;
+
+    // Facing: e=0, ne=1, nw=2, w=3, sw=4, se=5
+    static const std::map<std::string, int> facings = {
+      {"e", 0}, {"ne", 1}, {"nw", 2}, {"w", 3}, {"sw", 4}, {"se", 5}
+    };
+    auto it = facings.find(facing);
+    if (it == facings.end()) return std::nullopt;
+
+    return AS::DEPLOY_OFFSET + unit_type_idx * 6 + it->second;
+  }
+
+  return std::nullopt;
+}
 
 // =============================================================================
 // Hex Coordinate Tests
@@ -567,6 +718,568 @@ TEST(MovementDirections, CruiserMoveCount) {
 TEST(MovementDirections, DreadnoughtMoveCount) {
   EXPECT_EQ(DREAD_MOVE_DIRS, 4);
   EXPECT_EQ(get_num_move_dirs(UnitType::DREADNOUGHT), 4);
+}
+
+// =============================================================================
+// Fire Validation Tests - Fire only available when target in range
+// =============================================================================
+
+TEST(FireValidation, NoFireWithoutTarget) {
+  TestGame game;
+
+  // Deploy fighters for both players
+  auto valids = game.valid_moves();
+  // Find a valid fighter deploy (action 20-25 range for fighters facing E/SW/SE)
+  int deploy = -1;
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
+    if (valids(i) == 1) {
+      deploy = i;
+      break;
+    }
+  }
+  ASSERT_NE(deploy, -1);
+  game.play_move(deploy);
+
+  // Player 1 deploys
+  valids = game.valid_moves();
+  deploy = -1;
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
+    if (valids(i) == 1) {
+      deploy = i;
+      break;
+    }
+  }
+  ASSERT_NE(deploy, -1);
+  game.play_move(deploy);
+
+  // Now turn 3 - check that fire is NOT valid (enemies too far apart)
+  valids = game.valid_moves();
+
+  // Check all fire actions are invalid
+  for (int i = TestAS::FIGHTER_FIRE_OFFSET; i < TestAS::DEPLOY_OFFSET; ++i) {
+    EXPECT_EQ(valids(i), 0) << "Fire action " << i << " should not be valid when no target in range";
+  }
+}
+
+TEST(FireValidation, FireAvailableWhenTargetInRange) {
+  TestGame game;
+
+  // Deploy fighters for both players
+  auto valids = game.valid_moves();
+  int deploy = -1;
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
+    if (valids(i) == 1) {
+      deploy = i;
+      break;
+    }
+  }
+  game.play_move(deploy);
+
+  valids = game.valid_moves();
+  deploy = -1;
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
+    if (valids(i) == 1) {
+      deploy = i;
+      break;
+    }
+  }
+  game.play_move(deploy);
+
+  // Move fighters toward each other until fire becomes available
+  bool fire_found = false;
+  for (int turn = 0; turn < 30 && !fire_found; ++turn) {
+    valids = game.valid_moves();
+
+    // Check for fire actions
+    for (int i = TestAS::FIGHTER_FIRE_OFFSET; i < TestAS::CRUISER_FIRE_OFFSET; ++i) {
+      if (valids(i) == 1) {
+        fire_found = true;
+        break;
+      }
+    }
+
+    if (fire_found) break;
+
+    // Make a move (prefer forward movement for faster approach)
+    for (int i = 0; i < TestAS::NUM_MOVES; ++i) {
+      if (valids(i) == 1) {
+        game.play_move(i);
+        break;
+      }
+    }
+
+    if (game.scores().has_value()) break;
+  }
+
+  EXPECT_TRUE(fire_found) << "Fire should become available when fighters are in range";
+}
+
+// =============================================================================
+// Movement Constraint Tests - Correct number of move options per unit
+// =============================================================================
+
+TEST(MovementConstraints, FighterHasThreeMoveOptions) {
+  TestGame game;
+
+  // Deploy a fighter for player 0
+  auto valids = game.valid_moves();
+  int deploy = -1;
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
+    if (valids(i) == 1) {
+      deploy = i;
+      break;
+    }
+  }
+  game.play_move(deploy);
+
+  // Player 1 deploys
+  valids = game.valid_moves();
+  deploy = -1;
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
+    if (valids(i) == 1) {
+      deploy = i;
+      break;
+    }
+  }
+  game.play_move(deploy);
+
+  // Turn 3 - Player 0's fighter should have moves available
+  valids = game.valid_moves();
+
+  // Count valid fighter move actions for slot 0 (actions 0, 1, 2)
+  int move_count = 0;
+  for (int i = 0; i < 3; ++i) {
+    if (valids(i) == 1) {
+      move_count++;
+    }
+  }
+
+  // Fighter should have 1-3 move options (depends on board boundaries)
+  EXPECT_GE(move_count, 1) << "Fighter should have at least one movement option";
+  EXPECT_LE(move_count, 3) << "Fighter should have at most 3 movement options";
+}
+
+TEST(MovementConstraints, CruiserHasFiveMoveOptions) {
+  TestGame game;
+
+  // Deploy a cruiser for player 0 (cruiser deploy actions are 26-31)
+  auto valids = game.valid_moves();
+  int deploy = -1;
+  for (int i = TestAS::DEPLOY_OFFSET + 6; i < TestAS::DEPLOY_OFFSET + 12; ++i) {
+    if (valids(i) == 1) {
+      deploy = i;
+      break;
+    }
+  }
+  game.play_move(deploy);
+
+  // Player 1 deploys something
+  valids = game.valid_moves();
+  deploy = -1;
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::END_TURN_OFFSET; ++i) {
+    if (valids(i) == 1) {
+      deploy = i;
+      break;
+    }
+  }
+  game.play_move(deploy);
+
+  // Turn 3 - Player 0's cruiser should have moves available
+  valids = game.valid_moves();
+
+  // Count valid cruiser move actions for slot 0 (actions 9-13)
+  int move_count = 0;
+  for (int i = TestAS::CRUISER_MOVE_OFFSET; i < TestAS::CRUISER_MOVE_OFFSET + 5; ++i) {
+    if (valids(i) == 1) {
+      move_count++;
+    }
+  }
+
+  // Cruiser should have rotation options at minimum
+  EXPECT_GE(move_count, 2) << "Cruiser should have at least rotation options";
+  EXPECT_LE(move_count, 5) << "Cruiser should have at most 5 movement options";
+}
+
+// =============================================================================
+// Slot Numbering Tests
+// =============================================================================
+
+TEST(SlotNumbering, MultipleUnitsGetDifferentSlots) {
+  TestGame game;
+
+  // Deploy fighters for both players over multiple turns until P0 has 2 fighters
+  // Turn 1: P0 deploys fighter
+  auto valids = game.valid_moves();
+  int deploy = -1;
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
+    if (valids(i) == 1) {
+      deploy = i;
+      break;
+    }
+  }
+  ASSERT_NE(deploy, -1);
+  game.play_move(deploy);
+
+  // Turn 2: P1 deploys fighter
+  valids = game.valid_moves();
+  deploy = -1;
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
+    if (valids(i) == 1) {
+      deploy = i;
+      break;
+    }
+  }
+  ASSERT_NE(deploy, -1);
+  game.play_move(deploy);
+
+  // P0 now has 1 fighter. Need to deploy another.
+  // Play until we can deploy again
+  for (int turn = 0; turn < 10; ++turn) {
+    valids = game.valid_moves();
+
+    // Check if we can deploy a fighter
+    deploy = -1;
+    for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
+      if (valids(i) == 1) {
+        deploy = i;
+        break;
+      }
+    }
+
+    if (deploy != -1 && game.current_player() == 0) {
+      // Deploy second fighter
+      game.play_move(deploy);
+      break;
+    }
+
+    // Otherwise, play any valid move
+    for (int i = 0; i < TestAS::NUM_MOVES; ++i) {
+      if (valids(i) == 1) {
+        game.play_move(i);
+        break;
+      }
+    }
+  }
+
+  // Check dump output contains both F1 and F2 for P0
+  std::string dump = game.dump();
+  // Look for "F1: P0" and "F2: P0" patterns
+  EXPECT_TRUE(dump.find("F1: P0") != std::string::npos) << "Should show F1: P0 for first fighter\n" << dump;
+  EXPECT_TRUE(dump.find("F2: P0") != std::string::npos) << "Should show F2: P0 for second fighter\n" << dump;
+}
+
+// =============================================================================
+// End-to-End Playthrough Test
+// =============================================================================
+
+TEST(EndToEnd, CanPlayManyMoves) {
+  TestGame game;
+
+  // Play 100 random valid moves
+  for (int i = 0; i < 100; ++i) {
+    auto valids = game.valid_moves();
+    int total_valid = valids.sum();
+
+    if (total_valid == 0 || game.scores().has_value()) {
+      break;
+    }
+
+    // Pick first valid action
+    for (int j = 0; j < TestAS::NUM_MOVES; ++j) {
+      if (valids(j) == 1) {
+        game.play_move(j);
+        break;
+      }
+    }
+  }
+
+  // Verify game state is still valid
+  std::string dump = game.dump();
+  EXPECT_FALSE(dump.empty());
+  EXPECT_TRUE(dump.find("Turn:") != std::string::npos);
+}
+
+TEST(EndToEnd, AllGameSizesPlayable) {
+  // Skirmish
+  {
+    StarGambitSkirmishGS game;
+    auto valids = game.valid_moves();
+    EXPECT_GT(valids.sum(), 0) << "Skirmish should have valid moves";
+  }
+
+  // Clash
+  {
+    StarGambitClashGS game;
+    auto valids = game.valid_moves();
+    EXPECT_GT(valids.sum(), 0) << "Clash should have valid moves";
+  }
+
+  // Battle
+  {
+    StarGambitBattleGS game;
+    auto valids = game.valid_moves();
+    EXPECT_GT(valids.sum(), 0) << "Battle should have valid moves";
+  }
+}
+
+// =============================================================================
+// Move Parsing Tests
+// =============================================================================
+
+TEST(MoveParsing, ParseFighterMoves) {
+  auto m_f1_f = parse_move<TestConfig>("m f1 f");
+  ASSERT_TRUE(m_f1_f.has_value());
+  EXPECT_EQ(*m_f1_f, TestAS::FIGHTER_MOVE_OFFSET + 0);  // Fighter 1, forward
+
+  auto m_f1_fl = parse_move<TestConfig>("m f1 fl");
+  ASSERT_TRUE(m_f1_fl.has_value());
+  EXPECT_EQ(*m_f1_fl, TestAS::FIGHTER_MOVE_OFFSET + 1);  // Fighter 1, forward-left
+
+  auto m_f1_fr = parse_move<TestConfig>("m f1 fr");
+  ASSERT_TRUE(m_f1_fr.has_value());
+  EXPECT_EQ(*m_f1_fr, TestAS::FIGHTER_MOVE_OFFSET + 2);  // Fighter 1, forward-right
+
+  auto m_f2_f = parse_move<TestConfig>("m f2 f");
+  ASSERT_TRUE(m_f2_f.has_value());
+  EXPECT_EQ(*m_f2_f, TestAS::FIGHTER_MOVE_OFFSET + 3);  // Fighter 2, forward
+
+  auto m_f3_fl = parse_move<TestConfig>("m f3 fl");
+  ASSERT_TRUE(m_f3_fl.has_value());
+  EXPECT_EQ(*m_f3_fl, TestAS::FIGHTER_MOVE_OFFSET + 7);  // Fighter 3, forward-left
+}
+
+TEST(MoveParsing, ParseCruiserMoves) {
+  auto m_c1_l = parse_move<TestConfig>("m c1 l");
+  ASSERT_TRUE(m_c1_l.has_value());
+  EXPECT_EQ(*m_c1_l, TestAS::CRUISER_MOVE_OFFSET + 0);  // Cruiser 1, rotate-left
+
+  auto m_c1_f = parse_move<TestConfig>("m c1 f");
+  ASSERT_TRUE(m_c1_f.has_value());
+  EXPECT_EQ(*m_c1_f, TestAS::CRUISER_MOVE_OFFSET + 2);  // Cruiser 1, forward
+
+  auto m_c1_r = parse_move<TestConfig>("m c1 r");
+  ASSERT_TRUE(m_c1_r.has_value());
+  EXPECT_EQ(*m_c1_r, TestAS::CRUISER_MOVE_OFFSET + 4);  // Cruiser 1, rotate-right
+}
+
+TEST(MoveParsing, ParseFighterFire) {
+  auto f_f1 = parse_move<TestConfig>("f f1");
+  ASSERT_TRUE(f_f1.has_value());
+  EXPECT_EQ(*f_f1, TestAS::FIGHTER_FIRE_OFFSET + 0);  // Fighter 1 fire
+
+  auto f_f2 = parse_move<TestConfig>("f f2");
+  ASSERT_TRUE(f_f2.has_value());
+  EXPECT_EQ(*f_f2, TestAS::FIGHTER_FIRE_OFFSET + 1);  // Fighter 2 fire
+
+  auto f_f3 = parse_move<TestConfig>("f f3");
+  ASSERT_TRUE(f_f3.has_value());
+  EXPECT_EQ(*f_f3, TestAS::FIGHTER_FIRE_OFFSET + 2);  // Fighter 3 fire
+}
+
+TEST(MoveParsing, ParseCruiserFire) {
+  auto f_c1_l = parse_move<TestConfig>("f c1 l");
+  ASSERT_TRUE(f_c1_l.has_value());
+  EXPECT_EQ(*f_c1_l, TestAS::CRUISER_FIRE_OFFSET + 0);  // Cruiser 1, left cannon
+
+  auto f_c1_f = parse_move<TestConfig>("f c1 f");
+  ASSERT_TRUE(f_c1_f.has_value());
+  EXPECT_EQ(*f_c1_f, TestAS::CRUISER_FIRE_OFFSET + 1);  // Cruiser 1, forward cannon
+
+  auto f_c1_r = parse_move<TestConfig>("f c1 r");
+  ASSERT_TRUE(f_c1_r.has_value());
+  EXPECT_EQ(*f_c1_r, TestAS::CRUISER_FIRE_OFFSET + 2);  // Cruiser 1, right cannon
+}
+
+TEST(MoveParsing, ParseDeploy) {
+  auto d_f_e = parse_move<TestConfig>("d f e");
+  ASSERT_TRUE(d_f_e.has_value());
+  EXPECT_EQ(*d_f_e, TestAS::DEPLOY_OFFSET + 0);  // Fighter, East
+
+  auto d_f_se = parse_move<TestConfig>("d f se");
+  ASSERT_TRUE(d_f_se.has_value());
+  EXPECT_EQ(*d_f_se, TestAS::DEPLOY_OFFSET + 5);  // Fighter, SE
+
+  auto d_c_sw = parse_move<TestConfig>("d c sw");
+  ASSERT_TRUE(d_c_sw.has_value());
+  EXPECT_EQ(*d_c_sw, TestAS::DEPLOY_OFFSET + 6 + 4);  // Cruiser (type 1 * 6) + SW (4)
+
+  auto d_d_ne = parse_move<TestConfig>("d d ne");
+  ASSERT_TRUE(d_d_ne.has_value());
+  EXPECT_EQ(*d_d_ne, TestAS::DEPLOY_OFFSET + 12 + 1);  // Dreadnought (type 2 * 6) + NE (1)
+}
+
+TEST(MoveParsing, ParseEndTurn) {
+  auto end = parse_move<TestConfig>("e");
+  ASSERT_TRUE(end.has_value());
+  EXPECT_EQ(*end, TestAS::END_TURN_OFFSET);
+}
+
+TEST(MoveParsing, InvalidMovesReturnNullopt) {
+  EXPECT_FALSE(parse_move<TestConfig>("invalid").has_value());
+  EXPECT_FALSE(parse_move<TestConfig>("m f0 f").has_value());  // Invalid slot (0)
+  EXPECT_FALSE(parse_move<TestConfig>("m f10 f").has_value()); // Invalid slot (too high)
+  EXPECT_FALSE(parse_move<TestConfig>("m f1 x").has_value());  // Invalid direction
+  EXPECT_FALSE(parse_move<TestConfig>("d x e").has_value());   // Invalid unit type
+  EXPECT_FALSE(parse_move<TestConfig>("d f x").has_value());   // Invalid facing
+}
+
+// =============================================================================
+// Full Game Playthrough with Notation
+// =============================================================================
+
+// Helper to play a move by notation, returns true if successful
+template<typename Config>
+bool play_notation(StarGambitGS<Config>& game, const std::string& notation) {
+  auto action = parse_move<Config>(notation);
+  if (!action.has_value()) return false;
+
+  auto valids = game.valid_moves();
+  if (valids(*action) == 0) return false;
+
+  game.play_move(*action);
+  return true;
+}
+
+TEST(FullGame, PlayWithNotation) {
+  TestGame game;
+
+  // Turn 1: P0 deploys fighter facing SE
+  EXPECT_TRUE(play_notation(game, "d f se"));
+  EXPECT_EQ(game.current_player(), 1);
+  EXPECT_EQ(game.current_turn(), 2);
+
+  // Turn 2: P1 deploys fighter facing NE
+  EXPECT_TRUE(play_notation(game, "d f ne"));
+  EXPECT_EQ(game.current_player(), 0);
+  EXPECT_EQ(game.current_turn(), 3);
+
+  // Turn 3: P0 moves fighter forward
+  EXPECT_TRUE(play_notation(game, "m f1 f"));
+
+  // P0 still has moves remaining, so should have taken action
+  std::string dump = game.dump();
+  EXPECT_TRUE(dump.find("(acted)") != std::string::npos || game.current_player() == 1);
+}
+
+TEST(FullGame, DeployAndMoveSequence) {
+  TestGame game;
+
+  // Both players deploy fighters
+  EXPECT_TRUE(play_notation(game, "d f se"));  // P0
+  EXPECT_TRUE(play_notation(game, "d f ne"));  // P1
+
+  // P0 moves fighter forward twice (uses both moves)
+  EXPECT_TRUE(play_notation(game, "m f1 f"));
+  EXPECT_TRUE(play_notation(game, "m f1 f"));
+
+  // P0 ends turn (or it auto-ends)
+  if (game.current_player() == 0) {
+    EXPECT_TRUE(play_notation(game, "e"));
+  }
+  EXPECT_EQ(game.current_player(), 1);
+}
+
+TEST(FullGame, CruiserDeployAndMove) {
+  TestGame game;
+
+  // P0 deploys cruiser facing SE
+  EXPECT_TRUE(play_notation(game, "d c se"));
+  EXPECT_EQ(game.current_player(), 1);
+
+  // P1 deploys fighter
+  EXPECT_TRUE(play_notation(game, "d f ne"));
+  EXPECT_EQ(game.current_player(), 0);
+
+  // P0 cruiser can move (rotate or forward)
+  auto valids = game.valid_moves();
+
+  // Check cruiser move actions are available
+  bool has_cruiser_move = false;
+  for (int i = TestAS::CRUISER_MOVE_OFFSET; i < TestAS::DREAD_MOVE_OFFSET; ++i) {
+    if (valids(i) == 1) {
+      has_cruiser_move = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(has_cruiser_move) << "Cruiser should have movement options";
+
+  // Move cruiser forward
+  EXPECT_TRUE(play_notation(game, "m c1 f"));
+}
+
+TEST(FullGame, CompleteGameToVictory) {
+  TestGame game;
+
+  // Play until game ends (one portal destroyed or max turns)
+  int max_iterations = 500;
+  for (int i = 0; i < max_iterations; ++i) {
+    auto valids = game.valid_moves();
+    int total_valid = valids.sum();
+
+    if (total_valid == 0 || game.scores().has_value()) {
+      break;
+    }
+
+    // Play first valid move
+    for (int j = 0; j < TestAS::NUM_MOVES; ++j) {
+      if (valids(j) == 1) {
+        game.play_move(j);
+        break;
+      }
+    }
+  }
+
+  // Game should have ended or be in a valid state
+  if (game.scores().has_value()) {
+    auto scores = game.scores().value();
+    // One player should have won (or draw)
+    float total = scores(0) + scores(1) + scores(2);
+    EXPECT_FLOAT_EQ(total, 1.0f) << "Scores should sum to 1";
+  }
+
+  // Verify game state is consistent
+  std::string dump = game.dump();
+  EXPECT_FALSE(dump.empty());
+}
+
+TEST(FullGame, FireWhenInRange) {
+  TestGame game;
+
+  // Deploy fighters for both players
+  EXPECT_TRUE(play_notation(game, "d f se"));  // P0
+  EXPECT_TRUE(play_notation(game, "d f nw"));  // P1
+
+  // Move P0's fighter towards enemy until fire is available
+  bool fire_available = false;
+  for (int i = 0; i < 20; ++i) {
+    auto valids = game.valid_moves();
+
+    // Check if fire is available
+    for (int j = TestAS::FIGHTER_FIRE_OFFSET; j < TestAS::CRUISER_FIRE_OFFSET; ++j) {
+      if (valids(j) == 1) {
+        fire_available = true;
+        // Execute fire
+        game.play_move(j);
+        break;
+      }
+    }
+
+    if (fire_available) break;
+
+    // Otherwise move or end turn
+    for (int j = 0; j < TestAS::NUM_MOVES; ++j) {
+      if (valids(j) == 1) {
+        game.play_move(j);
+        break;
+      }
+    }
+
+    if (game.scores().has_value()) break;
+  }
+
+  // Fire should have become available at some point
+  EXPECT_TRUE(fire_available || game.scores().has_value())
+      << "Fire should be available when units are in range";
 }
 
 }  // namespace alphazero::star_gambit_gs

@@ -11,8 +11,8 @@ from neural_net import NNWrapper, NNArgs, get_device
 import torch
 import numpy as np
 
-# Use Star Gambit
-Game = alphazero.StarGambitGS
+# Use Star Gambit (Skirmish variant - 3F, 1C, 0D, 39 actions)
+Game = alphazero.StarGambitSkirmishGS
 
 # Minimal network for fast testing
 DEPTH = 2

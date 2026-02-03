@@ -1,4 +1,4 @@
-from load_lib import load_alphazero
+import alphazero
 import neural_net
 from game_runner import GameRunner, GRArgs, RandPlayer, base_params, elo_prob, USE_CUDA
 import glob
@@ -9,7 +9,6 @@ import gc
 import tqdm
 
 np.set_printoptions(precision=3, suppress=True)
-alphazero = load_alphazero()
 
 
 def calc_elo(past_elo, win_rates):

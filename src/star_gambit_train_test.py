@@ -6,15 +6,10 @@ import sys
 import gc
 import shutil
 
-# Setup path
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-
-from load_lib import load_alphazero
+import alphazero
 from neural_net import NNWrapper, NNArgs, get_device
 import torch
 import numpy as np
-
-alphazero = load_alphazero()
 
 # Use Star Gambit
 Game = alphazero.StarGambitGS

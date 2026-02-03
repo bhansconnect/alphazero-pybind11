@@ -1,5 +1,5 @@
 py_mod = import('python')
-py3_install = py_mod.find_installation('python3')
+py3_install = py_mod.find_installation('python3', pure: false)
 py3_dep = py3_install.dependency()
 pybind11_proj = subproject('pybind11')
 pybind11_dep = pybind11_proj.get_variable('pybind11_dep')
@@ -178,4 +178,5 @@ py3_install.extension_module(
   sources: ['py_wrapper.cc'],
   link_with: [connect4_gs, onitama_gs, brandubh_gs, opentafl_gs, tawlbwrdd_gs, star_gambit_gs, play_manager, mcts],
   dependencies : [pybind11_dep, py3_dep, eigen_dep, absl_container_dep, absl_hash_dep],
+  install: true,
 )

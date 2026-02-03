@@ -5,10 +5,9 @@ import os
 import numpy as np
 import gc
 import tqdm
-from load_lib import load_alphazero
+import alphazero
 
 np.set_printoptions(precision=3, suppress=True)
-alphazero = load_alphazero()
 
 
 def pit_agents(Game, players, mcts_depths, bs, name):

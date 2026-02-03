@@ -3,9 +3,7 @@ import os
 import torch
 import numpy as np
 import time
-from load_lib import load_alphazero
-
-alphazero = load_alphazero()
+import alphazero
 
 THINK_TIME = 9.5
 CPUCT = 1.25

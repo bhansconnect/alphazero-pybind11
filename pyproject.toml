@@ -1,0 +1,11 @@
+[build-system]
+requires = ["meson-python", "meson", "ninja", "pybind11"]
+build-backend = "mesonpy"
+
+[project]
+name = "alphazero"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = ["ninja", "meson", "pybind11"]

@@ -42,6 +42,20 @@ Building the project is pretty simple once you have the dependencies.
 
 1. Build the C++ `ninja -C build test`. There will be warnings, but my minimal tests should pass. For Windows, you may need to build through the meson wrapper with `meson compile -C build && meson test -C build`
 
+### Install Python Package
+
+After building, install the Python package in editable mode so `import alphazero` works from anywhere:
+
+```bash
+# Install build tools (one time)
+pip install meson-python meson ninja pybind11
+
+# Install package in editable mode (--no-build-isolation is required for meson-python editable installs)
+pip install --no-build-isolation -e .
+```
+
+The editable install will automatically rebuild when you import `alphazero` after making C++ changes.
+
 ## How to Use
 
 ### Just Running Something

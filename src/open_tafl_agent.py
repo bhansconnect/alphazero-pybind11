@@ -1,7 +1,7 @@
 # Used to enable the network to play against other AI in OpenTafl.
 # Long term it may want to be moved to ONNX(probably in C++)
 
-from load_lib import load_alphazero
+import alphazero
 import argparse
 import neural_net
 import time
@@ -11,7 +11,6 @@ import torch
 import numpy as np
 
 np.set_printoptions(precision=3, suppress=True)
-alphazero = load_alphazero()
 
 
 def calc_temp(start_temp, end_temp, decay, turn):

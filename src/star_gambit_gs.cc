@@ -1246,27 +1246,40 @@ std::string StarGambitGS<Config>::dump() const noexcept {
       << " C=" << static_cast<int>(reserves_[1][1])
       << " D=" << static_cast<int>(reserves_[1][2]) << "\n";
 
-  std::map<int, std::string> hex_display;
+  // === Rendering constants ===
+  constexpr int HEX_WIDTH = 4;       // " F1 " or "  . "
+  constexpr int H_GAP = 2;           // space for E/W arrows
+  constexpr int H_STEP = HEX_WIDTH + H_GAP;  // 6 chars per hex
+  constexpr int ROW_INDENT_SCALE = H_STEP / 2;  // 3 chars offset per row
+
+  // Unicode arrows by direction index
+  const char* ARROWS[6] = {"→", "↗", "↖", "←", "↙", "↘"};
+
+  // === Build hex display map (piece IDs with colors) ===
+  struct HexDisplayInfo {
+    std::string id;     // "F1", "C2", etc.
+    int player;         // for coloring
+    bool has_unit;
+  };
+  std::map<int, HexDisplayInfo> hex_display;
+
+  // === Build cannon arrows set: (source_hex_index, direction) ===
+  std::set<std::pair<int, int>> cannon_arrows;
+
   for (const auto& unit : units_) {
     if (!unit.is_alive()) continue;
 
-    char symbol;
+    // Build piece ID: type char + slot number
+    char type_char;
     switch (unit.type) {
-      case UnitType::FIGHTER: symbol = 'F'; break;
-      case UnitType::CRUISER: symbol = 'C'; break;
-      case UnitType::DREADNOUGHT: symbol = 'D'; break;
-      case UnitType::PORTAL: symbol = 'P'; break;
+      case UnitType::FIGHTER: type_char = 'F'; break;
+      case UnitType::CRUISER: type_char = 'C'; break;
+      case UnitType::DREADNOUGHT: type_char = 'D'; break;
+      case UnitType::PORTAL: type_char = 'P'; break;
     }
+    std::string piece_id = std::string(1, type_char) + std::to_string(unit.slot + 1);
 
-    std::string display;
-    if (unit.player == 0) {
-      display = color::Modifier(color::FG_RED).dump() + symbol +
-                color::Modifier(color::FG_DEFAULT).dump();
-    } else {
-      display = color::Modifier(color::FG_BLUE).dump() + symbol +
-                color::Modifier(color::FG_DEFAULT).dump();
-    }
-
+    // Get all hexes occupied by this unit
     std::vector<Hex> hexes;
     if (unit.type == UnitType::PORTAL) {
       hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
@@ -1274,34 +1287,175 @@ std::string StarGambitGS<Config>::dump() const noexcept {
       hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
     }
 
+    // Store display info for each occupied hex
     for (const auto& h : hexes) {
       int idx = hex_to_index(h, Config::BOARD_SIDE);
       if (idx >= 0) {
-        hex_display[idx] = display;
+        hex_display[idx] = {piece_id, unit.player, true};
+      }
+    }
+
+    // Get cannon info and compute firing directions
+    if (unit.type != UnitType::PORTAL) {
+      auto cannons = get_cannon_info(unit.type);
+      for (const auto& cannon : cannons) {
+        if (cannon.source_hex_idx < static_cast<int>(hexes.size())) {
+          Hex source_hex = hexes[cannon.source_hex_idx];
+          int fire_dir = rotate_direction(unit.facing, cannon.direction_offset);
+          int source_idx = hex_to_index(source_hex, Config::BOARD_SIDE);
+          if (source_idx >= 0) {
+            cannon_arrows.insert({source_idx, fire_dir});
+          }
+        }
       }
     }
   }
 
-  out << "\nBoard:\n";
-  for (int r = -(Config::BOARD_SIDE - 1); r < Config::BOARD_SIDE; ++r) {
-    int indent = std::abs(r);
+  // === Helper to get valid hexes for a row ===
+  auto get_row_hexes = [](int r, int board_side) {
+    std::vector<Hex> row_hexes;
+    for (int q = -(board_side - 1); q < board_side; ++q) {
+      int s = -q - r;
+      if (std::abs(q) < board_side && std::abs(r) < board_side &&
+          std::abs(s) < board_side) {
+        row_hexes.push_back({static_cast<int8_t>(q), static_cast<int8_t>(r)});
+      }
+    }
+    return row_hexes;
+  };
+
+  // === Render hex content line ===
+  auto render_hex_line = [&](int r) {
+    std::vector<Hex> row_hexes = get_row_hexes(r, Config::BOARD_SIDE);
+    if (row_hexes.empty()) return;
+
+    int indent = std::abs(r) * ROW_INDENT_SCALE;
     out << std::string(indent, ' ');
 
-    for (int q = -(Config::BOARD_SIDE - 1); q < Config::BOARD_SIDE; ++q) {
-      int s = -q - r;
-      if (std::abs(q) < Config::BOARD_SIDE && std::abs(r) < Config::BOARD_SIDE &&
-          std::abs(s) < Config::BOARD_SIDE) {
-        Hex h = {static_cast<int8_t>(q), static_cast<int8_t>(r)};
-        int idx = hex_to_index(h, Config::BOARD_SIDE);
-        if (hex_display.count(idx)) {
-          out << hex_display[idx] << " ";
+    for (size_t i = 0; i < row_hexes.size(); ++i) {
+      Hex h = row_hexes[i];
+      int idx = hex_to_index(h, Config::BOARD_SIDE);
+
+      // Render hex content (4 chars)
+      if (hex_display.count(idx) && hex_display[idx].has_unit) {
+        const auto& info = hex_display[idx];
+        std::string colored_id;
+        if (info.player == 0) {
+          colored_id = color::Modifier(color::FG_RED).dump() + info.id +
+                       color::Modifier(color::FG_DEFAULT).dump();
         } else {
-          out << ". ";
+          colored_id = color::Modifier(color::FG_BLUE).dump() + info.id +
+                       color::Modifier(color::FG_DEFAULT).dump();
+        }
+        // Pad to 4 visible chars (ID is 2 chars)
+        out << " " << colored_id << " ";
+      } else {
+        out << " .  ";  // 4 chars: space, dot, 2 spaces
+      }
+
+      // Render gap after this hex (2 chars) - contains E/W arrows
+      if (i < row_hexes.size() - 1) {
+        Hex next = row_hexes[i + 1];
+        int next_idx = hex_to_index(next, Config::BOARD_SIDE);
+
+        bool arrow_e = cannon_arrows.count({idx, 0}) > 0;       // current fires E
+        bool arrow_w = cannon_arrows.count({next_idx, 3}) > 0;  // next fires W
+
+        if (arrow_e && arrow_w) {
+          out << "↔ ";  // both directions + space (2 visual chars)
+        } else if (arrow_e) {
+          out << "→ ";  // arrow + space (2 visual chars)
+        } else if (arrow_w) {
+          out << " ←";  // space + arrow (2 visual chars)
+        } else {
+          out << "  ";  // 2 spaces for empty gap
         }
       }
     }
     out << "\n";
+  };
+
+  // === Render diagonal edge line between rows r_above and r_below ===
+  auto render_diagonal_line = [&](int r_above, int r_below) {
+    std::vector<Hex> hexes_above = get_row_hexes(r_above, Config::BOARD_SIDE);
+    std::vector<Hex> hexes_below = get_row_hexes(r_below, Config::BOARD_SIDE);
+
+    if (hexes_above.empty() && hexes_below.empty()) return;
+
+    int indent_above = std::abs(r_above) * ROW_INDENT_SCALE;
+    int indent_below = std::abs(r_below) * ROW_INDENT_SCALE;
+
+    // Calculate line width needed
+    int width_above = hexes_above.empty() ? 0 :
+        indent_above + static_cast<int>(hexes_above.size()) * H_STEP;
+    int width_below = hexes_below.empty() ? 0 :
+        indent_below + static_cast<int>(hexes_below.size()) * H_STEP;
+    int line_width = std::max(width_above, width_below) + H_STEP;
+
+    // Build the line as a vector of characters (using strings for multi-byte)
+    std::vector<std::string> line(line_width, " ");
+
+    // Place arrows from hexes_above firing down (SE=5, SW=4)
+    if (!hexes_above.empty()) {
+      int first_q_above = hexes_above[0].q;
+      for (const auto& h : hexes_above) {
+        int idx = hex_to_index(h, Config::BOARD_SIDE);
+        int hex_x = indent_above + (h.q - first_q_above) * H_STEP;
+
+        if (cannon_arrows.count({idx, 5})) {  // SE
+          int arrow_x = hex_x + HEX_WIDTH;
+          if (arrow_x >= 0 && arrow_x < line_width) line[arrow_x] = ARROWS[5];
+        }
+        if (cannon_arrows.count({idx, 4})) {  // SW
+          int arrow_x = hex_x + 1;
+          if (arrow_x >= 0 && arrow_x < line_width) line[arrow_x] = ARROWS[4];
+        }
+      }
+    }
+
+    // Place arrows from hexes_below firing up (NE=1, NW=2)
+    if (!hexes_below.empty()) {
+      int first_q_below = hexes_below[0].q;
+      for (const auto& h : hexes_below) {
+        int idx = hex_to_index(h, Config::BOARD_SIDE);
+        int hex_x = indent_below + (h.q - first_q_below) * H_STEP;
+
+        if (cannon_arrows.count({idx, 1})) {  // NE
+          int arrow_x = hex_x + HEX_WIDTH;
+          if (arrow_x >= 0 && arrow_x < line_width) line[arrow_x] = ARROWS[1];
+        }
+        if (cannon_arrows.count({idx, 2})) {  // NW
+          int arrow_x = hex_x + 1;
+          if (arrow_x >= 0 && arrow_x < line_width) line[arrow_x] = ARROWS[2];
+        }
+      }
+    }
+
+    // Output the line
+    for (const auto& ch : line) {
+      out << ch;
+    }
+    out << "\n";
+  };
+
+  // === Render the board ===
+  out << "\nBoard:\n";
+
+  int min_r = -(Config::BOARD_SIDE - 1);
+  int max_r = Config::BOARD_SIDE - 1;
+
+  for (int r = min_r; r <= max_r; ++r) {
+    // Diagonal edge line above this row (between r-1 and r)
+    if (r > min_r) {
+      render_diagonal_line(r - 1, r);
+    }
+
+    // Hex content line for row r
+    render_hex_line(r);
   }
+
+  // Final diagonal edge line below last row
+  render_diagonal_line(max_r, max_r + 1);
 
   out << "\nUnits:\n";
   for (const auto& u : units_) {

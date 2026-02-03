@@ -6,6 +6,7 @@
 #include "opentafl_gs.h"
 #include "photosynthesis_gs.h"
 #include "play_manager.h"
+#include "star_gambit_gs.h"
 #include "pybind11/eigen.h"
 #include "pybind11/numpy.h"
 #include "pybind11/pybind11.h"
@@ -23,6 +24,13 @@ using connect4_gs::Connect4GS;
 using onitama_gs::OnitamaGS;
 using opentafl_gs::OpenTaflGS;
 using photosynthesis_gs::PhotosynthesisGS;
+using star_gambit_gs::StarGambitSkirmishGS;
+using star_gambit_gs::StarGambitClashGS;
+using star_gambit_gs::StarGambitBattleGS;
+using star_gambit_gs::SkirmishConfig;
+using star_gambit_gs::ClashConfig;
+using star_gambit_gs::BattleConfig;
+using star_gambit_gs::ActionSpace;
 using tawlbwrdd_gs::TawlbwrddGS;
 
 // NOLINTNEXTLINE
@@ -345,6 +353,33 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_SYMMETRIES", [] { return connect4_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return connect4_gs::CANONICAL_SHAPE; });
+
+  // Star Gambit - Skirmish (3F, 1C, 0D, 5-side board)
+  py::class_<StarGambitSkirmishGS, GameState>(m, "StarGambitSkirmishGS")
+      .def(py::init<>())
+      .def_static("NUM_PLAYERS", [] { return star_gambit_gs::NUM_PLAYERS; })
+      .def_static("NUM_MOVES", [] { return ActionSpace<SkirmishConfig>::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
+      .def_static("CANONICAL_SHAPE",
+                  [] { return ActionSpace<SkirmishConfig>::CANONICAL_SHAPE; });
+
+  // Star Gambit - Clash (3F, 2C, 1D, 5-side board)
+  py::class_<StarGambitClashGS, GameState>(m, "StarGambitClashGS")
+      .def(py::init<>())
+      .def_static("NUM_PLAYERS", [] { return star_gambit_gs::NUM_PLAYERS; })
+      .def_static("NUM_MOVES", [] { return ActionSpace<ClashConfig>::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
+      .def_static("CANONICAL_SHAPE",
+                  [] { return ActionSpace<ClashConfig>::CANONICAL_SHAPE; });
+
+  // Star Gambit - Battle (4F, 3C, 2D, 6-side board)
+  py::class_<StarGambitBattleGS, GameState>(m, "StarGambitBattleGS")
+      .def(py::init<>())
+      .def_static("NUM_PLAYERS", [] { return star_gambit_gs::NUM_PLAYERS; })
+      .def_static("NUM_MOVES", [] { return ActionSpace<BattleConfig>::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
+      .def_static("CANONICAL_SHAPE",
+                  [] { return ActionSpace<BattleConfig>::CANONICAL_SHAPE; });
 
   py::class_<PhotosynthesisGS<2>, GameState>(m, "PhotosynthesisGS2")
       .def(py::init<>())

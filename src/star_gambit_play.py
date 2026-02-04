@@ -1,9 +1,26 @@
 #!/usr/bin/env python3
-"""Interactive Star Gambit player for testing and validation."""
+"""Interactive Star Gambit player with AI support.
+
+Features:
+- Human vs Human, Human vs AI, AI vs AI modes
+- MCTS-based AI with configurable network, time/node limits, temperature
+- Per-player AI configuration
+- Move probability annotations
+"""
 
 import alphazero
 import numpy as np
+import time
+import os
 import readline  # Enable line editing (backspace, arrow keys) in input()
+
+try:
+    import torch
+    import neural_net
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    print("Warning: torch/neural_net not available. AI features disabled.")
 
 # ANSI color codes
 RED = '\033[91m'
@@ -85,6 +102,183 @@ DREAD_CANNON_DETAIL = ['rear-right cannon', 'front-right cannon', 'front-left ca
 # Type names for display
 TYPE_NAMES = ['Fighter', 'Cruiser', 'Dreadnought', 'Portal']
 TYPE_CHARS = ['F', 'C', 'D', 'P']
+
+# Default AI parameters
+DEFAULT_CPUCT = 1.25
+DEFAULT_FPU_REDUCTION = 0.25
+DEFAULT_TEMPERATURE = 0.5
+DEFAULT_NODE_LIMIT = 100
+
+
+class PlayerConfig:
+    """Configuration for a single player (human or AI)."""
+    def __init__(self):
+        self.is_ai = False
+        self.network_path = None  # None means random
+        self.network = None       # Loaded network wrapper
+        self.think_time = None    # Seconds, or None for no time limit
+        self.node_limit = DEFAULT_NODE_LIMIT  # Max nodes, or None for no limit
+        self.temperature = DEFAULT_TEMPERATURE
+        self.mcts = None          # MCTS instance (reset on network change)
+        self.show_hints = False   # Show AI analysis on human turns
+
+    def __str__(self):
+        if not self.is_ai:
+            hints_str = ", hints=on" if self.show_hints else ""
+            return f"Human{hints_str}"
+        net_str = os.path.basename(self.network_path) if self.network_path else "random"
+        time_str = f"{self.think_time}s" if self.think_time else "unlimited"
+        node_str = str(self.node_limit) if self.node_limit else "unlimited"
+        return f"AI(net={net_str}, time={time_str}, nodes={node_str}, temp={self.temperature})"
+
+
+class GameContext:
+    """Global game context with player configurations."""
+    def __init__(self, game, cfg, game_class):
+        self.game = game
+        self.cfg = cfg
+        self.game_class = game_class
+        self.players = [PlayerConfig(), PlayerConfig()]
+        self.auto_play = False  # Auto-play mode vs manual selection
+        self.cpuct = DEFAULT_CPUCT
+        self.fpu_reduction = DEFAULT_FPU_REDUCTION
+
+
+def create_mcts(game_class, cpuct=DEFAULT_CPUCT, fpu_reduction=DEFAULT_FPU_REDUCTION):
+    """Create a new MCTS instance for the game."""
+    return alphazero.MCTS(
+        cpuct,
+        game_class.NUM_PLAYERS(),
+        game_class.NUM_MOVES(),
+        0.25,  # epsilon for Dirichlet noise
+        1.4,   # alpha for Dirichlet noise
+        fpu_reduction
+    )
+
+
+def apply_temperature(probs, temperature):
+    """Apply temperature to probabilities."""
+    if temperature == 0:
+        # Greedy: all mass on highest prob
+        result = np.zeros_like(probs)
+        result[np.argmax(probs)] = 1.0
+        return result
+    elif temperature == 1.0:
+        return probs
+    else:
+        # Apply temperature: p^(1/T) then renormalize
+        scaled = np.power(probs + 1e-10, 1.0 / temperature)
+        return scaled / scaled.sum()
+
+
+def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None):
+    """
+    Run MCTS search with time or node limit.
+    Returns (visit_counts, num_simulations).
+    """
+    if time_limit is None and node_limit is None:
+        node_limit = DEFAULT_NODE_LIMIT
+
+    start = time.time()
+    sims = 0
+
+    while True:
+        # Check termination conditions
+        if time_limit is not None and time.time() - start >= time_limit:
+            break
+        if node_limit is not None and sims >= node_limit:
+            break
+
+        # Expand one node
+        leaf = mcts.find_leaf(gs)
+        if agent is None:
+            # Random policy
+            v = np.zeros(gs.NUM_PLAYERS() + 1)
+            v[-1] = 1.0  # Uniform draw assumption
+            pi = np.ones(gs.NUM_MOVES()) / gs.NUM_MOVES()
+        else:
+            canonical = torch.from_numpy(np.array(leaf.canonicalized())).unsqueeze(0)
+            v, pi = agent.predict(canonical)
+            v = v.cpu().numpy().flatten()
+            pi = pi.cpu().numpy().flatten()
+
+        mcts.process_result(gs, v, pi, sims == 0)  # Add noise on first sim
+        sims += 1
+
+    counts = np.array(mcts.counts())
+    return counts, sims
+
+
+def get_ai_probs(ctx, player_idx, valids):
+    """
+    Get AI move probabilities for display.
+    Returns (probs, source_str, sims) where probs are temperature-adjusted and normalized to valid moves.
+    """
+    pcfg = ctx.players[player_idx]
+
+    # Create or reuse MCTS
+    if pcfg.mcts is None:
+        pcfg.mcts = create_mcts(ctx.game_class, ctx.cpuct, ctx.fpu_reduction)
+
+    # Determine if we should run MCTS or just use raw policy
+    should_search = (pcfg.think_time is not None and pcfg.think_time > 0) or \
+                   (pcfg.node_limit is not None and pcfg.node_limit > 0)
+
+    if should_search and (pcfg.network is not None or TORCH_AVAILABLE):
+        # Run MCTS search
+        counts, sims = run_mcts_search(
+            ctx.game, pcfg.network, pcfg.mcts,
+            time_limit=pcfg.think_time,
+            node_limit=pcfg.node_limit
+        )
+
+        # Convert counts to probabilities
+        if counts.sum() > 0:
+            probs = counts.astype(float) / counts.sum()
+        else:
+            probs = np.ones(ctx.game.NUM_MOVES()) / ctx.game.NUM_MOVES()
+
+        source = f"MCTS ({sims} sims)"
+    else:
+        # Use raw policy network (or uniform for random)
+        sims = 0
+        if pcfg.network is not None:
+            canonical = torch.from_numpy(np.array(ctx.game.canonicalized())).unsqueeze(0)
+            _, pi = pcfg.network.predict(canonical)
+            probs = pi.cpu().numpy().flatten()
+            # Softmax is already applied by network
+            source = "policy network"
+        else:
+            probs = np.ones(ctx.game.NUM_MOVES()) / ctx.game.NUM_MOVES()
+            source = "uniform random"
+
+    # Apply temperature
+    probs = apply_temperature(probs, pcfg.temperature)
+
+    # Mask invalid moves and renormalize
+    probs[valids == 0] = 0
+    if probs.sum() > 0:
+        probs = probs / probs.sum()
+    else:
+        # Fallback: uniform over valid
+        valid_count = valids.sum()
+        if valid_count > 0:
+            probs[valids == 1] = 1.0 / valid_count
+
+    return probs, source, sims
+
+
+def get_ai_move(ctx, player_idx, valids):
+    """Get AI move for the specified player. Returns (action, probs, source, sims)."""
+    probs, source, sims = get_ai_probs(ctx, player_idx, valids)
+
+    # Sample from distribution
+    action = np.random.choice(len(probs), p=probs)
+
+    # Reset MCTS for next move (don't reuse tree)
+    ctx.players[player_idx].mcts = None
+
+    return action, probs, source, sims
 
 
 def color_unit(name, player):
@@ -267,22 +461,176 @@ def print_unit_lists(game):
         print(f"  {name}  -  {u.hp}hp  ({u.anchor_q},{u.anchor_r}) facing {facing}  {u.moves_left} {moves_word}")
 
 
-def parse_command(cmd, valids, cfg):
-    """Parse user command and return action ID or None."""
-    parts = cmd.strip().lower().split()
+def parse_command(cmd, valids, cfg, ctx=None):
+    """Parse user command and return action ID or special command string."""
+    parts = cmd.strip().split()  # Don't lowercase yet - need original case for paths
     if not parts:
         return None
 
-    if parts[0] == 'q':
+    cmd_lower = parts[0].lower()
+
+    if cmd_lower == 'q':
         return 'quit'
-    if parts[0] == 'h':
+    if cmd_lower == 'h':
         return 'help'
-    if parts[0] == 's':
+    if cmd_lower == 's':
         return 'show'
-    if parts[0] == 'v':
+    if cmd_lower == 'v':
         return 'valid'
-    if parts[0] == 'u':
+    if cmd_lower == 'u':
         return 'undo'
+    if cmd_lower == 'status':
+        return 'status'
+    if cmd_lower == 'auto':
+        return 'auto'
+    if cmd_lower == 'manual':
+        return 'manual'
+
+    # AI configuration commands
+    if cmd_lower == 'ai' and ctx:
+        # ai <0|1|both|none>
+        if len(parts) < 2:
+            print("Usage: ai <0|1|both|none>")
+            return 'config'
+        arg = parts[1].lower()
+        if arg == 'both':
+            ctx.players[0].is_ai = True
+            ctx.players[1].is_ai = True
+            print("Both players set to AI")
+        elif arg == 'none':
+            ctx.players[0].is_ai = False
+            ctx.players[1].is_ai = False
+            print("Both players set to human")
+        elif arg in ['0', '1']:
+            player = int(arg)
+            ctx.players[player].is_ai = True
+            ctx.players[1 - player].is_ai = False
+            print(f"Player {player} set to AI, Player {1-player} set to human")
+        else:
+            print("Usage: ai <0|1|both|none>")
+        return 'config'
+
+    if cmd_lower == 'time' and ctx:
+        # time <0|1> <seconds|off>
+        if len(parts) < 3:
+            print("Usage: time <0|1> <seconds|off>")
+            return 'config'
+        try:
+            player = int(parts[1])
+            if player not in [0, 1]:
+                raise ValueError()
+        except ValueError:
+            print("Player must be 0 or 1")
+            return 'config'
+        if parts[2].lower() == 'off':
+            ctx.players[player].think_time = None
+            print(f"Player {player} think time: unlimited")
+        else:
+            try:
+                ctx.players[player].think_time = float(parts[2])
+                print(f"Player {player} think time: {ctx.players[player].think_time}s")
+            except ValueError:
+                print("Time must be a number or 'off'")
+        return 'config'
+
+    if cmd_lower == 'nodes' and ctx:
+        # nodes <0|1> <count|off>
+        if len(parts) < 3:
+            print("Usage: nodes <0|1> <count|off>")
+            return 'config'
+        try:
+            player = int(parts[1])
+            if player not in [0, 1]:
+                raise ValueError()
+        except ValueError:
+            print("Player must be 0 or 1")
+            return 'config'
+        if parts[2].lower() == 'off':
+            ctx.players[player].node_limit = None
+            print(f"Player {player} node limit: unlimited")
+        else:
+            try:
+                ctx.players[player].node_limit = int(parts[2])
+                print(f"Player {player} node limit: {ctx.players[player].node_limit}")
+            except ValueError:
+                print("Node count must be an integer or 'off'")
+        return 'config'
+
+    if cmd_lower == 'temp' and ctx:
+        # temp <0|1> <value>
+        if len(parts) < 3:
+            print("Usage: temp <0|1> <value>")
+            return 'config'
+        try:
+            player = int(parts[1])
+            if player not in [0, 1]:
+                raise ValueError()
+            ctx.players[player].temperature = float(parts[2])
+            print(f"Player {player} temperature: {ctx.players[player].temperature}")
+        except ValueError:
+            print("Player must be 0 or 1, value must be a number")
+        return 'config'
+
+    if cmd_lower == 'hints' and ctx:
+        # hints <0|1> <on|off>
+        if len(parts) < 3:
+            print("Usage: hints <0|1> <on|off>")
+            return 'config'
+        try:
+            player = int(parts[1])
+            if player not in [0, 1]:
+                raise ValueError()
+        except ValueError:
+            print("Player must be 0 or 1")
+            return 'config'
+        if parts[2].lower() == 'on':
+            ctx.players[player].show_hints = True
+            print(f"Player {player} AI hints: enabled")
+        elif parts[2].lower() == 'off':
+            ctx.players[player].show_hints = False
+            print(f"Player {player} AI hints: disabled")
+        else:
+            print("Usage: hints <0|1> <on|off>")
+        return 'config'
+
+    if cmd_lower == 'net' and ctx:
+        # net <0|1> <path|random>
+        if len(parts) < 3:
+            print("Usage: net <0|1> <path|random>")
+            return 'config'
+        try:
+            player = int(parts[1])
+            if player not in [0, 1]:
+                raise ValueError()
+        except ValueError:
+            print("Player must be 0 or 1")
+            return 'config'
+
+        path_arg = parts[2]  # Keep original case for path
+        if path_arg.lower() == 'random':
+            ctx.players[player].network = None
+            ctx.players[player].network_path = None
+            ctx.players[player].mcts = None
+            print(f"Player {player} using random policy")
+        else:
+            if not TORCH_AVAILABLE:
+                print("Error: torch not available, cannot load networks")
+                return 'config'
+            try:
+                # Try loading the network
+                net = neural_net.NNWrapper.load_checkpoint(
+                    ctx.game_class, os.path.dirname(path_arg), os.path.basename(path_arg)
+                )
+                ctx.players[player].network = net
+                ctx.players[player].network_path = path_arg
+                ctx.players[player].mcts = None
+                print(f"Player {player} loaded network: {path_arg}")
+            except Exception as e:
+                print(f"Error loading network: {e}")
+        return 'config'
+
+    # Now lowercase for game commands
+    parts = [p.lower() for p in parts]
 
     if parts[0] == 'e':
         # End turn
@@ -409,11 +757,22 @@ def parse_command(cmd, valids, cfg):
     return None
 
 
-def print_actions_menu(valids, cfg, game):
-    """Print a menu of available actions with detailed descriptions."""
+def print_actions_menu(valids, cfg, game, probs=None, source=None, show_commands=True):
+    """Print a menu of available actions with detailed descriptions and optional probabilities."""
     print("\n=== Available Actions ===")
 
-    # Group valid actions
+    if source:
+        print(f"  (probabilities from {source})")
+
+    def format_with_prob(action):
+        base = format_action(action, cfg, game)
+        if probs is not None and probs[action] > 0.001:
+            return f"{base}  [{probs[action]*100:5.1f}%]"
+        elif probs is not None:
+            return f"{base}  [  0.0%]"
+        return base
+
+    # Group valid actions (keep original order within groups)
     moves = []
     fires = []
     deploys = []
@@ -434,22 +793,24 @@ def print_actions_menu(valids, cfg, game):
     if moves:
         print("\nMoves:")
         for action in moves:
-            print(f"  {format_action(action, cfg, game)}")
+            print(f"  {format_with_prob(action)}")
 
     if fires:
         print("\nFire:")
         for action in fires:
-            print(f"  {format_action(action, cfg, game)}")
+            print(f"  {format_with_prob(action)}")
 
     if deploys:
         print("\nDeploy:")
         for action in deploys:
-            print(f"  {format_action(action, cfg, game)}")
+            print(f"  {format_with_prob(action)}")
 
     if end_turn:
-        print(f"\n  {format_action(cfg.end_turn_offset, cfg, game)}")
+        print(f"\n  {format_with_prob(cfg.end_turn_offset)}")
 
-    print("\nCommands: (q)uit, (h)elp, (s)how board, (u)ndo, (v)alid actions")
+    if show_commands:
+        print("\nCommands: (q)uit, (h)elp, (s)how board, (u)ndo, (v)alid actions")
+        print("AI config: ai, net, time, nodes, temp, hints, auto, manual, status")
 
 
 def play_random_action(valids):
@@ -458,6 +819,45 @@ def play_random_action(valids):
     if not valid_indices:
         return None
     return np.random.choice(valid_indices)
+
+
+def print_status(ctx):
+    """Print current configuration status."""
+    print("\n=== Configuration Status ===")
+    print(f"  Auto-play: {ctx.auto_play}")
+    print(f"  CPUCT: {ctx.cpuct}")
+    print(f"  FPU reduction: {ctx.fpu_reduction}")
+    for i in range(2):
+        print(f"  Player {i}: {ctx.players[i]}")
+
+
+def print_help():
+    """Print help message."""
+    print("\n=== Game Commands ===")
+    print("  m <unit><slot> <dir>  - Move (e.g., m f1 f, m c1 fl)")
+    print("    Fighter dirs: f, fl, fr")
+    print("    Cruiser dirs: l, fl, f, fr, r")
+    print("    Dread dirs: l, fl, fr, r")
+    print("  f <unit><slot> [cannon] - Fire (e.g., f f1, f c1 l)")
+    print("  d <type> <facing>       - Deploy (e.g., d f se)")
+    print("    Types: f, c, d")
+    print("    Facings: e, ne, nw, w, sw, se")
+    print("  e           - End turn")
+    print("  u           - Undo last move")
+    print("  s           - Show board")
+    print("  v           - Show all valid actions")
+    print("  q           - Quit")
+    print("  <number>    - Play action by ID")
+    print("\n=== AI Configuration ===")
+    print("  ai <0|1|both|none>     - Set which players are AI")
+    print("  net <0|1> <path|random> - Load network or use random policy")
+    print("  time <0|1> <secs|off>  - Set thinking time limit")
+    print("  nodes <0|1> <count|off> - Set node expansion limit")
+    print("  temp <0|1> <value>     - Set temperature for move selection")
+    print("  hints <0|1> <on|off>   - Show AI analysis on human turns")
+    print("  auto                   - AI auto-plays when it's AI's turn")
+    print("  manual                 - User picks from AI-annotated actions")
+    print("  status                 - Show current configuration")
 
 
 def main():
@@ -472,13 +872,19 @@ def main():
     size_input = input("Size (1/2/3) [1]: ").strip()
     if size_input == '2':
         game = alphazero.StarGambitClashGS()
+        game_class = alphazero.StarGambitClashGS
         cfg = CLASH
     elif size_input == '3':
         game = alphazero.StarGambitBattleGS()
+        game_class = alphazero.StarGambitBattleGS
         cfg = BATTLE
     else:
         game = alphazero.StarGambitSkirmishGS()
+        game_class = alphazero.StarGambitSkirmishGS
         cfg = SKIRMISH
+
+    # Create game context
+    ctx = GameContext(game, cfg, game_class)
 
     print(f"\nAction space: {cfg.num_moves} actions")
     print("\nNotation:")
@@ -487,106 +893,216 @@ def main():
     print("  m c1 l    - move cruiser 1 rotate-left")
     print("  f f1      - fire fighter 1")
     print("  f c1 l    - fire cruiser 1 left cannon")
-    print("  d f se    - deploy fighter facing southeast")
+    print("  d f ne    - deploy fighter facing northeast")
     print("  e         - end turn")
 
     # Mode selection
     print("\nSelect mode:")
     print("  1. Human vs Human")
-    print("  2. Human (P0) vs Random AI")
-    print("  3. Random AI vs Random AI (watch)")
+    print("  2. Human (P0) vs AI (P1)")
+    print("  3. AI (P0) vs Human (P1)")
+    print("  4. AI vs AI (watch)")
 
-    mode = input("Mode (1/2/3) [2]: ").strip()
-    if mode not in ['1', '2', '3']:
-        mode = '2'
-
-    human_players = set()
+    mode = input("Mode (1/2/3/4) [2]: ").strip()
     if mode == '1':
-        human_players = {0, 1}
-    elif mode == '2':
-        human_players = {0}
+        ctx.players[0].is_ai = False
+        ctx.players[1].is_ai = False
+    elif mode == '3':
+        ctx.players[0].is_ai = True
+        ctx.players[1].is_ai = False
+    elif mode == '4':
+        ctx.players[0].is_ai = True
+        ctx.players[1].is_ai = True
+        ctx.auto_play = True
+    else:  # Default: mode 2
+        ctx.players[0].is_ai = False
+        ctx.players[1].is_ai = True
+
+    # Configuration phase - allow setting up AI before starting
+    if ctx.players[0].is_ai or ctx.players[1].is_ai:
+        print("\n=== AI Configuration ===")
+        print("Configure AI settings before starting (type 'start' or press Enter to begin):")
+        print("  net <0|1> <path|random>  - Load network")
+        print("  nodes <0|1> <count|off>  - Node limit (default: 100)")
+        print("  time <0|1> <secs|off>    - Time limit")
+        print("  temp <0|1> <value>       - Temperature (default: 0.5)")
+        print("  hints <0|1> <on|off>     - AI analysis for human player")
+        print("  status                   - Show current config")
+        print_status(ctx)
+
+        while True:
+            cmd = input("\nConfig> ").strip()
+            if cmd.lower() in ['', 'start', 'go', 'begin']:
+                break
+            # Use empty valids array since we're not playing moves yet
+            dummy_valids = np.zeros(cfg.num_moves)
+            result = parse_command(cmd, dummy_valids, cfg, ctx)
+            if result == 'quit':
+                print("Goodbye!")
+                return
+            if result == 'help':
+                print_help()
+            elif result == 'status':
+                print_status(ctx)
+            elif result == 'auto':
+                ctx.auto_play = True
+                print("Auto-play mode enabled")
+            elif result == 'manual':
+                ctx.auto_play = False
+                print("Manual mode enabled")
+            # 'config' result means a config command was processed
+
+        print("\nStarting game...")
 
     # History stack for undo
     history = []
 
     while True:
         print("\n" + "=" * 50)
-        print(game)
-        print_unit_lists(game)
+        print(ctx.game)
+        print_unit_lists(ctx.game)
 
-        scores = game.scores()
+        scores = ctx.game.scores()
         if scores is not None:
             scores_arr = np.array(scores)
             if scores_arr[0] == 1:
-                print("Player 0 wins!")
+                print("\nPlayer 0 (Red) wins!")
             elif scores_arr[1] == 1:
-                print("Player 1 wins!")
+                print("\nPlayer 1 (Blue) wins!")
             else:
-                print("Draw!")
+                print("\nDraw!")
             break
 
-        valids = game.valid_moves()
-        current = game.current_player()
+        valids = np.array(ctx.game.valid_moves())
+        current = ctx.game.current_player()
+        pcfg = ctx.players[current]
 
-        if current in human_players:
-            print_actions_menu(valids, cfg, game)
+        if pcfg.is_ai:
+            # AI turn
+            if ctx.auto_play:
+                action, probs, source, sims = get_ai_move(ctx, current, valids)
+                if action is None:
+                    print("No valid moves for AI!")
+                    break
+
+                # Show full action menu with probabilities
+                print(f"\nAI (P{current}) [{source}]")
+                print_actions_menu(valids, cfg, ctx.game, probs=probs, source=source, show_commands=False)
+
+                # Pause in AI vs AI mode before revealing the chosen move
+                if ctx.players[0].is_ai and ctx.players[1].is_ai:
+                    input("Press Enter to see move...")
+
+                # Show chosen action and play it
+                print(f"\n>>> Plays: {format_action(action, cfg, ctx.game)}  [{probs[action]*100:.1f}%]")
+                history.append(ctx.game.copy())
+                ctx.game.play_move(action)
+            else:
+                # Manual mode: show AI probabilities, let user pick
+                probs, source, sims = get_ai_probs(ctx, current, valids)
+                print(f"\nAI (P{current}) suggests [{source}]:")
+                print_actions_menu(valids, cfg, ctx.game, probs=probs, source=source)
+
+                while True:
+                    cmd = input(f"\nPlayer {current} (AI-assisted) move: ").strip()
+                    result = parse_command(cmd, valids, cfg, ctx)
+
+                    if result == 'quit':
+                        print("Goodbye!")
+                        return
+                    if result == 'help':
+                        print_help()
+                        continue
+                    if result == 'show':
+                        print(ctx.game)
+                        continue
+                    if result == 'valid':
+                        for i in range(cfg.num_moves):
+                            if valids[i] == 1:
+                                prob_str = f"  [{probs[i]*100:5.1f}%]" if probs is not None else ""
+                                print(f"  {i}: {format_action(i, cfg, ctx.game)}{prob_str}")
+                        continue
+                    if result == 'undo':
+                        if history:
+                            ctx.game = history.pop()
+                            print("Move undone")
+                            break
+                        else:
+                            print("No moves to undo")
+                        continue
+                    if result == 'status':
+                        print_status(ctx)
+                        continue
+                    if result == 'auto':
+                        ctx.auto_play = True
+                        print("Auto-play mode enabled")
+                        break  # Let AI auto-play now
+                    if result == 'manual':
+                        ctx.auto_play = False
+                        print("Manual mode enabled")
+                        continue
+                    if result == 'config':
+                        continue
+                    if result is not None:
+                        print(f"Playing: {format_action(result, cfg, ctx.game)}")
+                        history.append(ctx.game.copy())
+                        ctx.game.play_move(result)
+                        ctx.players[current].mcts = None  # Reset MCTS
+                        break
+        else:
+            # Human turn - show AI probabilities only if hints enabled
+            probs = None
+            source = None
+            if pcfg.show_hints and (pcfg.network is not None or (pcfg.node_limit and pcfg.node_limit > 0)):
+                probs, source, _ = get_ai_probs(ctx, current, valids)
+
+            print_actions_menu(valids, cfg, ctx.game, probs=probs, source=source)
 
             while True:
                 cmd = input(f"\nPlayer {current} move: ").strip()
-                result = parse_command(cmd, valids, cfg)
+                result = parse_command(cmd, valids, cfg, ctx)
 
                 if result == 'quit':
                     print("Goodbye!")
                     return
                 if result == 'help':
-                    print("\nCommands:")
-                    print("  m <unit><slot> <dir>  - Move (e.g., m f1 f, m c1 fl)")
-                    print("    Fighter dirs: f, fl, fr")
-                    print("    Cruiser dirs: l, fl, f, fr, r")
-                    print("    Dread dirs: l, fl, fr, r")
-                    print("  f <unit><slot> [cannon] - Fire (e.g., f f1, f c1 l)")
-                    print("  d <type> <facing>       - Deploy (e.g., d f se)")
-                    print("    Types: f, c, d")
-                    print("    Facings: e, ne, nw, w, sw, se")
-                    print("  e           - End turn")
-                    print("  u           - Undo last move")
-                    print("  s           - Show board")
-                    print("  v           - Show all valid actions")
-                    print("  q           - Quit")
-                    print("  <number>    - Play action by ID")
+                    print_help()
                     continue
                 if result == 'show':
-                    print(game)
+                    print(ctx.game)
                     continue
                 if result == 'valid':
                     for i in range(cfg.num_moves):
                         if valids[i] == 1:
-                            print(f"  {i}: {format_action(i, cfg, game)}")
+                            prob_str = f"  [{probs[i]*100:5.1f}%]" if probs is not None else ""
+                            print(f"  {i}: {format_action(i, cfg, ctx.game)}{prob_str}")
                     continue
                 if result == 'undo':
                     if history:
-                        game = history.pop()
+                        ctx.game = history.pop()
                         print("Move undone")
-                        break  # Refresh the display
+                        break
                     else:
                         print("No moves to undo")
                     continue
+                if result == 'status':
+                    print_status(ctx)
+                    continue
+                if result == 'auto':
+                    ctx.auto_play = True
+                    print("Auto-play mode enabled")
+                    continue
+                if result == 'manual':
+                    ctx.auto_play = False
+                    print("Manual mode enabled")
+                    continue
+                if result == 'config':
+                    continue
                 if result is not None:
-                    print(f"Playing: {format_action(result, cfg, game)}")
-                    history.append(game.copy())
-                    game.play_move(result)
+                    print(f"Playing: {format_action(result, cfg, ctx.game)}")
+                    history.append(ctx.game.copy())
+                    ctx.game.play_move(result)
                     break
-        else:
-            # AI turn
-            if mode == '3':
-                input("Press Enter to continue...")
-            action = play_random_action(valids)
-            if action is None:
-                print("No valid moves for AI!")
-                break
-            print(f"AI plays: {format_action(action, cfg, game)}")
-            history.append(game.copy())
-            game.play_move(action)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,12 @@
 
 import alphazero
 import numpy as np
+import readline  # Enable line editing (backspace, arrow keys) in input()
+
+# ANSI color codes
+RED = '\033[91m'
+BLUE = '\033[94m'
+RESET = '\033[0m'
 
 # Game size selection - using Skirmish by default
 # Skirmish: 3F, 1C, 0D, 5-side board, 39 actions
@@ -67,7 +73,29 @@ FIGHTER_MOVE_NAMES = ['f', 'fl', 'fr']
 CRUISER_MOVE_NAMES = ['l', 'fl', 'f', 'fr', 'r']
 DREAD_MOVE_NAMES = ['l', 'fl', 'fr', 'r']
 CRUISER_CANNON_NAMES = ['l', 'f', 'r']
-DREAD_CANNON_NAMES = ['rl', 'fl', 'fr', 'rr']
+DREAD_CANNON_NAMES = ['rr', 'fr', 'fl', 'rl']
+
+# Detailed direction names for display
+FIGHTER_MOVE_DETAIL = ['forward', 'forward-left', 'forward-right']
+CRUISER_MOVE_DETAIL = ['rotate-left', 'forward-left', 'forward', 'forward-right', 'rotate-right']
+DREAD_MOVE_DETAIL = ['rotate-left', 'forward-left', 'forward-right', 'rotate-right']
+CRUISER_CANNON_DETAIL = ['left cannon', 'forward cannon', 'right cannon']
+DREAD_CANNON_DETAIL = ['rear-right cannon', 'front-right cannon', 'front-left cannon', 'rear-left cannon']
+
+# Type names for display
+TYPE_NAMES = ['Fighter', 'Cruiser', 'Dreadnought', 'Portal']
+TYPE_CHARS = ['F', 'C', 'D', 'P']
+
+
+def color_unit(name, player):
+    """Wrap unit name in ANSI color codes based on player."""
+    color = RED if player == 0 else BLUE
+    return f"{color}{name}{RESET}"
+
+
+def get_unit_name(unit_type, slot):
+    """Get unit name like F1, C2, etc."""
+    return f"{TYPE_CHARS[unit_type]}{slot + 1}"
 
 
 def decode_action(action, cfg):
@@ -115,7 +143,128 @@ def decode_action(action, cfg):
         facing_names = ['e', 'ne', 'nw', 'w', 'sw', 'se']
         return f"d {type_chars[unit_type]} {facing_names[facing]}"
     else:
-        return "e (end turn)"
+        return "e"
+
+
+def format_action(action, cfg, game):
+    """Format action with short form and detailed description, with colored unit names."""
+    short = decode_action(action, cfg)
+    current_player = game.current_player()
+
+    # Build unit lookup from game state
+    units = game.get_units()
+    unit_lookup = {}  # (player, type, slot) -> UnitInfo
+    for u in units:
+        unit_lookup[(u.player, u.type, u.slot)] = u
+
+    if action < cfg.cruiser_move_offset:
+        # Fighter move
+        idx = action - cfg.fighter_move_offset
+        slot = idx // cfg.fighter_dirs
+        dir_idx = idx % cfg.fighter_dirs
+        name = color_unit(get_unit_name(0, slot), current_player)
+        detail = FIGHTER_MOVE_DETAIL[dir_idx]
+        return f"{short:<10} -  {name} {detail}"
+
+    elif action < cfg.dread_move_offset:
+        # Cruiser move
+        idx = action - cfg.cruiser_move_offset
+        slot = idx // cfg.cruiser_dirs
+        dir_idx = idx % cfg.cruiser_dirs
+        name = color_unit(get_unit_name(1, slot), current_player)
+        detail = CRUISER_MOVE_DETAIL[dir_idx]
+        return f"{short:<10} -  {name} {detail}"
+
+    elif action < cfg.fighter_fire_offset:
+        # Dreadnought move
+        idx = action - cfg.dread_move_offset
+        slot = idx // cfg.dread_dirs
+        dir_idx = idx % cfg.dread_dirs
+        name = color_unit(get_unit_name(2, slot), current_player)
+        detail = DREAD_MOVE_DETAIL[dir_idx]
+        return f"{short:<10} -  {name} {detail}"
+
+    elif action < cfg.cruiser_fire_offset:
+        # Fighter fire
+        idx = action - cfg.fighter_fire_offset
+        slot = idx
+        name = color_unit(get_unit_name(0, slot), current_player)
+        fire_info = game.get_fire_info(action)
+        if fire_info.has_target:
+            target_name = color_unit(get_unit_name(fire_info.target_type, fire_info.target_slot),
+                                     fire_info.target_player)
+            return f"{short:<10} -  {name} cannon -> {target_name} ({fire_info.damage} dmg)"
+        return f"{short:<10} -  {name} cannon"
+
+    elif action < cfg.dread_fire_offset:
+        # Cruiser fire
+        idx = action - cfg.cruiser_fire_offset
+        slot = idx // cfg.cruiser_cannons
+        cannon = idx % cfg.cruiser_cannons
+        name = color_unit(get_unit_name(1, slot), current_player)
+        fire_info = game.get_fire_info(action)
+        cannon_name = CRUISER_CANNON_DETAIL[cannon]
+        if fire_info.has_target:
+            target_name = color_unit(get_unit_name(fire_info.target_type, fire_info.target_slot),
+                                     fire_info.target_player)
+            return f"{short:<10} -  {name} {cannon_name} -> {target_name} ({fire_info.damage} dmg)"
+        return f"{short:<10} -  {name} {cannon_name}"
+
+    elif action < cfg.deploy_offset:
+        # Dreadnought fire
+        idx = action - cfg.dread_fire_offset
+        slot = idx // cfg.dread_cannons
+        cannon = idx % cfg.dread_cannons
+        name = color_unit(get_unit_name(2, slot), current_player)
+        fire_info = game.get_fire_info(action)
+        cannon_name = DREAD_CANNON_DETAIL[cannon]
+        if fire_info.has_target:
+            target_name = color_unit(get_unit_name(fire_info.target_type, fire_info.target_slot),
+                                     fire_info.target_player)
+            return f"{short:<10} -  {name} {cannon_name} -> {target_name} ({fire_info.damage} dmg)"
+        return f"{short:<10} -  {name} {cannon_name}"
+
+    elif action < cfg.end_turn_offset:
+        # Deploy
+        idx = action - cfg.deploy_offset
+        unit_type = idx // 6
+        facing = idx % 6
+        type_name = TYPE_NAMES[unit_type].lower()
+        facing_name = DIRECTION_NAMES[facing]
+        return f"{short:<10} -  Deploy {type_name} facing {facing_name}"
+
+    else:
+        return f"{short:<10} -  End turn"
+
+
+def print_unit_lists(game):
+    """Print unit lists for both players with full info."""
+    units = game.get_units()
+
+    p0_units = [u for u in units if u.player == 0]
+    p1_units = [u for u in units if u.player == 1]
+
+    # Sort by type then slot
+    p0_units.sort(key=lambda u: (u.type, u.slot))
+    p1_units.sort(key=lambda u: (u.type, u.slot))
+
+    print("\nP0 units:")
+    if not p0_units:
+        print("  (none)")
+    for u in p0_units:
+        name = color_unit(get_unit_name(u.type, u.slot), 0)
+        facing = DIRECTION_NAMES[u.facing]
+        moves_word = "move" if u.moves_left == 1 else "moves"
+        print(f"  {name}  -  {u.hp}hp  ({u.anchor_q},{u.anchor_r}) facing {facing}  {u.moves_left} {moves_word}")
+
+    print("P1 units:")
+    if not p1_units:
+        print("  (none)")
+    for u in p1_units:
+        name = color_unit(get_unit_name(u.type, u.slot), 1)
+        facing = DIRECTION_NAMES[u.facing]
+        moves_word = "move" if u.moves_left == 1 else "moves"
+        print(f"  {name}  -  {u.hp}hp  ({u.anchor_q},{u.anchor_r}) facing {facing}  {u.moves_left} {moves_word}")
 
 
 def parse_command(cmd, valids, cfg):
@@ -132,6 +281,8 @@ def parse_command(cmd, valids, cfg):
         return 'show'
     if parts[0] == 'v':
         return 'valid'
+    if parts[0] == 'u':
+        return 'undo'
 
     if parts[0] == 'e':
         # End turn
@@ -211,9 +362,9 @@ def parse_command(cmd, valids, cfg):
                 return None
             action = cfg.cruiser_fire_offset + slot * cfg.cruiser_cannons + cannon_map[cannon]
         elif unit_type == 'd':
-            cannon_map = {'rl': 0, 'fl': 1, 'fr': 2, 'rr': 3}
+            cannon_map = {'rr': 0, 'fr': 1, 'fl': 2, 'rl': 3}
             if cannon not in cannon_map or slot < 0 or slot >= cfg.max_dreads:
-                print("Invalid dreadnought fire. Specify cannon: rl, fl, fr, rr")
+                print("Invalid dreadnought fire. Specify cannon: rr, fr, fl, rl")
                 return None
             action = cfg.dread_fire_offset + slot * cfg.dread_cannons + cannon_map[cannon]
         else:
@@ -258,8 +409,8 @@ def parse_command(cmd, valids, cfg):
     return None
 
 
-def print_actions_menu(valids, cfg):
-    """Print a menu of available actions."""
+def print_actions_menu(valids, cfg, game):
+    """Print a menu of available actions with detailed descriptions."""
     print("\n=== Available Actions ===")
 
     # Group valid actions
@@ -283,22 +434,22 @@ def print_actions_menu(valids, cfg):
     if moves:
         print("\nMoves:")
         for action in moves:
-            print(f"  {decode_action(action, cfg)}")
+            print(f"  {format_action(action, cfg, game)}")
 
     if fires:
         print("\nFire:")
         for action in fires:
-            print(f"  {decode_action(action, cfg)}")
+            print(f"  {format_action(action, cfg, game)}")
 
     if deploys:
         print("\nDeploy:")
         for action in deploys:
-            print(f"  {decode_action(action, cfg)}")
+            print(f"  {format_action(action, cfg, game)}")
 
     if end_turn:
-        print("\nEnd turn: e")
+        print(f"\n  {format_action(cfg.end_turn_offset, cfg, game)}")
 
-    print("\nCommands: (q)uit, (h)elp, (s)how board, (v)alid actions")
+    print("\nCommands: (q)uit, (h)elp, (s)how board, (u)ndo, (v)alid actions")
 
 
 def play_random_action(valids):
@@ -355,9 +506,13 @@ def main():
     elif mode == '2':
         human_players = {0}
 
+    # History stack for undo
+    history = []
+
     while True:
         print("\n" + "=" * 50)
         print(game)
+        print_unit_lists(game)
 
         scores = game.scores()
         if scores is not None:
@@ -374,7 +529,7 @@ def main():
         current = game.current_player()
 
         if current in human_players:
-            print_actions_menu(valids, cfg)
+            print_actions_menu(valids, cfg, game)
 
             while True:
                 cmd = input(f"\nPlayer {current} move: ").strip()
@@ -394,6 +549,7 @@ def main():
                     print("    Types: f, c, d")
                     print("    Facings: e, ne, nw, w, sw, se")
                     print("  e           - End turn")
+                    print("  u           - Undo last move")
                     print("  s           - Show board")
                     print("  v           - Show all valid actions")
                     print("  q           - Quit")
@@ -405,23 +561,32 @@ def main():
                 if result == 'valid':
                     for i in range(cfg.num_moves):
                         if valids[i] == 1:
-                            print(f"  {i}: {decode_action(i, cfg)}")
+                            print(f"  {i}: {format_action(i, cfg, game)}")
+                    continue
+                if result == 'undo':
+                    if history:
+                        game = history.pop()
+                        print("Move undone")
+                        break  # Refresh the display
+                    else:
+                        print("No moves to undo")
                     continue
                 if result is not None:
-                    print(f"Playing: {decode_action(result, cfg)}")
+                    print(f"Playing: {format_action(result, cfg, game)}")
+                    history.append(game.copy())
                     game.play_move(result)
                     break
         else:
             # AI turn
+            if mode == '3':
+                input("Press Enter to continue...")
             action = play_random_action(valids)
             if action is None:
                 print("No valid moves for AI!")
                 break
-            print(f"AI plays: {decode_action(action, cfg)}")
+            print(f"AI plays: {format_action(action, cfg, game)}")
+            history.append(game.copy())
             game.play_move(action)
-
-            if mode == '3':
-                input("Press Enter to continue...")
 
 
 if __name__ == "__main__":

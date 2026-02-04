@@ -33,7 +33,9 @@ GRArgs = namedtuple(
         "result_workers",
         "mcts_workers",
     ],
-    defaults=(0, HIST_SIZE, TMP_HIST_LOCATION, 0, 0, 1, 1, os.cpu_count() - 1),
+    # NOTE: data_folder default is None to avoid early-binding issues when module
+    # variables are changed after import. Resolved at runtime in hist_saver().
+    defaults=(0, HIST_SIZE, None, 0, 0, 1, 1, os.cpu_count() - 1),
 )
 
 # In some games, setting this to max out your memory can have huge performance gains.
@@ -306,7 +308,9 @@ class GameRunner:
 
     def hist_saver(self):
         batch = 0
-        os.makedirs(self.args.data_folder, exist_ok=True)
+        # Resolve data_folder at runtime to handle late-binding of module variables
+        data_folder = self.args.data_folder if self.args.data_folder is not None else TMP_HIST_LOCATION
+        os.makedirs(data_folder, exist_ok=True)
         while self.pm.remaining_games() > 0 or self.pm.hist_count() > 0:
             size = self.pm.build_history_batch(
                 self.hist_canonical, self.hist_v, self.hist_pi
@@ -318,21 +322,21 @@ class GameRunner:
             torch.save(
                 self.hist_canonical[:size],
                 os.path.join(
-                    self.args.data_folder,
+                    data_folder,
                     f"{self.args.iteration:04d}-{batch:04d}-canonical-{size}.pt",
                 ),
             )
             torch.save(
                 self.hist_v[:size],
                 os.path.join(
-                    self.args.data_folder,
+                    data_folder,
                     f"{self.args.iteration:04d}-{batch:04d}-v-{size}.pt",
                 ),
             )
             torch.save(
                 self.hist_pi[:size],
                 os.path.join(
-                    self.args.data_folder,
+                    data_folder,
                     f"{self.args.iteration:04d}-{batch:04d}-pi-{size}.pt",
                 ),
             )
@@ -417,10 +421,12 @@ if __name__ == "__main__":
         size,
         batch,
         iteration,
-        location=HIST_LOCATION,
+        location=None,
         name="",
         force=False,
     ):
+        # Resolve location at runtime to handle late-binding of module variables
+        location = location if location is not None else HIST_LOCATION
         if size == HIST_SIZE or (force and size > 0):
             # Direct save without creating intermediate tensors
             torch.save(

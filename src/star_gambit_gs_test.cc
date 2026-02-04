@@ -292,9 +292,11 @@ TEST(GameState, InitialState) {
 TEST(GameState, InitialUnitsArePortals) {
   TestGame game;
 
-  // Should have 2 portals initially
-  std::string dump = game.dump();
-  EXPECT_TRUE(dump.find("Portal") != std::string::npos);
+  // Should have 2 portals initially - check via get_units()
+  auto units = game.get_units();
+  EXPECT_EQ(units.size(), 2u);
+  EXPECT_EQ(units[0].type, 3);  // Portal type
+  EXPECT_EQ(units[1].type, 3);  // Portal type
 }
 
 TEST(GameState, ValidMovesOnTurnOne) {
@@ -515,7 +517,7 @@ TEST(Deployment, ValidDeployFacings) {
   auto p0_dreadnought_facings = get_valid_deploy_facings(UnitType::DREADNOUGHT, 0);
 
   EXPECT_EQ(p0_fighter_facings.size(), 3u);
-  EXPECT_EQ(p0_dreadnought_facings.size(), 4u);
+  EXPECT_EQ(p0_dreadnought_facings.size(), 4u);  // Dreadnoughts have 4 valid facings
 }
 
 // =============================================================================
@@ -961,11 +963,20 @@ TEST(SlotNumbering, MultipleUnitsGetDifferentSlots) {
     }
   }
 
-  // Check dump output contains both F1 and F2 for P0
-  std::string dump = game.dump();
-  // Look for "F1: P0" and "F2: P0" patterns
-  EXPECT_TRUE(dump.find("F1: P0") != std::string::npos) << "Should show F1: P0 for first fighter\n" << dump;
-  EXPECT_TRUE(dump.find("F2: P0") != std::string::npos) << "Should show F2: P0 for second fighter\n" << dump;
+  // Check that P0 has two fighters with different slots via get_units()
+  auto units = game.get_units();
+  int p0_fighter_count = 0;
+  bool has_f1 = false, has_f2 = false;
+  for (const auto& u : units) {
+    if (u.player == 0 && u.type == 0) {  // Fighter type is 0
+      p0_fighter_count++;
+      if (u.slot == 0) has_f1 = true;
+      if (u.slot == 1) has_f2 = true;
+    }
+  }
+  EXPECT_EQ(p0_fighter_count, 2) << "P0 should have 2 fighters";
+  EXPECT_TRUE(has_f1) << "Should have F1 for first fighter";
+  EXPECT_TRUE(has_f2) << "Should have F2 for second fighter";
 }
 
 // =============================================================================
@@ -1280,6 +1291,63 @@ TEST(FullGame, FireWhenInRange) {
   // Fire should have become available at some point
   EXPECT_TRUE(fire_available || game.scores().has_value())
       << "Fire should be available when units are in range";
+}
+
+// =============================================================================
+// Dreadnought Deployment Tests (using BattleConfig)
+// =============================================================================
+
+using BattleAS = ActionSpace<BattleConfig>;
+
+TEST(Deployment, DreadnoughtDeployAllFacingsP0) {
+  StarGambitBattleGS game;
+
+  // Player 0 valid dreadnought facings: {0, 1, 2, 3} (E, NE, NW, W)
+  auto valid_facings = get_valid_deploy_facings(UnitType::DREADNOUGHT, 0);
+  ASSERT_EQ(valid_facings.size(), 4u);
+
+  auto valids = game.valid_moves();
+
+  // Dreadnought deploy actions start at DEPLOY_OFFSET + 12 (after fighter and cruiser deploys)
+  // Each unit type has 6 facing options
+  int dread_deploy_base = BattleAS::DEPLOY_OFFSET + 12;
+
+  for (int facing : valid_facings) {
+    int action = dread_deploy_base + facing;
+    EXPECT_EQ(valids(action), 1)
+        << "Dreadnought deploy facing " << facing << " should be valid for P0";
+  }
+}
+
+TEST(Deployment, DreadnoughtDeployAllFacingsP1) {
+  StarGambitBattleGS game;
+
+  // Deploy a fighter for P0 to switch to P1
+  auto valids = game.valid_moves();
+  int fighter_deploy = BattleAS::DEPLOY_OFFSET;
+  for (int i = BattleAS::DEPLOY_OFFSET; i < BattleAS::DEPLOY_OFFSET + 6; ++i) {
+    if (valids(i) == 1) {
+      fighter_deploy = i;
+      break;
+    }
+  }
+  game.play_move(fighter_deploy);
+
+  // Now P1's turn
+  ASSERT_EQ(game.current_player(), 1);
+
+  // Player 1 valid dreadnought facings: {0, 3, 4, 5} (E, W, SW, SE)
+  auto valid_facings = get_valid_deploy_facings(UnitType::DREADNOUGHT, 1);
+  ASSERT_EQ(valid_facings.size(), 4u);
+
+  valids = game.valid_moves();
+  int dread_deploy_base = BattleAS::DEPLOY_OFFSET + 12;
+
+  for (int facing : valid_facings) {
+    int action = dread_deploy_base + facing;
+    EXPECT_EQ(valids(action), 1)
+        << "Dreadnought deploy facing " << facing << " should be valid for P1";
+  }
 }
 
 }  // namespace alphazero::star_gambit_gs

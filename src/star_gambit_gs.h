@@ -67,7 +67,7 @@ constexpr int DREADNOUGHT_MOVES = 1;
 constexpr int PORTAL_MOVES = 0;
 
 // Maximum turns before game ends in draw
-constexpr int MAX_TURNS = 200;
+constexpr int MAX_TURNS = 1000;
 
 // ============================================================================
 // Movement Direction Constants
@@ -271,6 +271,29 @@ struct CannonInfo {
 
 std::vector<CannonInfo> get_cannon_info(UnitType type);
 
+// ============================================================================
+// Python Binding Support Structs
+// ============================================================================
+
+struct UnitInfo {
+  int player;       // 0 or 1
+  int type;         // 0=Fighter, 1=Cruiser, 2=Dreadnought, 3=Portal
+  int slot;         // 0-indexed slot
+  int hp;           // Current health
+  int anchor_q;     // Hex position q
+  int anchor_r;     // Hex position r
+  int facing;       // 0=E, 1=NE, 2=NW, 3=W, 4=SW, 5=SE
+  int moves_left;   // Moves remaining this turn
+};
+
+struct FireInfo {
+  bool has_target;      // False if no target in range
+  int target_player;    // Target unit's player
+  int target_type;      // Target unit's type
+  int target_slot;      // Target unit's slot
+  int damage;           // 1 (range 2) or 2 (range 1)
+};
+
 // Line of sight check
 bool has_line_of_sight(const Hex& from, int direction, int distance,
                        const std::vector<Hex>& occupied_hexes);
@@ -315,7 +338,15 @@ struct ActionSpace {
   static constexpr int NUM_MOVES = END_TURN_OFFSET + END_TURN_ACTIONS;
 
   // Canonical representation shape
-  static constexpr int CANONICAL_CHANNELS = 48;
+  // Slot-indexed presence: (MAX_F + MAX_C + MAX_D) * 2 players + 2 portals
+  static constexpr int SLOT_PRESENCE_CHANNELS =
+      (Config::MAX_FIGHTERS + Config::MAX_CRUISERS + Config::MAX_DREADNOUGHTS) * 2 + 2;
+
+  // Fixed channels: orientation(12) + HP(6) + current_player(1) + has_acted(1)
+  //                 + reserves(6) + moves_remaining(2) + cannons_available(2) + turn_progress(1)
+  static constexpr int FIXED_CHANNELS = 31;
+
+  static constexpr int CANONICAL_CHANNELS = SLOT_PRESENCE_CHANNELS + FIXED_CHANNELS;
   static constexpr std::array<int, 3> CANONICAL_SHAPE = {CANONICAL_CHANNELS, 1, NUM_HEXES};
 };
 
@@ -384,6 +415,10 @@ class StarGambitGS : public GameState {
 
   // Get next available slot for a unit type
   [[nodiscard]] int get_next_slot(uint8_t player, UnitType type) const;
+
+  // Python binding support methods
+  [[nodiscard]] std::vector<UnitInfo> get_units() const;
+  [[nodiscard]] FireInfo get_fire_info(uint32_t move) const;
 
  private:
   // Movement computation

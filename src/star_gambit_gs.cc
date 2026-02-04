@@ -120,15 +120,17 @@ std::vector<Hex> get_portal_hexes(int player, int board_side) {
   int max_coord = board_side - 1;
 
   if (player == 0) {
-    Hex corner = {0, static_cast<int8_t>(-max_coord)};
-    hexes.push_back(corner);
-    hexes.push_back({static_cast<int8_t>(-1), static_cast<int8_t>(-max_coord + 1)});
-    hexes.push_back({static_cast<int8_t>(1), static_cast<int8_t>(-max_coord)});
-  } else {
+    // Player 0 at BOTTOM (positive r)
     Hex corner = {0, static_cast<int8_t>(max_coord)};
     hexes.push_back(corner);
     hexes.push_back({static_cast<int8_t>(1), static_cast<int8_t>(max_coord - 1)});
     hexes.push_back({static_cast<int8_t>(-1), static_cast<int8_t>(max_coord)});
+  } else {
+    // Player 1 at TOP (negative r)
+    Hex corner = {0, static_cast<int8_t>(-max_coord)};
+    hexes.push_back(corner);
+    hexes.push_back({static_cast<int8_t>(-1), static_cast<int8_t>(-max_coord + 1)});
+    hexes.push_back({static_cast<int8_t>(1), static_cast<int8_t>(-max_coord)});
   }
 
   return hexes;
@@ -137,9 +139,11 @@ std::vector<Hex> get_portal_hexes(int player, int board_side) {
 Hex get_deploy_hex(int player, int board_side) {
   int max_coord = board_side - 1;
   if (player == 0) {
-    return {0, static_cast<int8_t>(-max_coord + 1)};
-  } else {
+    // Player 0 deploys at BOTTOM
     return {0, static_cast<int8_t>(max_coord - 1)};
+  } else {
+    // Player 1 deploys at TOP
+    return {0, static_cast<int8_t>(-max_coord + 1)};
   }
 }
 
@@ -147,11 +151,11 @@ Hex get_deploy_hex(int player, int board_side) {
 // Returns the direction from deploy hex to anchor hex for the given facing direction
 // Returns -1 if the facing is not valid for that player
 int get_dreadnought_anchor_dir(int player, int facing) {
-  // P0 valid facings: E(0), W(3), SW(4), SE(5) - ship points toward center
-  // P1 valid facings: E(0), NE(1), NW(2), W(3) - ship points toward center
+  // P0 at bottom: valid facings E(0), NE(1), NW(2), W(3) - ship points toward center (up)
+  // P1 at top: valid facings E(0), W(3), SW(4), SE(5) - ship points toward center (down)
   // anchor_dir is the direction from deploy hex to the anchor (front) hex
-  static const int P0_ANCHOR_DIRS[6] = {0, -1, -1, 4, 5, 5};  // indexed by facing
-  static const int P1_ANCHOR_DIRS[6] = {1, 2, 2, 3, -1, -1};  // indexed by facing
+  static const int P0_ANCHOR_DIRS[6] = {1, 2, 2, 3, -1, -1};  // indexed by facing
+  static const int P1_ANCHOR_DIRS[6] = {0, -1, -1, 4, 5, 5};  // indexed by facing
 
   if (player == 0) {
     return P0_ANCHOR_DIRS[facing];
@@ -165,18 +169,21 @@ std::vector<int> get_valid_deploy_facings(UnitType type, int player) {
 
   if (type == UnitType::DREADNOUGHT) {
     // Dreadnoughts: one rear hex at deploy square, ship extends away from portal
-    // P0: E(0), W(3), SW(4), SE(5)
-    // P1: E(0), NE(1), NW(2), W(3)
+    // P0 at bottom: E(0), NE(1), NW(2), W(3) - pointing up toward center
+    // P1 at top: E(0), W(3), SW(4), SE(5) - pointing down toward center
     if (player == 0) {
-      facings = {0, 3, 4, 5};
-    } else {
       facings = {0, 1, 2, 3};
+    } else {
+      facings = {0, 3, 4, 5};
     }
   } else {
+    // Fighters and Cruisers
+    // P0 at bottom: NE(1), NW(2), W(3) - pointing up toward opponent
+    // P1 at top: SW(4), SE(5), E(0) - pointing down toward opponent
     if (player == 0) {
-      facings = {4, 5, 0};
-    } else {
       facings = {1, 2, 3};
+    } else {
+      facings = {4, 5, 0};
     }
   }
 
@@ -256,7 +263,7 @@ StarGambitGS<Config>::StarGambitGS() {
   p0_portal.player = 0;
   p0_portal.slot = 0;
   p0_portal.hp = PORTAL_HP;
-  p0_portal.facing = 5;
+  p0_portal.facing = 2;  // NW - pointing up toward opponent (P0 at bottom)
   p0_portal.anchor_q = p0_portal_hexes[0].q;
   p0_portal.anchor_r = p0_portal_hexes[0].r;
   p0_portal.moves_left = 0;
@@ -268,7 +275,7 @@ StarGambitGS<Config>::StarGambitGS() {
   p1_portal.player = 1;
   p1_portal.slot = 0;
   p1_portal.hp = PORTAL_HP;
-  p1_portal.facing = 2;
+  p1_portal.facing = 5;  // SE - pointing down toward opponent (P1 at top)
   p1_portal.anchor_q = p1_portal_hexes[0].q;
   p1_portal.anchor_r = p1_portal_hexes[0].r;
   p1_portal.moves_left = 0;

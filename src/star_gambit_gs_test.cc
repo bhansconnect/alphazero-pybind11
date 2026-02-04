@@ -1154,13 +1154,13 @@ bool play_notation(StarGambitGS<Config>& game, const std::string& notation) {
 TEST(FullGame, PlayWithNotation) {
   TestGame game;
 
-  // Turn 1: P0 deploys fighter facing SE
-  EXPECT_TRUE(play_notation(game, "d f se"));
+  // Turn 1: P0 (bottom) deploys fighter facing NE (toward opponent)
+  EXPECT_TRUE(play_notation(game, "d f ne"));
   EXPECT_EQ(game.current_player(), 1);
   EXPECT_EQ(game.current_turn(), 2);
 
-  // Turn 2: P1 deploys fighter facing NE
-  EXPECT_TRUE(play_notation(game, "d f ne"));
+  // Turn 2: P1 (top) deploys fighter facing SE (toward opponent)
+  EXPECT_TRUE(play_notation(game, "d f se"));
   EXPECT_EQ(game.current_player(), 0);
   EXPECT_EQ(game.current_turn(), 3);
 
@@ -1176,8 +1176,8 @@ TEST(FullGame, DeployAndMoveSequence) {
   TestGame game;
 
   // Both players deploy fighters
-  EXPECT_TRUE(play_notation(game, "d f se"));  // P0
-  EXPECT_TRUE(play_notation(game, "d f ne"));  // P1
+  EXPECT_TRUE(play_notation(game, "d f ne"));  // P0 (bottom, facing up)
+  EXPECT_TRUE(play_notation(game, "d f se"));  // P1 (top, facing down)
 
   // P0 moves fighter forward twice (uses both moves)
   EXPECT_TRUE(play_notation(game, "m f1 f"));
@@ -1193,12 +1193,12 @@ TEST(FullGame, DeployAndMoveSequence) {
 TEST(FullGame, CruiserDeployAndMove) {
   TestGame game;
 
-  // P0 deploys cruiser facing SE
-  EXPECT_TRUE(play_notation(game, "d c se"));
+  // P0 (bottom) deploys cruiser facing NE
+  EXPECT_TRUE(play_notation(game, "d c ne"));
   EXPECT_EQ(game.current_player(), 1);
 
-  // P1 deploys fighter
-  EXPECT_TRUE(play_notation(game, "d f ne"));
+  // P1 (top) deploys fighter facing SE
+  EXPECT_TRUE(play_notation(game, "d f se"));
   EXPECT_EQ(game.current_player(), 0);
 
   // P0 cruiser can move (rotate or forward)
@@ -1256,20 +1256,19 @@ TEST(FullGame, CompleteGameToVictory) {
 TEST(FullGame, FireWhenInRange) {
   TestGame game;
 
-  // Deploy fighters for both players
-  EXPECT_TRUE(play_notation(game, "d f se"));  // P0
-  EXPECT_TRUE(play_notation(game, "d f nw"));  // P1
+  // Deploy fighters for both players facing each other
+  EXPECT_TRUE(play_notation(game, "d f ne"));  // P0 (bottom, facing up/NE)
+  EXPECT_TRUE(play_notation(game, "d f sw"));  // P1 (top, facing down/SW)
 
-  // Move P0's fighter towards enemy until fire is available
+  // Move fighters towards each other until fire is available
   bool fire_available = false;
-  for (int i = 0; i < 20; ++i) {
+  for (int i = 0; i < 30; ++i) {
     auto valids = game.valid_moves();
 
     // Check if fire is available
     for (int j = TestAS::FIGHTER_FIRE_OFFSET; j < TestAS::CRUISER_FIRE_OFFSET; ++j) {
       if (valids(j) == 1) {
         fire_available = true;
-        // Execute fire
         game.play_move(j);
         break;
       }
@@ -1277,18 +1276,25 @@ TEST(FullGame, FireWhenInRange) {
 
     if (fire_available) break;
 
-    // Otherwise move or end turn
-    for (int j = 0; j < TestAS::NUM_MOVES; ++j) {
-      if (valids(j) == 1) {
-        game.play_move(j);
-        break;
+    // Try to move fighter forward (action 0 = f1 forward)
+    // Fighter 1 forward move is at offset 0
+    int forward_move = 0;  // Fighter 1 forward
+    if (valids(forward_move) == 1) {
+      game.play_move(forward_move);
+    } else {
+      // If forward not available, try any move or end turn
+      for (int j = 0; j < TestAS::NUM_MOVES; ++j) {
+        if (valids(j) == 1) {
+          game.play_move(j);
+          break;
+        }
       }
     }
 
     if (game.scores().has_value()) break;
   }
 
-  // Fire should have become available at some point
+  // Fire should have become available at some point (or game ended)
   EXPECT_TRUE(fire_available || game.scores().has_value())
       << "Fire should be available when units are in range";
 }

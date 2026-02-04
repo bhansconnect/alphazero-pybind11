@@ -67,7 +67,7 @@ constexpr int DREADNOUGHT_MOVES = 1;
 constexpr int PORTAL_MOVES = 0;
 
 // Maximum turns before game ends in draw
-constexpr int MAX_TURNS = 1000;
+constexpr int MAX_TURNS = 200;
 
 // ============================================================================
 // Movement Direction Constants

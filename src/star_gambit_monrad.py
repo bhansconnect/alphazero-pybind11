@@ -2,13 +2,13 @@
 """Monrad tournament system for Star Gambit networks.
 
 This script runs a Swiss-style (Monrad) tournament between trained networks
-to establish ELO rankings.
+to establish ELO rankings. Supports all three variants: Skirmish, Clash, and Battle.
 
 Usage:
     python src/star_gambit_monrad.py
 
-Networks are loaded from data/bench/ (if exists) or data/checkpoint/.
-Results are saved to data/monrad_wr.csv.
+Networks are loaded from data/bench/{variant}/ (if exists) or data/checkpoint/{variant}/.
+Results are saved to data/star_gambit_{variant}_monrad_wr.csv.
 """
 
 import os
@@ -31,18 +31,44 @@ import tqdm
 
 np.set_printoptions(precision=3, suppress=True)
 
+# === Game Variants ===
+VARIANTS = {
+    '1': ('skirmish', alphazero.StarGambitSkirmishGS, '3F, 1C, 0D'),
+    '2': ('clash', alphazero.StarGambitClashGS, '3F, 2C, 1D'),
+    '3': ('battle', alphazero.StarGambitBattleGS, '4F, 3C, 2D'),
+}
+
 # === Star Gambit Configuration ===
-Game = alphazero.StarGambitSkirmishGS
 BATCH_SIZE = 64
 NN_MCTS_DEPTH = 200
 
 
+def select_variant():
+    """Prompt user to select a game variant. Returns (variant_name, Game class)."""
+    print("Select Star Gambit variant:")
+    for key, (name, _, desc) in VARIANTS.items():
+        print(f"  {key}. {name.capitalize()} ({desc})")
+
+    variant_input = input("Variant (1/2/3) [1]: ").strip() or '1'
+    if variant_input not in VARIANTS:
+        print(f"Invalid selection '{variant_input}', defaulting to Skirmish")
+        variant_input = '1'
+
+    variant_name, Game, _ = VARIANTS[variant_input]
+    print(f"Selected: {variant_name.capitalize()}\n")
+    return variant_name, Game
+
+
 def main():
     """Run Monrad tournament for Star Gambit networks."""
-    # Determine model path
-    model_path = os.path.join("data", "checkpoint")
-    if os.path.isdir(os.path.join("data", "bench")):
-        model_path = os.path.join("data", "bench")
+    # Select game variant
+    variant_name, Game = select_variant()
+
+    # Determine model path (variant-specific subdirectories)
+    model_path = os.path.join("data", "checkpoint", variant_name)
+    bench_path = os.path.join("data", "bench", variant_name)
+    if os.path.isdir(bench_path):
+        model_path = bench_path
 
     # Load agents
     nn_agents = [
@@ -62,9 +88,10 @@ def main():
 
     count = len(agents)
     print(f"=== Star Gambit Monrad Tournament ===")
-    print(f"Game: StarGambitSkirmishGS")
+    print(f"Game: {variant_name.capitalize()} ({Game.__name__})")
     print(f"MCTS depth: {NN_MCTS_DEPTH}")
     print(f"Batch size: {BATCH_SIZE}")
+    print(f"Model path: {model_path}")
     print(f"Agents ({count}): {agents}")
     print()
 
@@ -191,13 +218,14 @@ def main():
         print(f"  {rank+1}. {agent}: {rating:.0f}")
 
     # Save results
+    output_file = os.path.join("data", f"star_gambit_{variant_name}_monrad_wr.csv")
     np.savetxt(
-        os.path.join("data", "star_gambit_monrad_wr.csv"),
+        output_file,
         win_matrix,
         delimiter=",",
         header=",".join([str(a) for a in agents]),
     )
-    print(f"\nResults saved to data/star_gambit_monrad_wr.csv")
+    print(f"\nResults saved to {output_file}")
 
 
 if __name__ == "__main__":

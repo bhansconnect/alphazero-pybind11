@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Training script for Star Gambit AI.
 
-This script configures game_runner.py for Star Gambit Skirmish training.
+This script configures game_runner.py for Star Gambit training.
+Supports all three variants: Skirmish, Clash, and Battle.
 Run with: python src/star_gambit_train.py
 """
 
@@ -14,9 +15,35 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import alphazero
 import game_runner
 
-# === Game Configuration ===
-Game = alphazero.StarGambitSkirmishGS
-game_name = "star_gambit_skirmish"
+# === Game Variants ===
+VARIANTS = {
+    '1': ('skirmish', alphazero.StarGambitSkirmishGS, '3F, 1C, 0D - 39 actions, 5-side board'),
+    '2': ('clash', alphazero.StarGambitClashGS, '3F, 2C, 1D - 55 actions, 5-side board'),
+    '3': ('battle', alphazero.StarGambitBattleGS, '4F, 3C, 2D - 75 actions, 6-side board'),
+}
+
+# === Game Configuration (set by select_variant) ===
+Game = None
+game_name = None
+variant_name = None
+
+
+def select_variant():
+    """Prompt user to select a game variant."""
+    global Game, game_name, variant_name
+
+    print("Select Star Gambit variant:")
+    for key, (name, _, desc) in VARIANTS.items():
+        print(f"  {key}. {name.capitalize()} ({desc})")
+
+    variant_input = input("Variant (1/2/3) [1]: ").strip() or '1'
+    if variant_input not in VARIANTS:
+        print(f"Invalid selection '{variant_input}', defaulting to Skirmish")
+        variant_input = '1'
+
+    variant_name, Game, _ = VARIANTS[variant_input]
+    game_name = f"star_gambit_{variant_name}"
+    print(f"Selected: {variant_name.capitalize()}\n")
 
 
 def new_game():
@@ -39,7 +66,7 @@ nn_compare_mcts_depth = 50         # Comparison depth for gating
 # === Training Parameters ===
 CPUCT = 1.25                       # Exploration constant
 FPU_REDUCTION = 0.25               # First Play Urgency reduction
-EXPECTED_OPENING_LENGTH = 15       # ~15 move opening phase
+EXPECTED_OPENING_LENGTH = 5        # ~5 turn per player opening phase
 SELF_PLAY_TEMP = 1.0               # Temperature during self-play
 EVAL_TEMP = 0.5                    # Temperature during evaluation
 FINAL_TEMP = 0.2                   # Final temperature
@@ -61,9 +88,9 @@ start = 0
 iters = 200
 lr_milestone = 150
 
-# === Derived ===
-network_name = "densenet" if dense_net else "resnet"
-run_name = f"{game_name}-{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims"
+# === Derived (set in main after variant selection) ===
+network_name = None
+run_name = None
 
 
 def configure_game_runner():
@@ -71,6 +98,11 @@ def configure_game_runner():
     game_runner.Game = Game
     game_runner.game_name = game_name
     game_runner.new_game = new_game
+
+    # Variant-specific data paths
+    game_runner.CHECKPOINT_LOCATION = os.path.join("data", "checkpoint", variant_name)
+    game_runner.HIST_LOCATION = os.path.join("data", "history", variant_name)
+    game_runner.TMP_HIST_LOCATION = os.path.join("data", "tmp_history", variant_name)
 
     # Network
     game_runner.depth = depth
@@ -112,11 +144,20 @@ def configure_game_runner():
 
 
 if __name__ == "__main__":
-    print(f"=== Star Gambit Training ===")
+    print(f"=== Star Gambit Training ===\n")
+
+    # Select game variant first
+    select_variant()
+
+    # Update derived values now that game_name is set
+    network_name = "densenet" if dense_net else "resnet"
+    run_name = f"{game_name}-{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims"
+
     print(f"Game: {game_name}")
     print(f"Network: {network_name} {depth}d {channels}c {kernel_size}k")
     print(f"MCTS depth: {nn_selfplay_mcts_depth}")
     print(f"Iterations: {iters}")
+    print(f"Checkpoint path: data/checkpoint/{variant_name}/")
     print()
 
     # Configure game_runner with our settings

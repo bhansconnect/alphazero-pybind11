@@ -239,7 +239,7 @@ class NNWrapper:
             l_pi = self.sample_loss_pi(target_pis, out_pi)
             total_loss = l_pi + l_v
             for sample_loss in total_loss:
-                loss[i] = sample_loss
+                loss[i] = sample_loss.detach()
                 i += 1
         return loss
 

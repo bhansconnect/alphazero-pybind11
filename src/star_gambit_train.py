@@ -76,11 +76,34 @@ TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
 SELF_PLAY_BATCH_SIZE = 128         # Games per batch
 SELF_PLAY_CONCURRENT_BATCH_MULT = 2
 SELF_PLAY_CHUNKS = 4
+TRAIN_BATCH_SIZE = 1024            # Training batch size
+TRAIN_SAMPLE_RATE = 1              # Training sample multiplier
 
 # === Gating Thresholds ===
 GATING_PANEL_SIZE = 1
 GATING_PANEL_WIN_RATE = 0.52
 GATING_BEST_WIN_RATE = 0.52
+
+# === Resignation ===
+RESIGN_PERCENT = 0.02              # Resign if win prob < this
+RESIGN_PLAYTHROUGH_PERCENT = 0.20  # % of resignations played out anyway
+
+# === Cache Configuration ===
+MAX_CACHE_SIZE = 200_000           # MCTS position cache size
+CACHE_SHARDS = None                # None = use cpu_count()
+
+# === History Window ===
+HIST_SIZE = 30_000                 # History buffer size per batch
+WINDOW_SIZE_ALPHA = 0.5            # History window growth rate
+WINDOW_SIZE_BETA = 0.7             # History window slope
+WINDOW_SIZE_SCALAR = 6             # History window base scale
+
+# === Workers ===
+RESULT_WORKERS = 2                 # Result processing threads
+DATA_WORKERS = None                # None = use cpu_count() - 1
+
+# === Comparison ===
+compare_past = 20                  # Iterations back to compare ELO
 
 # === Training Iterations ===
 bootstrap_iters = 0
@@ -141,6 +164,33 @@ def configure_game_runner():
     game_runner.bootstrap_iters = bootstrap_iters
     game_runner.start = start
     game_runner.iters = iters
+
+    # Training batch
+    game_runner.TRAIN_BATCH_SIZE = TRAIN_BATCH_SIZE
+    game_runner.TRAIN_SAMPLE_RATE = TRAIN_SAMPLE_RATE
+
+    # Resignation
+    game_runner.RESIGN_PERCENT = RESIGN_PERCENT
+    game_runner.RESIGN_PLAYTHROUGH_PERCENT = RESIGN_PLAYTHROUGH_PERCENT
+
+    # Cache
+    game_runner.MAX_CACHE_SIZE = MAX_CACHE_SIZE
+    if CACHE_SHARDS is not None:
+        game_runner.CACHE_SHARDS = CACHE_SHARDS
+
+    # History window
+    game_runner.HIST_SIZE = HIST_SIZE
+    game_runner.WINDOW_SIZE_ALPHA = WINDOW_SIZE_ALPHA
+    game_runner.WINDOW_SIZE_BETA = WINDOW_SIZE_BETA
+    game_runner.WINDOW_SIZE_SCALAR = WINDOW_SIZE_SCALAR
+
+    # Workers
+    game_runner.RESULT_WORKERS = RESULT_WORKERS
+    if DATA_WORKERS is not None:
+        game_runner.DATA_WORKERS = DATA_WORKERS
+
+    # Comparison
+    game_runner.compare_past = compare_past
 
 
 if __name__ == "__main__":

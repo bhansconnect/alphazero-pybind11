@@ -1413,6 +1413,204 @@ std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
     const PlayHistory& base) const noexcept {
   std::vector<PlayHistory> syms;
   syms.push_back(base);
+
+  // Create 180-degree rotated version
+  PlayHistory rotated;
+
+  // ========================================
+  // Step 1: Build hex index rotation lookup
+  // For 180° rotation: (q, r) → (-q, -r)
+  // ========================================
+  std::array<int, AS::NUM_HEXES> hex_rotation_map;
+  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+    Hex h = index_to_hex(idx, Config::BOARD_SIDE);
+    Hex rotated_h = {static_cast<int8_t>(-h.q), static_cast<int8_t>(-h.r)};
+    hex_rotation_map[idx] = hex_to_index(rotated_h, Config::BOARD_SIDE);
+  }
+
+  // ========================================
+  // Step 2: Transform canonical tensor
+  // ========================================
+  rotated.canonical = Tensor<float, 3>(AS::CANONICAL_SHAPE[0],
+                                       AS::CANONICAL_SHAPE[1],
+                                       AS::CANONICAL_SHAPE[2]);
+  rotated.canonical.setZero();
+
+  int channel = 0;
+
+  // SECTION 1: Slot-indexed unit presence
+  // Layout: [P0_F0..P0_Fn, P1_F0..P1_Fn, P0_C0..P0_Cn, P1_C0..P1_Cn,
+  //          P0_D0..P0_Dn, P1_D0..P1_Dn, P0_Portal, P1_Portal]
+
+  // Fighters: swap P0 <-> P1, rotate hexes
+  int p0_fighter_start = channel;
+  int p1_fighter_start = channel + Config::MAX_FIGHTERS;
+  for (int slot = 0; slot < Config::MAX_FIGHTERS; ++slot) {
+    for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+      int rotated_idx = hex_rotation_map[idx];
+      // P0 slot -> P1 slot (swapped)
+      rotated.canonical(p1_fighter_start + slot, 0, rotated_idx) =
+          base.canonical(p0_fighter_start + slot, 0, idx);
+      // P1 slot -> P0 slot (swapped)
+      rotated.canonical(p0_fighter_start + slot, 0, rotated_idx) =
+          base.canonical(p1_fighter_start + slot, 0, idx);
+    }
+  }
+  channel += Config::MAX_FIGHTERS * 2;
+
+  // Cruisers: same pattern
+  int p0_cruiser_start = channel;
+  int p1_cruiser_start = channel + Config::MAX_CRUISERS;
+  for (int slot = 0; slot < Config::MAX_CRUISERS; ++slot) {
+    for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+      int rotated_idx = hex_rotation_map[idx];
+      rotated.canonical(p1_cruiser_start + slot, 0, rotated_idx) =
+          base.canonical(p0_cruiser_start + slot, 0, idx);
+      rotated.canonical(p0_cruiser_start + slot, 0, rotated_idx) =
+          base.canonical(p1_cruiser_start + slot, 0, idx);
+    }
+  }
+  channel += Config::MAX_CRUISERS * 2;
+
+  // Dreadnoughts: same pattern
+  int p0_dread_start = channel;
+  int p1_dread_start = channel + Config::MAX_DREADNOUGHTS;
+  for (int slot = 0; slot < Config::MAX_DREADNOUGHTS; ++slot) {
+    for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+      int rotated_idx = hex_rotation_map[idx];
+      rotated.canonical(p1_dread_start + slot, 0, rotated_idx) =
+          base.canonical(p0_dread_start + slot, 0, idx);
+      rotated.canonical(p0_dread_start + slot, 0, rotated_idx) =
+          base.canonical(p1_dread_start + slot, 0, idx);
+    }
+  }
+  channel += Config::MAX_DREADNOUGHTS * 2;
+
+  // Portals: swap P0 <-> P1, rotate hexes
+  int p0_portal_ch = channel;
+  int p1_portal_ch = channel + 1;
+  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+    int rotated_idx = hex_rotation_map[idx];
+    rotated.canonical(p1_portal_ch, 0, rotated_idx) =
+        base.canonical(p0_portal_ch, 0, idx);
+    rotated.canonical(p0_portal_ch, 0, rotated_idx) =
+        base.canonical(p1_portal_ch, 0, idx);
+  }
+  channel += 2;
+
+  // SECTION 2: Orientation (12 channels)
+  // Layout: [dir0_p0, dir0_p1, dir1_p0, dir1_p1, ..., dir5_p0, dir5_p1]
+  // Transformation: dir d maps to (d+3)%6, player p maps to 1-p
+  int orientation_start = channel;
+  for (int dir = 0; dir < 6; ++dir) {
+    int new_dir = (dir + 3) % 6;
+    for (int p = 0; p < 2; ++p) {
+      int new_p = 1 - p;
+      int src_ch = orientation_start + dir * 2 + p;
+      int dst_ch = orientation_start + new_dir * 2 + new_p;
+      for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+        int rotated_idx = hex_rotation_map[idx];
+        rotated.canonical(dst_ch, 0, rotated_idx) = base.canonical(src_ch, 0, idx);
+      }
+    }
+  }
+  channel += 12;
+
+  // SECTION 3: HP (6 channels) - only rotate hexes, no player swap
+  for (int hp_ch = 0; hp_ch < 6; ++hp_ch) {
+    for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+      int rotated_idx = hex_rotation_map[idx];
+      rotated.canonical(channel + hp_ch, 0, rotated_idx) =
+          base.canonical(channel + hp_ch, 0, idx);
+    }
+  }
+  channel += 6;
+
+  // SECTION 4: Current player (flip value) + Has acted (unchanged)
+  // Current player: value flipped (0->1, 1->0)
+  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+    rotated.canonical(channel, 0, idx) = 1.0f - base.canonical(channel, 0, idx);
+  }
+  channel++;
+
+  // Has acted: unchanged
+  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+    rotated.canonical(channel, 0, idx) = base.canonical(channel, 0, idx);
+  }
+  channel++;
+
+  // SECTION 5: Reserves (6 channels) - swap P0 and P1
+  // Layout: [P0_F, P0_C, P0_D, P1_F, P1_C, P1_D]
+  int p0_res_start = channel;
+  int p1_res_start = channel + 3;
+  for (int t = 0; t < 3; ++t) {
+    // Only hex 0 has the value, but copy all to be safe
+    for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+      rotated.canonical(p1_res_start + t, 0, idx) = base.canonical(p0_res_start + t, 0, idx);
+      rotated.canonical(p0_res_start + t, 0, idx) = base.canonical(p1_res_start + t, 0, idx);
+    }
+  }
+  channel += 6;
+
+  // SECTION 6: Moves remaining (2 channels) - swap P0 <-> P1, rotate hexes
+  int p0_moves_ch = channel;
+  int p1_moves_ch = channel + 1;
+  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+    int rotated_idx = hex_rotation_map[idx];
+    rotated.canonical(p1_moves_ch, 0, rotated_idx) = base.canonical(p0_moves_ch, 0, idx);
+    rotated.canonical(p0_moves_ch, 0, rotated_idx) = base.canonical(p1_moves_ch, 0, idx);
+  }
+  channel += 2;
+
+  // SECTION 7: Cannons available (2 channels) - swap P0 <-> P1, rotate hexes
+  int p0_cannons_ch = channel;
+  int p1_cannons_ch = channel + 1;
+  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+    int rotated_idx = hex_rotation_map[idx];
+    rotated.canonical(p1_cannons_ch, 0, rotated_idx) = base.canonical(p0_cannons_ch, 0, idx);
+    rotated.canonical(p0_cannons_ch, 0, rotated_idx) = base.canonical(p1_cannons_ch, 0, idx);
+  }
+  channel += 2;
+
+  // SECTION 8: Turn progress (1 channel) - unchanged (scalar broadcast)
+  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+    rotated.canonical(channel, 0, idx) = base.canonical(channel, 0, idx);
+  }
+  channel++;
+
+  // ========================================
+  // Step 3: Transform value
+  // ========================================
+  rotated.v = Vector<float>(base.v.size());
+  rotated.v(0) = base.v(1);  // P0 win becomes P1 win
+  rotated.v(1) = base.v(0);  // P1 win becomes P0 win
+  rotated.v(2) = base.v(2);  // Draw unchanged
+
+  // ========================================
+  // Step 4: Transform policy
+  // ========================================
+  rotated.pi = Vector<float>(base.pi.size());
+
+  // Move and fire actions (indices 0 to DEPLOY_OFFSET-1): unchanged
+  // These use relative directions from the unit's perspective
+  for (int i = 0; i < AS::DEPLOY_OFFSET; ++i) {
+    rotated.pi(i) = base.pi(i);
+  }
+
+  // Deploy actions: rotate facing by 180 degrees
+  for (int type_idx = 0; type_idx < 3; ++type_idx) {
+    for (int facing = 0; facing < 6; ++facing) {
+      int new_facing = (facing + 3) % 6;
+      int src_action = AS::DEPLOY_OFFSET + type_idx * 6 + facing;
+      int dst_action = AS::DEPLOY_OFFSET + type_idx * 6 + new_facing;
+      rotated.pi(dst_action) = base.pi(src_action);
+    }
+  }
+
+  // End turn: unchanged
+  rotated.pi(AS::END_TURN_OFFSET) = base.pi(AS::END_TURN_OFFSET);
+
+  syms.push_back(rotated);
   return syms;
 }
 

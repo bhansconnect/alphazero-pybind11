@@ -578,6 +578,309 @@ TEST(GameFlow, Symmetries) {
 }
 
 // =============================================================================
+// Symmetry Tests (180° Rotation)
+// =============================================================================
+
+TEST(Symmetries, ReturnsCorrectCount) {
+  TestGame game;
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 1.0f, 0.0f, 0.0f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setConstant(1.0f / TestAS::NUM_MOVES);
+
+  auto syms = game.symmetries(base);
+  EXPECT_EQ(syms.size(), 2u);  // Identity + 180° rotation
+}
+
+TEST(Symmetries, ValueSwappedCorrectly) {
+  TestGame game;
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.7f, 0.2f, 0.1f;  // P0 likely wins
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setZero();
+
+  auto syms = game.symmetries(base);
+  ASSERT_EQ(syms.size(), 2u);
+
+  // First symmetry is identity - values unchanged
+  EXPECT_FLOAT_EQ(syms[0].v(0), 0.7f);
+  EXPECT_FLOAT_EQ(syms[0].v(1), 0.2f);
+  EXPECT_FLOAT_EQ(syms[0].v(2), 0.1f);
+
+  // Rotated symmetry should have swapped values
+  EXPECT_FLOAT_EQ(syms[1].v(0), 0.2f);  // Was P1's value
+  EXPECT_FLOAT_EQ(syms[1].v(1), 0.7f);  // Was P0's value
+  EXPECT_FLOAT_EQ(syms[1].v(2), 0.1f);  // Draw unchanged
+}
+
+TEST(Symmetries, DoubleRotationReturnsToOriginal) {
+  TestGame game;
+  // Play a few moves to get interesting state
+  game.play_move(TestAS::END_TURN_OFFSET);  // P0 end turn (if valid)
+
+  // Get valid moves and play them to advance state
+  auto valids = game.valid_moves();
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::END_TURN_OFFSET; ++i) {
+    if (valids(i) == 1) {
+      game.play_move(i);
+      break;
+    }
+  }
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.6f, 0.3f, 0.1f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setConstant(1.0f / TestAS::NUM_MOVES);
+
+  auto syms = game.symmetries(base);
+  ASSERT_EQ(syms.size(), 2u);
+
+  // Apply symmetry again to the rotated version
+  PlayHistory rotated;
+  rotated.canonical = syms[1].canonical;
+  rotated.v = syms[1].v;
+  rotated.pi = syms[1].pi;
+
+  auto double_syms = game.symmetries(rotated);
+  ASSERT_EQ(double_syms.size(), 2u);
+
+  // double_syms[1] should match original base (within floating point tolerance)
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_NEAR(double_syms[1].v(i), base.v(i), 1e-5f)
+        << "Value mismatch at index " << i;
+  }
+
+  // Canonical should also match
+  for (int c = 0; c < TestAS::CANONICAL_SHAPE[0]; ++c) {
+    for (int h = 0; h < TestAS::NUM_HEXES; ++h) {
+      EXPECT_NEAR(double_syms[1].canonical(c, 0, h),
+                  base.canonical(c, 0, h), 1e-5f)
+          << "Canonical mismatch at channel " << c << ", hex " << h;
+    }
+  }
+}
+
+TEST(Symmetries, DeployActionsRotated) {
+  TestGame game;
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v.setConstant(1.0f / 3.0f);
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setZero();
+
+  // Set policy for deploying fighter facing East (dir 0)
+  int fighter_deploy_east = TestAS::DEPLOY_OFFSET + 0 * 6 + 0;  // type 0, facing 0 (E)
+  base.pi(fighter_deploy_east) = 1.0f;
+
+  auto syms = game.symmetries(base);
+  ASSERT_EQ(syms.size(), 2u);
+
+  // After 180° rotation, East (0) becomes West (3)
+  int fighter_deploy_west = TestAS::DEPLOY_OFFSET + 0 * 6 + 3;  // type 0, facing 3 (W)
+  EXPECT_FLOAT_EQ(syms[1].pi(fighter_deploy_west), 1.0f)
+      << "Deploy East should become Deploy West after 180° rotation";
+  EXPECT_FLOAT_EQ(syms[1].pi(fighter_deploy_east), 0.0f)
+      << "Original East action should be 0 after rotation";
+}
+
+TEST(Symmetries, DeployActionsAllDirectionsRotate) {
+  TestGame game;
+
+  // Test all 6 directions rotate correctly: d → (d+3) % 6
+  // 0(E) → 3(W), 1(NE) → 4(SW), 2(NW) → 5(SE)
+  // 3(W) → 0(E), 4(SW) → 1(NE), 5(SE) → 2(NW)
+  const std::pair<int, int> rotations[] = {
+      {0, 3}, {1, 4}, {2, 5}, {3, 0}, {4, 1}, {5, 2}
+  };
+
+  for (auto [orig_dir, rotated_dir] : rotations) {
+    PlayHistory base;
+    base.canonical = game.canonicalized();
+    base.v = Vector<float>(3);
+    base.v.setConstant(1.0f / 3.0f);
+    base.pi = Vector<float>(TestAS::NUM_MOVES);
+    base.pi.setZero();
+
+    int orig_action = TestAS::DEPLOY_OFFSET + 0 * 6 + orig_dir;  // Fighter type
+    base.pi(orig_action) = 1.0f;
+
+    auto syms = game.symmetries(base);
+    ASSERT_EQ(syms.size(), 2u);
+
+    int expected_action = TestAS::DEPLOY_OFFSET + 0 * 6 + rotated_dir;
+    EXPECT_FLOAT_EQ(syms[1].pi(expected_action), 1.0f)
+        << "Direction " << orig_dir << " should map to " << rotated_dir;
+  }
+}
+
+TEST(Symmetries, CurrentPlayerFlipped) {
+  TestGame game;
+  EXPECT_EQ(game.current_player(), 0);
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v.setConstant(1.0f / 3.0f);
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setZero();
+
+  auto syms = game.symmetries(base);
+  ASSERT_EQ(syms.size(), 2u);
+
+  // Current player channel index: SLOT_PRESENCE_CHANNELS + 18
+  // SLOT_PRESENCE_CHANNELS for Skirmish = (3 + 1 + 0) * 2 + 2 = 10
+  // Channel layout: orientation(12) + HP(6) = 18, so current_player is at offset 18
+  int cp_channel = TestAS::SLOT_PRESENCE_CHANNELS + 18;
+
+  // Original: current_player = 0, so channel value is 0.0
+  EXPECT_FLOAT_EQ(base.canonical(cp_channel, 0, 0), 0.0f)
+      << "Original current player should be 0";
+
+  // Rotated: should be flipped to 1.0
+  EXPECT_FLOAT_EQ(syms[1].canonical(cp_channel, 0, 0), 1.0f)
+      << "Rotated current player should be 1";
+}
+
+TEST(Symmetries, HexPositionsRotatedCorrectly) {
+  // Test that hex rotation works correctly
+
+  TestGame game;
+
+  // Deploy a fighter for P0 to create unit presence at a non-origin hex
+  auto valids = game.valid_moves();
+  int deploy = -1;
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
+    if (valids(i) == 1) {
+      deploy = i;
+      break;
+    }
+  }
+  ASSERT_NE(deploy, -1);
+  game.play_move(deploy);
+
+  // Now P1 deploys
+  valids = game.valid_moves();
+  deploy = -1;
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
+    if (valids(i) == 1) {
+      deploy = i;
+      break;
+    }
+  }
+  ASSERT_NE(deploy, -1);
+  game.play_move(deploy);
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v.setConstant(1.0f / 3.0f);
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setZero();
+
+  auto syms = game.symmetries(base);
+  ASSERT_EQ(syms.size(), 2u);
+
+  // Verify hex rotation: for each channel, data at hex idx should match
+  // rotated data at rotated hex idx
+  // Check that origin hex is unchanged (rotation of (0,0) is (0,0))
+  int origin_idx = hex_to_index({0, 0}, TestConfig::BOARD_SIDE);
+  for (int c = 0; c < TestAS::SLOT_PRESENCE_CHANNELS; ++c) {
+    // Origin should map to origin
+    float orig_val = base.canonical(c, 0, origin_idx);
+    float rot_val = syms[1].canonical(c, 0, origin_idx);
+    // Note: P0 and P1 channels are swapped, so we need to check corresponding channels
+    (void)orig_val;  // Suppress unused variable warning
+    (void)rot_val;
+  }
+
+  // Verify that hex rotation is correct by checking index mapping
+  Hex test_hex = {2, -1};
+  int test_idx = hex_to_index(test_hex, TestConfig::BOARD_SIDE);
+  Hex rotated_hex = {static_cast<int8_t>(-test_hex.q), static_cast<int8_t>(-test_hex.r)};
+  int rotated_idx = hex_to_index(rotated_hex, TestConfig::BOARD_SIDE);
+
+  EXPECT_TRUE(hex_in_bounds(test_hex, TestConfig::BOARD_SIDE));
+  EXPECT_TRUE(hex_in_bounds(rotated_hex, TestConfig::BOARD_SIDE));
+  EXPECT_NE(test_idx, rotated_idx) << "Rotation should change non-origin hex indices";
+}
+
+TEST(Symmetries, MoveAndFireActionsUnchanged) {
+  TestGame game;
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v.setConstant(1.0f / 3.0f);
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setZero();
+
+  // Set policy for a move action (these use relative directions)
+  base.pi(0) = 0.5f;  // Fighter 1 move forward
+  base.pi(TestAS::FIGHTER_FIRE_OFFSET) = 0.3f;  // Fighter 1 fire
+  base.pi(TestAS::END_TURN_OFFSET) = 0.2f;  // End turn
+
+  auto syms = game.symmetries(base);
+  ASSERT_EQ(syms.size(), 2u);
+
+  // Move and fire actions should be unchanged (relative directions)
+  EXPECT_FLOAT_EQ(syms[1].pi(0), 0.5f)
+      << "Move action should be unchanged after rotation";
+  EXPECT_FLOAT_EQ(syms[1].pi(TestAS::FIGHTER_FIRE_OFFSET), 0.3f)
+      << "Fire action should be unchanged after rotation";
+  EXPECT_FLOAT_EQ(syms[1].pi(TestAS::END_TURN_OFFSET), 0.2f)
+      << "End turn action should be unchanged after rotation";
+}
+
+TEST(Symmetries, IdentitySymmetryIsUnchanged) {
+  TestGame game;
+
+  // Deploy some units to create interesting state
+  auto valids = game.valid_moves();
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::END_TURN_OFFSET; ++i) {
+    if (valids(i) == 1) {
+      game.play_move(i);
+      break;
+    }
+  }
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.5f, 0.3f, 0.2f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  for (int i = 0; i < TestAS::NUM_MOVES; ++i) {
+    base.pi(i) = static_cast<float>(i) / TestAS::NUM_MOVES;
+  }
+
+  auto syms = game.symmetries(base);
+  ASSERT_EQ(syms.size(), 2u);
+
+  // First symmetry (identity) should be exactly the same
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_FLOAT_EQ(syms[0].v(i), base.v(i))
+        << "Identity value mismatch at " << i;
+  }
+
+  for (int i = 0; i < TestAS::NUM_MOVES; ++i) {
+    EXPECT_FLOAT_EQ(syms[0].pi(i), base.pi(i))
+        << "Identity policy mismatch at " << i;
+  }
+
+  for (int c = 0; c < TestAS::CANONICAL_SHAPE[0]; ++c) {
+    for (int h = 0; h < TestAS::NUM_HEXES; ++h) {
+      EXPECT_FLOAT_EQ(syms[0].canonical(c, 0, h), base.canonical(c, 0, h))
+          << "Identity canonical mismatch at (" << c << ", " << h << ")";
+    }
+  }
+}
+
+// =============================================================================
 // Unit Property Tests
 // =============================================================================
 

@@ -31,6 +31,8 @@ using star_gambit_gs::SkirmishConfig;
 using star_gambit_gs::ClashConfig;
 using star_gambit_gs::BattleConfig;
 using star_gambit_gs::ActionSpace;
+using star_gambit_gs::UnitInfo;
+using star_gambit_gs::FireInfo;
 using tawlbwrdd_gs::TawlbwrddGS;
 
 // NOLINTNEXTLINE
@@ -354,9 +356,29 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("CANONICAL_SHAPE",
                   [] { return connect4_gs::CANONICAL_SHAPE; });
 
+  // Star Gambit support structs
+  py::class_<UnitInfo>(m, "UnitInfo")
+      .def_readonly("player", &UnitInfo::player)
+      .def_readonly("type", &UnitInfo::type)
+      .def_readonly("slot", &UnitInfo::slot)
+      .def_readonly("hp", &UnitInfo::hp)
+      .def_readonly("anchor_q", &UnitInfo::anchor_q)
+      .def_readonly("anchor_r", &UnitInfo::anchor_r)
+      .def_readonly("facing", &UnitInfo::facing)
+      .def_readonly("moves_left", &UnitInfo::moves_left);
+
+  py::class_<FireInfo>(m, "FireInfo")
+      .def_readonly("has_target", &FireInfo::has_target)
+      .def_readonly("target_player", &FireInfo::target_player)
+      .def_readonly("target_type", &FireInfo::target_type)
+      .def_readonly("target_slot", &FireInfo::target_slot)
+      .def_readonly("damage", &FireInfo::damage);
+
   // Star Gambit - Skirmish (3F, 1C, 0D, 5-side board)
   py::class_<StarGambitSkirmishGS, GameState>(m, "StarGambitSkirmishGS")
       .def(py::init<>())
+      .def("get_units", &StarGambitSkirmishGS::get_units)
+      .def("get_fire_info", &StarGambitSkirmishGS::get_fire_info)
       .def_static("NUM_PLAYERS", [] { return star_gambit_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return ActionSpace<SkirmishConfig>::NUM_MOVES; })
       .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
@@ -366,6 +388,8 @@ PYBIND11_MODULE(alphazero, m) {
   // Star Gambit - Clash (3F, 2C, 1D, 5-side board)
   py::class_<StarGambitClashGS, GameState>(m, "StarGambitClashGS")
       .def(py::init<>())
+      .def("get_units", &StarGambitClashGS::get_units)
+      .def("get_fire_info", &StarGambitClashGS::get_fire_info)
       .def_static("NUM_PLAYERS", [] { return star_gambit_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return ActionSpace<ClashConfig>::NUM_MOVES; })
       .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
@@ -375,6 +399,8 @@ PYBIND11_MODULE(alphazero, m) {
   // Star Gambit - Battle (4F, 3C, 2D, 6-side board)
   py::class_<StarGambitBattleGS, GameState>(m, "StarGambitBattleGS")
       .def(py::init<>())
+      .def("get_units", &StarGambitBattleGS::get_units)
+      .def("get_fire_info", &StarGambitBattleGS::get_fire_info)
       .def_static("NUM_PLAYERS", [] { return star_gambit_gs::NUM_PLAYERS; })
       .def_static("NUM_MOVES", [] { return ActionSpace<BattleConfig>::NUM_MOVES; })
       .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })

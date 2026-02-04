@@ -99,10 +99,12 @@ std::vector<Hex> get_unit_hexes(UnitType type, const Hex& anchor, int facing) {
 
     case UnitType::DREADNOUGHT: {
       int rear_dir = OPPOSITE_DIRECTION[facing];
-      Hex rear_left = hex_neighbor(anchor, rotate_direction(rear_dir, -1));
-      Hex rear_right = hex_neighbor(anchor, rotate_direction(rear_dir, 1));
-      hexes.push_back(rear_left);
-      hexes.push_back(rear_right);
+      // Rear hexes: one at SW (index 1), one at W (index 2) for E-facing
+      // Note: SW is rear-right from pilot view, W is rear-center
+      Hex rear_sw = hex_neighbor(anchor, rotate_direction(rear_dir, 1));
+      Hex rear_w = hex_neighbor(anchor, rear_dir);
+      hexes.push_back(rear_sw);   // index 1 (SW for E-facing)
+      hexes.push_back(rear_w);    // index 2 (W for E-facing)
       break;
     }
 
@@ -141,14 +143,34 @@ Hex get_deploy_hex(int player, int board_side) {
   }
 }
 
+// Dreadnought deployment: one rear hex at deploy position, ship extends away
+// Returns the direction from deploy hex to anchor hex for the given facing direction
+// Returns -1 if the facing is not valid for that player
+int get_dreadnought_anchor_dir(int player, int facing) {
+  // P0 valid facings: E(0), W(3), SW(4), SE(5) - ship points toward center
+  // P1 valid facings: E(0), NE(1), NW(2), W(3) - ship points toward center
+  // anchor_dir is the direction from deploy hex to the anchor (front) hex
+  static const int P0_ANCHOR_DIRS[6] = {0, -1, -1, 4, 5, 5};  // indexed by facing
+  static const int P1_ANCHOR_DIRS[6] = {1, 2, 2, 3, -1, -1};  // indexed by facing
+
+  if (player == 0) {
+    return P0_ANCHOR_DIRS[facing];
+  } else {
+    return P1_ANCHOR_DIRS[facing];
+  }
+}
+
 std::vector<int> get_valid_deploy_facings(UnitType type, int player) {
   std::vector<int> facings;
 
   if (type == UnitType::DREADNOUGHT) {
+    // Dreadnoughts: one rear hex at deploy square, ship extends away from portal
+    // P0: E(0), W(3), SW(4), SE(5)
+    // P1: E(0), NE(1), NW(2), W(3)
     if (player == 0) {
-      facings = {4, 5, 0, 3};
+      facings = {0, 3, 4, 5};
     } else {
-      facings = {1, 2, 3, 0};
+      facings = {0, 1, 2, 3};
     }
   } else {
     if (player == 0) {
@@ -181,11 +203,13 @@ std::vector<CannonInfo> get_cannon_info(UnitType type) {
       break;
 
     case UnitType::DREADNOUGHT:
-      // Cannon order: rear-left, front-left, front-right, rear-right
-      cannons.push_back({-1, 1});  // Rear-left hex
-      cannons.push_back({-1, 0});  // Front hex, left
-      cannons.push_back({1, 0});   // Front hex, right
-      cannons.push_back({1, 2});   // Rear-right hex
+      // Cannon order: 0=rr, 1=fr, 2=fl, 3=rl (see Python DREAD_CANNON_NAMES)
+      // hexes[1] = SW (rear-right from pilot view), hexes[2] = W (rear-left from pilot view)
+      // Right cannons fire forward (facing), left cannons fire forward-left (facing+1)
+      cannons.push_back({0, 1});   // Cannon 0 (rr): from SW hex, fires forward (facing)
+      cannons.push_back({0, 0});   // Cannon 1 (fr): from anchor, fires forward (facing)
+      cannons.push_back({1, 0});   // Cannon 2 (fl): from anchor, fires forward-left (facing+1)
+      cannons.push_back({1, 2});   // Cannon 3 (rl): from W hex, fires forward-left (facing+1)
       break;
 
     case UnitType::PORTAL:
@@ -494,27 +518,44 @@ MoveResult StarGambitGS<Config>::compute_dreadnought_move(const Unit& unit, int 
   MoveResult result;
   Hex current_anchor = {unit.anchor_q, unit.anchor_r};
 
-  // Dreadnought moves: 0=rotate-left, 1=fwd-left, 2=fwd-right, 3=rotate-right
+  // Dreadnought moves: 0=left (pivot), 1=fwd-left (slide), 2=fwd-right (slide), 3=right (pivot)
   switch (direction) {
-    case 0:  // Rotate left
-      result.new_anchor = current_anchor;
-      result.new_facing = rotate_direction(unit.facing, 1);
-      result.valid = true;
+    case 0:  // Left: pivot around rear-left hex (at rear_dir, which is W for E-facing)
+      {
+        int rear_dir = OPPOSITE_DIRECTION[unit.facing];
+        Hex rear_left = hex_neighbor(current_anchor, rear_dir);
+
+        // Anchor rotates counterclockwise around rear_left
+        int anchor_dir_from_pivot = OPPOSITE_DIRECTION[rear_dir];
+        int new_anchor_dir = rotate_direction(anchor_dir_from_pivot, 1);
+        result.new_anchor = hex_neighbor(rear_left, new_anchor_dir);
+        result.new_facing = rotate_direction(unit.facing, 1);
+        result.valid = true;
+      }
       break;
-    case 1:  // Forward-left
+    case 1:  // Forward-left: slide in forward-left direction (same as fl cannon)
       result.new_anchor = hex_neighbor(current_anchor, rotate_direction(unit.facing, 1));
-      result.new_facing = rotate_direction(unit.facing, 1);
+      result.new_facing = unit.facing;  // No rotation
       result.valid = true;
       break;
-    case 2:  // Forward-right
-      result.new_anchor = hex_neighbor(current_anchor, rotate_direction(unit.facing, -1));
-      result.new_facing = rotate_direction(unit.facing, -1);
+    case 2:  // Forward-right: slide in forward direction (same as fr cannon)
+      result.new_anchor = hex_neighbor(current_anchor, unit.facing);
+      result.new_facing = unit.facing;  // No rotation
       result.valid = true;
       break;
-    case 3:  // Rotate right
-      result.new_anchor = current_anchor;
-      result.new_facing = rotate_direction(unit.facing, -1);
-      result.valid = true;
+    case 3:  // Right: pivot around rear-right hex (at rotate_direction(rear_dir, 1), which is SW for E-facing)
+      {
+        int rear_dir = OPPOSITE_DIRECTION[unit.facing];
+        int rear_right_dir = rotate_direction(rear_dir, 1);
+        Hex rear_right = hex_neighbor(current_anchor, rear_right_dir);
+
+        // Anchor rotates clockwise around rear_right
+        int anchor_dir_from_pivot = OPPOSITE_DIRECTION[rear_right_dir];
+        int new_anchor_dir = rotate_direction(anchor_dir_from_pivot, -1);
+        result.new_anchor = hex_neighbor(rear_right, new_anchor_dir);
+        result.new_facing = rotate_direction(unit.facing, -1);
+        result.valid = true;
+      }
       break;
     default:
       result.valid = false;
@@ -674,14 +715,24 @@ bool StarGambitGS<Config>::is_deploy_valid(UnitType type, int facing) const {
   }
 
   Hex deploy_hex = get_deploy_hex(current_player_, Config::BOARD_SIDE);
-  auto new_unit_hexes = get_unit_hexes(type, deploy_hex, facing);
+
+  std::vector<Hex> new_unit_hexes;
+  if (type == UnitType::DREADNOUGHT) {
+    // For dreadnoughts, one rear hex goes at deploy position, anchor is offset
+    int anchor_dir = get_dreadnought_anchor_dir(current_player_, facing);
+    Hex anchor = hex_neighbor(deploy_hex, anchor_dir);
+    new_unit_hexes = get_unit_hexes(type, anchor, facing);
+  } else {
+    new_unit_hexes = get_unit_hexes(type, deploy_hex, facing);
+  }
 
   auto all_occupied = get_all_occupied_hexes();
+
   for (const auto& h : new_unit_hexes) {
     if (!hex_in_bounds(h, Config::BOARD_SIDE)) return false;
     if (std::find(all_occupied.begin(), all_occupied.end(), h) !=
         all_occupied.end()) {
-      return false;
+      return false;  // Collision with occupied hex
     }
   }
 
@@ -931,14 +982,23 @@ template<typename Config>
 void StarGambitGS<Config>::execute_deploy(UnitType type, int facing) {
   Hex deploy_hex = get_deploy_hex(current_player_, Config::BOARD_SIDE);
 
+  Hex anchor;
+  if (type == UnitType::DREADNOUGHT) {
+    // For dreadnoughts, one rear hex goes at deploy position, anchor is offset
+    int anchor_dir = get_dreadnought_anchor_dir(current_player_, facing);
+    anchor = hex_neighbor(deploy_hex, anchor_dir);
+  } else {
+    anchor = deploy_hex;
+  }
+
   Unit new_unit;
   new_unit.type = type;
   new_unit.player = current_player_;
   new_unit.slot = static_cast<uint8_t>(get_next_slot(current_player_, type));
   new_unit.hp = static_cast<uint8_t>(get_max_hp(type));
   new_unit.facing = static_cast<uint8_t>(facing);
-  new_unit.anchor_q = deploy_hex.q;
-  new_unit.anchor_r = deploy_hex.r;
+  new_unit.anchor_q = anchor.q;
+  new_unit.anchor_r = anchor.r;
   new_unit.moves_left = 0;
   new_unit.cannons_fired = (1 << get_num_cannons(type)) - 1;
 
@@ -1036,6 +1096,14 @@ void StarGambitGS<Config>::execute_end_turn() {
   }
 
   reset_turn_state();
+
+  // Check if current player has no valid moves - they lose
+  Vector<uint8_t> valids = valid_moves();
+  if (valids.sum() == 0) {
+    game_over_ = true;
+    winner_ = 1 - current_player_;
+    return;
+  }
 }
 
 template<typename Config>
@@ -1139,38 +1207,85 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
 
   int channel = 0;
 
-  // Unit presence planes (8 channels)
-  for (const auto& unit : units_) {
-    if (!unit.is_alive()) continue;
+  // ========================================
+  // SECTION 1: Slot-indexed unit presence
+  // ========================================
 
-    int type_idx = static_cast<int>(unit.type);
-    int plane = type_idx * 2 + unit.player;
-
-    std::vector<Hex> hexes;
-    if (unit.type == UnitType::PORTAL) {
-      hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
-    } else {
-      hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
-    }
-
-    for (const auto& h : hexes) {
-      int idx = hex_to_index(h, Config::BOARD_SIDE);
-      if (idx >= 0 && idx < AS::NUM_HEXES) {
-        tensor(plane, 0, idx) = 1.0f;
+  // Fighter slots (MAX_FIGHTERS * 2 channels)
+  for (int p = 0; p < 2; ++p) {
+    for (int slot = 0; slot < Config::MAX_FIGHTERS; ++slot) {
+      const Unit* unit = find_unit_by_slot(p, UnitType::FIGHTER, slot);
+      if (unit && unit->is_alive()) {
+        auto hexes = get_unit_hexes(unit->type, {unit->anchor_q, unit->anchor_r}, unit->facing);
+        for (const auto& h : hexes) {
+          int idx = hex_to_index(h, Config::BOARD_SIDE);
+          if (idx >= 0 && idx < AS::NUM_HEXES) {
+            tensor(channel, 0, idx) = 1.0f;
+          }
+        }
       }
+      channel++;
     }
   }
-  channel = 8;
 
-  // Orientation planes (12 channels)
+  // Cruiser slots (MAX_CRUISERS * 2 channels)
+  for (int p = 0; p < 2; ++p) {
+    for (int slot = 0; slot < Config::MAX_CRUISERS; ++slot) {
+      const Unit* unit = find_unit_by_slot(p, UnitType::CRUISER, slot);
+      if (unit && unit->is_alive()) {
+        auto hexes = get_unit_hexes(unit->type, {unit->anchor_q, unit->anchor_r}, unit->facing);
+        for (const auto& h : hexes) {
+          int idx = hex_to_index(h, Config::BOARD_SIDE);
+          if (idx >= 0 && idx < AS::NUM_HEXES) {
+            tensor(channel, 0, idx) = 1.0f;
+          }
+        }
+      }
+      channel++;
+    }
+  }
+
+  // Dreadnought slots (MAX_DREADNOUGHTS * 2 channels)
+  for (int p = 0; p < 2; ++p) {
+    for (int slot = 0; slot < Config::MAX_DREADNOUGHTS; ++slot) {
+      const Unit* unit = find_unit_by_slot(p, UnitType::DREADNOUGHT, slot);
+      if (unit && unit->is_alive()) {
+        auto hexes = get_unit_hexes(unit->type, {unit->anchor_q, unit->anchor_r}, unit->facing);
+        for (const auto& h : hexes) {
+          int idx = hex_to_index(h, Config::BOARD_SIDE);
+          if (idx >= 0 && idx < AS::NUM_HEXES) {
+            tensor(channel, 0, idx) = 1.0f;
+          }
+        }
+      }
+      channel++;
+    }
+  }
+
+  // Portal presence (2 channels - one per player)
+  for (int p = 0; p < 2; ++p) {
+    const Unit* portal = find_unit_by_slot(p, UnitType::PORTAL, 0);
+    if (portal && portal->is_alive()) {
+      auto hexes = get_portal_hexes(p, Config::BOARD_SIDE);
+      for (const auto& h : hexes) {
+        int idx = hex_to_index(h, Config::BOARD_SIDE);
+        if (idx >= 0 && idx < AS::NUM_HEXES) {
+          tensor(channel, 0, idx) = 1.0f;
+        }
+      }
+    }
+    channel++;
+  }
+
+  // ========================================
+  // SECTION 2: Orientation (12 channels)
+  // ========================================
   for (const auto& unit : units_) {
     if (!unit.is_alive()) continue;
     if (unit.type == UnitType::PORTAL) continue;
 
     int plane = channel + unit.facing * 2 + unit.player;
-
-    std::vector<Hex> hexes =
-        get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
+    auto hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
     for (const auto& h : hexes) {
       int idx = hex_to_index(h, Config::BOARD_SIDE);
       if (idx >= 0 && idx < AS::NUM_HEXES) {
@@ -1180,19 +1295,19 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
   }
   channel += 12;
 
-  // HP planes (6 channels)
+  // ========================================
+  // SECTION 3: HP planes (6 channels)
+  // ========================================
   for (const auto& unit : units_) {
     if (!unit.is_alive()) continue;
 
     int hp_plane = channel + std::min(static_cast<int>(unit.hp) - 1, 5);
-
     std::vector<Hex> hexes;
     if (unit.type == UnitType::PORTAL) {
       hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
     } else {
       hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
     }
-
     for (const auto& h : hexes) {
       int idx = hex_to_index(h, Config::BOARD_SIDE);
       if (idx >= 0 && idx < AS::NUM_HEXES) {
@@ -1202,24 +1317,86 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
   }
   channel += 6;
 
-  // Current player plane
+  // ========================================
+  // SECTION 4: Game state (2 channels)
+  // ========================================
+  // Current player
   for (int i = 0; i < AS::NUM_HEXES; ++i) {
     tensor(channel, 0, i) = static_cast<float>(current_player_);
   }
   channel++;
 
-  // Has taken action plane
+  // Has taken action
   for (int i = 0; i < AS::NUM_HEXES; ++i) {
     tensor(channel, 0, i) = has_taken_action_ ? 1.0f : 0.0f;
   }
   channel++;
 
-  // Reserve counts
+  // ========================================
+  // SECTION 5: Reserves (6 channels)
+  // ========================================
   for (int p = 0; p < 2; ++p) {
-    tensor(channel, 0, 0) = static_cast<float>(reserves_[p][0]);
-    tensor(channel + 1, 0, 0) = static_cast<float>(reserves_[p][1]);
-    channel += 2;
+    tensor(channel, 0, 0) = static_cast<float>(reserves_[p][0]);      // Fighters
+    tensor(channel + 1, 0, 0) = static_cast<float>(reserves_[p][1]);  // Cruisers
+    tensor(channel + 2, 0, 0) = static_cast<float>(reserves_[p][2]);  // Dreadnoughts
+    channel += 3;
   }
+
+  // ========================================
+  // SECTION 6: Moves remaining (2 channels)
+  // ========================================
+  for (int p = 0; p < 2; ++p) {
+    for (const auto& unit : units_) {
+      if (!unit.is_alive() || unit.player != p) continue;
+      if (unit.moves_left == 0) continue;
+
+      std::vector<Hex> hexes;
+      if (unit.type == UnitType::PORTAL) {
+        hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
+      } else {
+        hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
+      }
+      for (const auto& h : hexes) {
+        int idx = hex_to_index(h, Config::BOARD_SIDE);
+        if (idx >= 0 && idx < AS::NUM_HEXES) {
+          tensor(channel, 0, idx) = 1.0f;
+        }
+      }
+    }
+    channel++;
+  }
+
+  // ========================================
+  // SECTION 7: Cannons available (2 channels)
+  // ========================================
+  for (int p = 0; p < 2; ++p) {
+    for (const auto& unit : units_) {
+      if (!unit.is_alive() || unit.player != p) continue;
+      if (unit.type == UnitType::PORTAL) continue;
+
+      int num_cannons = get_num_cannons(unit.type);
+      uint8_t all_fired_mask = (1 << num_cannons) - 1;
+      if (unit.cannons_fired == all_fired_mask) continue;
+
+      auto hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
+      for (const auto& h : hexes) {
+        int idx = hex_to_index(h, Config::BOARD_SIDE);
+        if (idx >= 0 && idx < AS::NUM_HEXES) {
+          tensor(channel, 0, idx) = 1.0f;
+        }
+      }
+    }
+    channel++;
+  }
+
+  // ========================================
+  // SECTION 8: Turn progress (1 channel)
+  // ========================================
+  float turn_progress = static_cast<float>(turn_) / static_cast<float>(MAX_TURNS);
+  for (int i = 0; i < AS::NUM_HEXES; ++i) {
+    tensor(channel, 0, i) = turn_progress;
+  }
+  channel++;
 
   return tensor;
 }
@@ -1330,7 +1507,17 @@ std::string StarGambitGS<Config>::dump() const noexcept {
     if (row_hexes.empty()) return;
 
     int indent = std::abs(r) * ROW_INDENT_SCALE;
-    out << std::string(indent, ' ');
+
+    // Check if first hex fires W (off the left edge)
+    int first_idx = hex_to_index(row_hexes[0], Config::BOARD_SIDE);
+    bool first_fires_w = cannon_arrows.count({first_idx, 3}) > 0;
+    if (first_fires_w && indent >= 2) {
+      out << std::string(indent - 2, ' ') << " ←";
+    } else if (first_fires_w) {
+      out << "←" << std::string(indent > 0 ? indent - 1 : 0, ' ');
+    } else {
+      out << std::string(indent, ' ');
+    }
 
     for (size_t i = 0; i < row_hexes.size(); ++i) {
       Hex h = row_hexes[i];
@@ -1370,6 +1557,12 @@ std::string StarGambitGS<Config>::dump() const noexcept {
         } else {
           out << "  ";  // 2 spaces for empty gap
         }
+      } else {
+        // Last hex in row - check if it fires E (off the edge)
+        bool arrow_e = cannon_arrows.count({idx, 0}) > 0;
+        if (arrow_e) {
+          out << "→";  // arrow pointing off-board
+        }
       }
     }
     out << "\n";
@@ -1394,15 +1587,32 @@ std::string StarGambitGS<Config>::dump() const noexcept {
     int indent_above = std::abs(r_above) * ROW_INDENT_SCALE;
     int indent_below = std::abs(r_below) * ROW_INDENT_SCALE;
 
-    // Calculate line width needed
+    // Calculate line width needed (add extra space for off-board arrows)
     int width_above = hexes_above.empty() ? 0 :
         indent_above + static_cast<int>(hexes_above.size()) * H_STEP;
     int width_below = hexes_below.empty() ? 0 :
         indent_below + static_cast<int>(hexes_below.size()) * H_STEP;
-    int line_width = std::max(width_above, width_below) + H_STEP;
+    int line_width = std::max(width_above, width_below) + H_STEP * 2;  // Extra space for off-board arrows
 
     // Build the line as a vector of characters (using strings for multi-byte)
     std::vector<std::string> line(line_width, " ");
+
+    // Helper to compute target_x, extrapolating for off-board hexes
+    auto compute_target_x = [&](int source_x, int target_q, int source_r, int target_r) {
+      int target_x = hex_to_x(target_q, target_r);
+      if (target_x >= 0) return target_x;
+      // Off-board: extrapolate based on indent change and q change
+      int indent_source = std::abs(source_r) * ROW_INDENT_SCALE;
+      int indent_target = std::abs(target_r) * ROW_INDENT_SCALE;
+      int indent_diff = indent_target - indent_source;
+      // Get source hex's q to compute q offset
+      auto source_row = get_row_hexes(source_r, Config::BOARD_SIDE);
+      if (source_row.empty()) return -1;
+      int source_first_q = source_row[0].q;
+      int source_q = source_first_q + (source_x - indent_source) / H_STEP;
+      int q_diff = target_q - source_q;
+      return source_x + indent_diff + q_diff * H_STEP;
+    };
 
     // Place arrows from hexes_above firing down (SE=5, SW=4)
     // Arrow positioned at midpoint between source and target hex centers
@@ -1411,8 +1621,8 @@ std::string StarGambitGS<Config>::dump() const noexcept {
 
       if (cannon_arrows.count({idx, 5})) {  // SE: target is (q, r+1)
         int source_x = hex_to_x(h.q, r_above);
-        int target_x = hex_to_x(h.q, r_below);
-        if (source_x >= 0 && target_x >= 0) {
+        if (source_x >= 0) {
+          int target_x = compute_target_x(source_x, h.q, r_above, r_below);
           // Midpoint of hex centers: (source + HEX_WIDTH/2 + target + HEX_WIDTH/2) / 2
           int arrow_x = (source_x + target_x) / 2 + HEX_WIDTH / 2;
           if (arrow_x >= 0 && arrow_x < line_width) line[arrow_x] = ARROWS[5];
@@ -1420,8 +1630,8 @@ std::string StarGambitGS<Config>::dump() const noexcept {
       }
       if (cannon_arrows.count({idx, 4})) {  // SW: target is (q-1, r+1)
         int source_x = hex_to_x(h.q, r_above);
-        int target_x = hex_to_x(h.q - 1, r_below);
-        if (source_x >= 0 && target_x >= 0) {
+        if (source_x >= 0) {
+          int target_x = compute_target_x(source_x, h.q - 1, r_above, r_below);
           int arrow_x = (source_x + target_x) / 2 + HEX_WIDTH / 2;
           if (arrow_x >= 0 && arrow_x < line_width) line[arrow_x] = ARROWS[4];
         }
@@ -1434,16 +1644,16 @@ std::string StarGambitGS<Config>::dump() const noexcept {
 
       if (cannon_arrows.count({idx, 1})) {  // NE: target is (q+1, r-1)
         int source_x = hex_to_x(h.q, r_below);
-        int target_x = hex_to_x(h.q + 1, r_above);
-        if (source_x >= 0 && target_x >= 0) {
+        if (source_x >= 0) {
+          int target_x = compute_target_x(source_x, h.q + 1, r_below, r_above);
           int arrow_x = (source_x + target_x) / 2 + HEX_WIDTH / 2;
           if (arrow_x >= 0 && arrow_x < line_width) line[arrow_x] = ARROWS[1];
         }
       }
       if (cannon_arrows.count({idx, 2})) {  // NW: target is (q, r-1)
         int source_x = hex_to_x(h.q, r_below);
-        int target_x = hex_to_x(h.q, r_above);
-        if (source_x >= 0 && target_x >= 0) {
+        if (source_x >= 0) {
+          int target_x = compute_target_x(source_x, h.q, r_below, r_above);
           int arrow_x = (source_x + target_x) / 2 + HEX_WIDTH / 2;
           if (arrow_x >= 0 && arrow_x < line_width) line[arrow_x] = ARROWS[2];
         }
@@ -1476,33 +1686,6 @@ std::string StarGambitGS<Config>::dump() const noexcept {
   // Final diagonal edge line below last row
   render_diagonal_line(max_r, max_r + 1);
 
-  out << "\nUnits:\n";
-  for (const auto& u : units_) {
-    if (!u.is_alive()) continue;
-
-    // Use slot-based naming: F1, F2, C1, D1, etc.
-    char type_char;
-    switch (u.type) {
-      case UnitType::FIGHTER: type_char = 'F'; break;
-      case UnitType::CRUISER: type_char = 'C'; break;
-      case UnitType::DREADNOUGHT: type_char = 'D'; break;
-      case UnitType::PORTAL: type_char = 'P'; break;
-    }
-
-    out << type_char << (u.slot + 1) << ": P" << static_cast<int>(u.player) << " ";
-    switch (u.type) {
-      case UnitType::FIGHTER: out << "Fighter"; break;
-      case UnitType::CRUISER: out << "Cruiser"; break;
-      case UnitType::DREADNOUGHT: out << "Dreadnought"; break;
-      case UnitType::PORTAL: out << "Portal"; break;
-    }
-    out << " HP=" << static_cast<int>(u.hp)
-        << " pos=(" << static_cast<int>(u.anchor_q) << ","
-        << static_cast<int>(u.anchor_r) << ")"
-        << " facing=" << DIRECTION_NAMES[u.facing]
-        << " moves=" << static_cast<int>(u.moves_left) << "\n";
-  }
-
   if (game_over_) {
     out << "\nGame Over! ";
     if (winner_ == 2) {
@@ -1522,6 +1705,111 @@ void StarGambitGS<Config>::minimize_storage() {
                               [](const Unit& u) { return !u.is_alive(); }),
                units_.end());
   position_history_.clear();
+}
+
+// =============================================================================
+// Python Binding Support Methods
+// =============================================================================
+
+template<typename Config>
+std::vector<UnitInfo> StarGambitGS<Config>::get_units() const {
+  std::vector<UnitInfo> result;
+  for (const auto& unit : units_) {
+    if (!unit.is_alive()) continue;
+    UnitInfo info;
+    info.player = unit.player;
+    info.type = static_cast<int>(unit.type);
+    info.slot = unit.slot;
+    info.hp = unit.hp;
+    info.anchor_q = unit.anchor_q;
+    info.anchor_r = unit.anchor_r;
+    info.facing = unit.facing;
+    info.moves_left = unit.moves_left;
+    result.push_back(info);
+  }
+  return result;
+}
+
+template<typename Config>
+FireInfo StarGambitGS<Config>::get_fire_info(uint32_t move) const {
+  using AS = ActionSpace<Config>;
+  FireInfo result = {false, -1, -1, -1, 0};
+
+  // Determine if this is a fire action and decode it
+  const Unit* unit = nullptr;
+  int cannon_idx = -1;
+
+  if (move >= static_cast<uint32_t>(AS::FIGHTER_FIRE_OFFSET) &&
+      move < static_cast<uint32_t>(AS::CRUISER_FIRE_OFFSET)) {
+    // Fighter fire
+    int rel = move - AS::FIGHTER_FIRE_OFFSET;
+    int slot = rel;  // FIGHTER_CANNONS == 1
+    unit = find_unit_by_slot(current_player_, UnitType::FIGHTER, slot);
+    cannon_idx = 0;
+  } else if (move >= static_cast<uint32_t>(AS::CRUISER_FIRE_OFFSET) &&
+             move < static_cast<uint32_t>(AS::DREAD_FIRE_OFFSET)) {
+    // Cruiser fire
+    int rel = move - AS::CRUISER_FIRE_OFFSET;
+    int slot = rel / CRUISER_CANNONS;
+    cannon_idx = rel % CRUISER_CANNONS;
+    unit = find_unit_by_slot(current_player_, UnitType::CRUISER, slot);
+  } else if (move >= static_cast<uint32_t>(AS::DREAD_FIRE_OFFSET) &&
+             move < static_cast<uint32_t>(AS::DEPLOY_OFFSET)) {
+    // Dreadnought fire
+    int rel = move - AS::DREAD_FIRE_OFFSET;
+    int slot = rel / DREAD_CANNONS;
+    cannon_idx = rel % DREAD_CANNONS;
+    unit = find_unit_by_slot(current_player_, UnitType::DREADNOUGHT, slot);
+  } else {
+    // Not a fire action
+    return result;
+  }
+
+  if (!unit || !unit->is_alive() || cannon_idx < 0) {
+    return result;
+  }
+
+  // Find target (similar to execute_fire but without modifying state)
+  auto cannons = get_cannon_info(unit->type);
+  if (cannon_idx >= static_cast<int>(cannons.size())) return result;
+
+  const auto& cannon = cannons[cannon_idx];
+  std::vector<Hex> unit_hexes = get_unit_hexes(unit->type,
+      {unit->anchor_q, unit->anchor_r}, unit->facing);
+
+  if (cannon.source_hex_idx >= static_cast<int>(unit_hexes.size())) return result;
+  Hex source = unit_hexes[cannon.source_hex_idx];
+
+  int fire_direction = rotate_direction(unit->facing, cannon.direction_offset);
+  auto all_occupied = get_all_occupied_hexes();
+
+  for (int range = 1; range <= 2; ++range) {
+    Hex target = source;
+    for (int i = 0; i < range; ++i) {
+      target = hex_neighbor(target, fire_direction);
+    }
+
+    if (!hex_in_bounds(target, Config::BOARD_SIDE)) continue;
+
+    if (!has_line_of_sight(source, fire_direction, range, all_occupied)) {
+      break;
+    }
+
+    int target_unit_idx = find_unit_at_hex(target);
+    if (target_unit_idx >= 0) {
+      const auto& target_unit = units_[target_unit_idx];
+      if (target_unit.player != unit->player) {
+        result.has_target = true;
+        result.target_player = target_unit.player;
+        result.target_type = static_cast<int>(target_unit.type);
+        result.target_slot = target_unit.slot;
+        result.damage = (range == 1) ? 2 : 1;
+        return result;
+      }
+    }
+  }
+
+  return result;
 }
 
 // =============================================================================

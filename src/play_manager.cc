@@ -50,11 +50,7 @@ void PlayManager::play() {
   thread_local std::default_random_engine re{std::random_device{}()};
   thread_local std::uniform_real_distribution<float> dist{0.0F, 1.0F};
   while (games_completed_ < params_.games_to_play) {
-    std::optional<uint32_t> i;
-    {
-      AZ_ZONE_NAMED("pop_mcts_queue");
-      i = awaiting_mcts_.pop(MAX_WAIT);
-    }
+    std::optional<uint32_t> i = awaiting_mcts_.pop(MAX_WAIT);
     if (!i.has_value()) {
       continue;
     }
@@ -182,21 +178,13 @@ void PlayManager::play() {
     }
     // Find the next leaf to process and put it in the inference queue.
     auto& mcts = game.mcts[game.gs->current_player()];
-    std::unique_ptr<GameState> leaf;
-    {
-      AZ_ZONE_NAMED("find_leaf");
-      leaf = mcts.find_leaf(*game.gs);
-    }
-    {
-      AZ_ZONE_NAMED("canonicalize");
-      game.canonical = leaf->canonicalized();
-    }
+    auto leaf = mcts.find_leaf(*game.gs);
+    game.canonical = leaf->canonicalized();
     // Minimize the storage of the leaf node. It is only used as a hash key and
     // network input.
     leaf->minimize_storage();
     game.leaf = std::move(leaf);
     if (params_.max_cache_size > 0) {
-      AZ_ZONE_NAMED("cache_lookup");
       auto opt = caches_[game.gs->current_player()].find(game.leaf);
       if (opt.has_value()) {
         std::tie(game.v, game.pi) = opt.value();

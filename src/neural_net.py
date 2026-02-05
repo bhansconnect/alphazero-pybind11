@@ -11,10 +11,6 @@ from tracy_utils import tracy_zone
 # This is an autotuner for network speed.
 torch.backends.cudnn.benchmark = True
 
-# Set to True to enable GPU synchronization in process() for accurate Tracy timing.
-# This adds overhead but ensures Tracy captures actual GPU time rather than just dispatch time.
-TRACY_GPU_SYNC = False
-
 NNArgs = namedtuple(
     "NNArgs",
     ["num_channels", "depth", "kernel_size", "lr_milestone", "dense_net", "lr", "cv"],
@@ -351,8 +347,8 @@ class NNWrapper:
         with torch.no_grad():
             v, pi = self.nnet(batch)
             res = (torch.exp(v), torch.exp(pi))
-        # Optional GPU sync for accurate Tracy timing (adds overhead)
-        if TRACY_GPU_SYNC:
+        # GPU sync for accurate Tracy timing when profiling is enabled
+        if alphazero.tracy_is_enabled():
             if self.device.type == 'cuda':
                 torch.cuda.synchronize()
             elif self.device.type == 'mps':

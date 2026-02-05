@@ -489,12 +489,14 @@ PYBIND11_MODULE(alphazero, m) {
   m.def("_tracy_zone_end", &py_tracy_zone_end);
   m.def("tracy_frame_mark", &py_tracy_frame_mark);
   m.def("_tracy_set_thread_name", &py_tracy_set_thread_name, py::arg("name"));
+  m.def("tracy_is_enabled", []() { return true; });
 #else
   // No-op stubs when Tracy disabled
   m.def("_tracy_zone_begin", [](const std::string&, const std::string&, uint32_t) {});
   m.def("_tracy_zone_end", []() {});
   m.def("tracy_frame_mark", []() {});
   m.def("_tracy_set_thread_name", [](const std::string&) {});
+  m.def("tracy_is_enabled", []() { return false; });
 #endif
 }
 

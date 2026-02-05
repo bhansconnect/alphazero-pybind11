@@ -7,7 +7,6 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/hash/hash.h"
-#include "tracy_zones.h"
 
 namespace alphazero {
 
@@ -17,7 +16,6 @@ class LRUCache {
   LRUCache(size_t max_size) : ms_(max_size) {}
 
   std::optional<V> find(const K k) {
-    AZ_ZONE_SCOPED;
     std::unique_lock l{m_};
     auto it = cache_.find(k);
     if (it == cache_.end()) {
@@ -49,7 +47,6 @@ class LRUCache {
   }
 
   void insert_many(const std::vector<K>& ks, const std::vector<V>& vs) {
-    AZ_ZONE_SCOPED;
     std::unique_lock l{m_};
     for (size_t i = 0; i < ks.size(); ++i) {
       const auto k = ks[i];

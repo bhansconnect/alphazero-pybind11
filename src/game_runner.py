@@ -1004,9 +1004,14 @@ if __name__ == "__main__":
 
     with tqdm.trange(start, iters, desc="Build Amazing Network") as pbar:
         for i in pbar:
+            stage_times = {}
+            iteration_start = time.time()
+
             run.track(
                 current_best, name="best_network", epoch=i, step=total_train_steps
             )
+
+            stage_start = time.time()
             past_iter = max(0, i - compare_past)
             if past_iter != i and math.isnan(wr[i, past_iter]):
                 nn_rate, draw_rate, _, game_length = play_past(
@@ -1039,7 +1044,9 @@ if __name__ == "__main__":
                     nn_rate + draw_rate / Game.NUM_PLAYERS()
                 )
                 gc.collect()
+            stage_times["history"] = time.time() - stage_start
 
+            stage_start = time.time()
             elo = get_elo(elo, wr, i)
             run.track(
                 elo[i],
@@ -1058,7 +1065,9 @@ if __name__ == "__main__":
             postfix["elo"] = int(elo[i])
             pbar.set_postfix(postfix)
             np.savetxt(os.path.join("data", "elo.csv"), elo, delimiter=",")
+            stage_times["elo"] = time.time() - stage_start
 
+            stage_start = time.time()
             win_rates, hit_rate, game_length, resign_win_rates, resignation_rate = (
                 self_play(
                     Game,
@@ -1122,13 +1131,19 @@ if __name__ == "__main__":
             postfix["win_rates"] = list(map(lambda x: f"{x:0.3f}", win_rates))
             pbar.set_postfix(postfix)
             gc.collect()
+            stage_times["selfplay"] = time.time() - stage_start
 
+            stage_start = time.time()
             exploit_symmetries(Game, i)
             gc.collect()
+            stage_times["symmetries"] = time.time() - stage_start
 
+            stage_start = time.time()
             resample_by_surprise(Game, i)
             gc.collect()
+            stage_times["resampling"] = time.time() - stage_start
 
+            stage_start = time.time()
             hist_size = calc_hist_size(i)
             run.track(hist_size, name="history_size", epoch=i, step=total_train_steps)
             v_loss, pi_loss, total_train_steps = train(
@@ -1143,7 +1158,9 @@ if __name__ == "__main__":
             postfix["ploss"] = pi_loss
             pbar.set_postfix(postfix)
             gc.collect()
+            stage_times["training"] = time.time() - stage_start
 
+            stage_start = time.time()
             # Eval for gating
             next_net = i + 1
             panel_nn_rate = 0
@@ -1227,3 +1244,16 @@ if __name__ == "__main__":
                 while len(panel) > GATING_PANEL_SIZE:
                     panel = panel[1:]
             np.savetxt(os.path.join("data", "win_rate.csv"), wr, delimiter=",")
+            stage_times["gating"] = time.time() - stage_start
+
+            # Log time percentages for each stage
+            total_time = time.time() - iteration_start
+            for stage_name, stage_time in stage_times.items():
+                percentage = (stage_time / total_time) * 100.0
+                run.track(
+                    percentage,
+                    name="time_percent",
+                    epoch=i,
+                    step=total_train_steps,
+                    context={"stage": stage_name},
+                )

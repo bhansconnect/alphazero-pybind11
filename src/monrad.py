@@ -7,10 +7,12 @@ import math
 import numpy as np
 import gc
 import tqdm
+from tracy_utils import tracy_zone
 
 np.set_printoptions(precision=3, suppress=True)
 
 
+@tracy_zone
 def calc_elo(past_elo, win_rates):
     iters = 5000
     anchor = -1200
@@ -34,6 +36,7 @@ def calc_elo(past_elo, win_rates):
     return past_elo
 
 
+@tracy_zone
 def pit_agents(Game, players, mcts_depths, bs, name):
     np = Game.NUM_PLAYERS()
     win_rates = [0] * np

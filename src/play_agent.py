@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import time
 import alphazero
+from tracy_utils import tracy_zone
 
 THINK_TIME = 9.5
 CPUCT = 1.25
@@ -26,6 +27,7 @@ def calc_temp(turn):
     return temp
 
 
+@tracy_zone
 def eval_position(gs, agent):
     mcts = alphazero.MCTS(CPUCT, gs.num_players(), gs.num_moves(), 0, 1.4, 0.25)
     global bf

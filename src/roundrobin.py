@@ -6,10 +6,12 @@ import numpy as np
 import gc
 import tqdm
 import alphazero
+from tracy_utils import tracy_zone
 
 np.set_printoptions(precision=3, suppress=True)
 
 
+@tracy_zone
 def pit_agents(Game, players, mcts_depths, bs, name):
     np = Game.NUM_PLAYERS()
     win_rates = [0] * np

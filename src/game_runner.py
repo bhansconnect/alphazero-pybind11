@@ -1272,7 +1272,7 @@ if __name__ == "__main__":
                 np.savetxt(os.path.join("data", "win_rate.csv"), wr, delimiter=",")
             stage_times["gating"] = time.time() - stage_start
 
-            # Log time percentages for each stage
+            # Log time percentages and raw times for each stage
             total_time = time.time() - iteration_start
             for stage_name, stage_time in stage_times.items():
                 percentage = (stage_time / total_time) * 100.0
@@ -1283,6 +1283,21 @@ if __name__ == "__main__":
                     step=total_train_steps,
                     context={"stage": stage_name},
                 )
+                run.track(
+                    stage_time,
+                    name="time_seconds",
+                    epoch=i,
+                    step=total_train_steps,
+                    context={"stage": stage_name},
+                )
+            # Log total iteration time
+            run.track(
+                total_time,
+                name="time_seconds",
+                epoch=i,
+                step=total_train_steps,
+                context={"stage": "total"},
+            )
 
             # Mark end of training iteration for Tracy
             tracy_frame()

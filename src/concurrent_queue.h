@@ -7,6 +7,8 @@
 #include <queue>
 #include <thread>
 
+#include "tracy_zones.h"
+
 namespace alphazero {
 
 // A simple multithread safe queue.
@@ -21,6 +23,7 @@ class ConcurrentQueue {
   }
 
   void push_many(const std::vector<T>& data) noexcept {
+    AZ_ZONE_SCOPED;
     std::unique_lock lock(m_);
     for (const auto& d : data) {
       queue_.push(d);
@@ -59,6 +62,7 @@ class ConcurrentQueue {
   template <class Rep, class Period>
   [[nodiscard]] std::optional<T> pop(
       const std::chrono::duration<Rep, Period>& max_wait) noexcept {
+    AZ_ZONE_SCOPED;
     std::unique_lock lock(m_);
     cv_.wait_for(lock, max_wait, [this] { return !queue_.empty(); });
     return try_pop_();

@@ -70,3 +70,75 @@ python src/star_gambit_train_test.py
 
 - `data/` - Training data and checkpoints
 - `data/bench/` - Networks for tournament evaluation
+
+## Tracy Profiler
+
+The codebase includes optional Tracy profiler integration for performance analysis.
+
+### Building with Tracy
+
+```bash
+# Reconfigure with Tracy enabled
+meson setup build -Dtracy_enabled=true --buildtype=release --reconfigure
+
+# Build
+ninja -C build
+
+# Reinstall Python package
+pip install --no-build-isolation -e .
+```
+
+### Running Tracy
+
+```bash
+# Install Tracy (macOS)
+brew install tracy
+
+# Run Tracy profiler GUI (connects automatically to running process)
+tracy-profiler
+
+# Or capture to file for later analysis
+tracy-capture -o trace.tracy
+```
+
+### Python Usage
+
+The `@tracy_zone` decorator, `TracyZone` context manager, and helpers are available:
+
+```python
+from tracy_utils import tracy_zone, tracy_thread, tracy_frame, TracyZone
+
+@tracy_zone
+def my_function():
+    # Function is automatically instrumented with name "my_function"
+    pass
+
+def worker_thread():
+    tracy_thread("worker")  # Name this thread in Tracy
+    # ... thread work
+
+# Inline zones using context manager
+with TracyZone("my_operation"):
+    # code to profile
+    pass
+
+# Mark frame boundaries (e.g., per training iteration)
+tracy_frame()
+```
+
+### GPU Synchronization
+
+By default, GPU synchronization is disabled in `NNWrapper.process()` to avoid overhead.
+To enable accurate GPU timing in Tracy (at the cost of performance):
+
+```python
+import neural_net
+neural_net.TRACY_GPU_SYNC = True
+```
+
+### Instrumented Components
+
+**C++:** play_manager, mcts, lru_cache, concurrent_queue, star_gambit_gs
+**Python:** game_runner (with training stage zones), neural_net, play_agent, monrad, roundrobin
+
+**Training Stages:** Each training iteration has Tracy zones for: history, elo, selfplay, symmetries, resampling, training, gating

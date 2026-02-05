@@ -6,9 +6,14 @@ from torch.autograd import profiler
 from tqdm import tqdm
 import numpy as np
 import alphazero
+from tracy_utils import tracy_zone
 
 # This is an autotuner for network speed.
 torch.backends.cudnn.benchmark = True
+
+# Set to True to enable GPU synchronization in process() for accurate Tracy timing.
+# This adds overhead but ensures Tracy captures actual GPU time rather than just dispatch time.
+TRACY_GPU_SYNC = False
 
 NNArgs = namedtuple(
     "NNArgs",
@@ -154,6 +159,7 @@ class NNArch(nn.Module):
         self.pi_fc1 = nn.Linear(in_x * in_y * 32, game.NUM_MOVES())
         self.pi_softmax = nn.LogSoftmax(1)
 
+    @tracy_zone
     def forward(self, s):
         # s: batch_size x num_channels x board_x x board_y
         with profiler.record_function("conv-layers"):
@@ -209,6 +215,7 @@ class NNWrapper:
         self.cv = args.cv
         self.nnet.to(self.device)
 
+    @tracy_zone
     def losses(self, dataset):
         self.nnet.eval()
         l_v = 0
@@ -224,6 +231,7 @@ class NNWrapper:
             l_pi += self.loss_pi(target_pis, out_pi).item()
         return l_v / len(dataset), l_pi / len(dataset)
 
+    @tracy_zone
     def sample_loss(self, dataset, size):
         loss = np.zeros(size)
         self.nnet.eval()
@@ -243,6 +251,7 @@ class NNWrapper:
                 i += 1
         return loss
 
+    @tracy_zone
     def train(self, batches, steps_to_train, run, epoch, total_train_steps):
         self.nnet.train()
 
@@ -335,18 +344,19 @@ class NNWrapper:
         v, pi = self.process(canonical.unsqueeze(0))
         return v[0], pi[0]
 
+    @tracy_zone
     def process(self, batch):
-        # start = torch.cuda.Event(enable_timing=True)
-        # end = torch.cuda.Event(enable_timing=True)
-        # start.record()
         batch = batch.contiguous().to(self.device, non_blocking=True)
         self.nnet.eval()
         with torch.no_grad():
             v, pi = self.nnet(batch)
             res = (torch.exp(v), torch.exp(pi))
-        # end.record()
-        # torch.cuda.synchronize()
-        # print(start.elapsed_time(end))
+        # Optional GPU sync for accurate Tracy timing (adds overhead)
+        if TRACY_GPU_SYNC:
+            if self.device.type == 'cuda':
+                torch.cuda.synchronize()
+            elif self.device.type == 'mps':
+                torch.mps.synchronize()
         return res
 
     def sample_loss_pi(self, targets, outputs):
@@ -362,6 +372,7 @@ class NNWrapper:
         # return torch.sum((targets - outputs) ** 2) / targets.size()[0]
         return -self.cv * torch.sum(targets * outputs) / targets.size()[0]
 
+    @tracy_zone
     def save_checkpoint(
         self, folder=os.path.join("data", "checkpoint"), filename="checkpoint.pt"
     ):
@@ -384,6 +395,7 @@ class NNWrapper:
         )
 
     @staticmethod
+    @tracy_zone
     def load_checkpoint(
         Game, folder=os.path.join("data", "checkpoint"), filename="checkpoint.pt"
     ):

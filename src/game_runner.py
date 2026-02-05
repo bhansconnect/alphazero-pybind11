@@ -13,6 +13,7 @@ import numpy as np
 import gc
 import alphazero
 from neural_net import get_device
+from tracy_utils import tracy_zone, tracy_thread, TracyZone, tracy_frame
 
 HIST_SIZE = 30_000
 HIST_LOCATION = os.path.join("data", "history")
@@ -181,6 +182,7 @@ class GameRunner:
                 self.pi[i].pin_memory()
             self.ready_queues[i % self.num_players].put(i)
 
+    @tracy_zone
     def run(self):
         batch_workers = []
         for i in range(self.batch_workers):
@@ -221,7 +223,9 @@ class GameRunner:
         if self.pm.params().history_enabled:
             hist_saver.join()
 
+    @tracy_zone
     def monitor(self):
+        tracy_thread("monitor")
         last_completed = 0
         last_update = time.time()
         n = self.pm.params().games_to_play
@@ -263,7 +267,9 @@ class GameRunner:
         pbar.update(n - last_completed)
         pbar.close()
 
+    @tracy_zone
     def batch_builder(self, player):
+        tracy_thread(f"batch_builder_{player}")
         while self.pm.remaining_games() > 0:
             try:
                 batch_index = self.ready_queues[player].get(timeout=1)
@@ -278,7 +284,9 @@ class GameRunner:
                 out = out.contiguous().to(self.device, non_blocking=True)
             self.batch_queue.put((out, batch_index, game_indices))
 
+    @tracy_zone
     def player_executor(self):
+        tracy_thread("player_executor")
         while self.pm.remaining_games() > 0:
             try:
                 batch, batch_index, game_indices = self.batch_queue.get(timeout=1)
@@ -289,7 +297,9 @@ class GameRunner:
             ].process(batch)
             self.result_queue.put((batch_index, game_indices))
 
+    @tracy_zone
     def result_processor(self):
+        tracy_thread("result_processor")
         while self.pm.remaining_games() > 0:
             try:
                 batch_index, game_indices = self.result_queue.get(timeout=1)
@@ -307,7 +317,9 @@ class GameRunner:
             self.ready_queues[batch_index % self.num_players].put(batch_index)
             self.monitor_queue.put(v.shape[0])
 
+    @tracy_zone
     def hist_saver(self):
+        tracy_thread("hist_saver")
         batch = 0
         # Resolve data_folder at runtime to handle late-binding of module variables
         data_folder = self.args.data_folder if self.args.data_folder is not None else TMP_HIST_LOCATION
@@ -378,6 +390,7 @@ def elo_prob(r1, r2):
     return 1.0 / (1 + 1.0 * math.pow(10, 1.0 * (r1 - r2) / 400))
 
 
+@tracy_zone
 def get_elo(past_elo, win_rates, new_agent):
     # Everything but the newest agent is anchored for consitency.
     # Start with the assumption it is equal to the agent before it.
@@ -399,6 +412,7 @@ def get_elo(past_elo, win_rates, new_agent):
 if __name__ == "__main__":
     import neural_net
 
+    @tracy_zone
     def create_init_net(Game, nnargs):
         nn = neural_net.NNWrapper(Game, nnargs)
         nn.save_checkpoint(CHECKPOINT_LOCATION, f"0000-{run_name}.pt")
@@ -451,6 +465,7 @@ if __name__ == "__main__":
             return True
         return False
 
+    @tracy_zone
     def exploit_symmetries(Game, iteration):
         # In games with symmetries, create symmetric samples of the data.
         if Game.NUM_SYMMETRIES() <= 1:
@@ -537,6 +552,7 @@ if __name__ == "__main__":
         for fn in c_names + v_names + p_names:
             os.remove(fn)
 
+    @tracy_zone
     def resample_by_surprise(Game, iteration):
         # Used to resample the latest iteration by how surprising each sample is.
         # Each sample is given 0.5 weight as a base.
@@ -623,6 +639,7 @@ if __name__ == "__main__":
         for fn in glob.glob(os.path.join(f"{TMP_HIST_LOCATION}", "*")):
             os.remove(fn)
 
+    @tracy_zone
     def iteration_loss(Game, iteration):
         datasets = []
         c = sorted(
@@ -656,6 +673,7 @@ if __name__ == "__main__":
 
         return v_loss, pi_loss
 
+    @tracy_zone
     def train(Game, iteration, hist_size, run, total_train_steps):
         total_size = 0
         datasets = []
@@ -694,6 +712,7 @@ if __name__ == "__main__":
         del datasets, dataset, dataloader, nn
         return v_loss, pi_loss, total_train_steps
 
+    @tracy_zone
     def self_play(Game, best, iteration, depth, fast_depth):
         bs = SELF_PLAY_BATCH_SIZE
         cb = Game.NUM_PLAYERS() * SELF_PLAY_CONCURRENT_BATCH_MULT
@@ -759,6 +778,7 @@ if __name__ == "__main__":
         del pm, nn
         return win_rates, hr, agl, resign_win_rates, resign_rate
 
+    @tracy_zone
     def play_past(Game, depth, iteration, past_iter):
         nn_rate = 0
         draw_rate = 0
@@ -1012,238 +1032,245 @@ if __name__ == "__main__":
             )
 
             stage_start = time.time()
-            past_iter = max(0, i - compare_past)
-            if past_iter != i and math.isnan(wr[i, past_iter]):
-                nn_rate, draw_rate, _, game_length = play_past(
-                    Game, nn_compare_mcts_depth, i, past_iter
-                )
-                wr[i, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
-                wr[past_iter, i] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
+            with TracyZone("stage_history"):
+                past_iter = max(0, i - compare_past)
+                if past_iter != i and math.isnan(wr[i, past_iter]):
+                    nn_rate, draw_rate, _, game_length = play_past(
+                        Game, nn_compare_mcts_depth, i, past_iter
+                    )
+                    wr[i, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
+                    wr[past_iter, i] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
+                    run.track(
+                        nn_rate,
+                        name="win_rate",
+                        epoch=i,
+                        step=total_train_steps,
+                        context={"vs": f"-{compare_past}", "from": "all_games"},
+                    )
+                    run.track(
+                        draw_rate,
+                        name="draw_rate",
+                        epoch=i,
+                        step=total_train_steps,
+                        context={"vs": f"-{compare_past}", "from": "all_games"},
+                    )
+                    run.track(
+                        game_length,
+                        name="average_game_length",
+                        epoch=i,
+                        step=total_train_steps,
+                        context={"vs": f"-{compare_past}"},
+                    )
+                    postfix[f"vs -{compare_past}"] = (
+                        nn_rate + draw_rate / Game.NUM_PLAYERS()
+                    )
+                    gc.collect()
+            stage_times["history"] = time.time() - stage_start
+
+            stage_start = time.time()
+            with TracyZone("stage_elo"):
+                elo = get_elo(elo, wr, i)
                 run.track(
-                    nn_rate,
-                    name="win_rate",
+                    elo[i],
+                    name="elo",
                     epoch=i,
                     step=total_train_steps,
-                    context={"vs": f"-{compare_past}", "from": "all_games"},
+                    context={"type": "current"},
                 )
                 run.track(
-                    draw_rate,
+                    elo[current_best],
+                    name="elo",
+                    epoch=i,
+                    step=total_train_steps,
+                    context={"type": "best"},
+                )
+                postfix["elo"] = int(elo[i])
+                pbar.set_postfix(postfix)
+                np.savetxt(os.path.join("data", "elo.csv"), elo, delimiter=",")
+            stage_times["elo"] = time.time() - stage_start
+
+            stage_start = time.time()
+            with TracyZone("stage_selfplay"):
+                win_rates, hit_rate, game_length, resign_win_rates, resignation_rate = (
+                    self_play(
+                        Game,
+                        current_best,
+                        i,
+                        nn_selfplay_mcts_depth,
+                        nn_selfplay_fast_mcts_depth,
+                    )
+                )
+                for j in range(len(win_rates) - 1):
+                    run.track(
+                        win_rates[j],
+                        name="win_rate",
+                        epoch=i,
+                        step=total_train_steps,
+                        context={"vs": "self", "player": j + 1, "from": "all_games"},
+                    )
+                for j in range(len(resign_win_rates) - 1):
+                    run.track(
+                        resign_win_rates[j],
+                        name="win_rate",
+                        epoch=i,
+                        step=total_train_steps,
+                        context={"vs": "self", "player": j + 1, "from": "resignation"},
+                    )
+                run.track(
+                    resignation_rate,
+                    name="resignation_rate",
+                    epoch=i,
+                    step=total_train_steps,
+                    context={"vs": "self"},
+                )
+                run.track(
+                    win_rates[-1],
                     name="draw_rate",
                     epoch=i,
                     step=total_train_steps,
-                    context={"vs": f"-{compare_past}", "from": "all_games"},
+                    context={"vs": "self", "from": "all_games"},
+                )
+                run.track(
+                    resign_win_rates[-1],
+                    name="draw_rate",
+                    epoch=i,
+                    step=total_train_steps,
+                    context={"vs": "self", "from": "resignation"},
+                )
+                run.track(
+                    float(hit_rate),
+                    name="cache_hit_rate",
+                    epoch=i,
+                    step=total_train_steps,
+                    context={"vs": "self"},
                 )
                 run.track(
                     game_length,
                     name="average_game_length",
                     epoch=i,
                     step=total_train_steps,
-                    context={"vs": f"-{compare_past}"},
+                    context={"vs": "self"},
                 )
-                postfix[f"vs -{compare_past}"] = (
-                    nn_rate + draw_rate / Game.NUM_PLAYERS()
-                )
+                postfix["win_rates"] = list(map(lambda x: f"{x:0.3f}", win_rates))
+                pbar.set_postfix(postfix)
                 gc.collect()
-            stage_times["history"] = time.time() - stage_start
-
-            stage_start = time.time()
-            elo = get_elo(elo, wr, i)
-            run.track(
-                elo[i],
-                name="elo",
-                epoch=i,
-                step=total_train_steps,
-                context={"type": "current"},
-            )
-            run.track(
-                elo[current_best],
-                name="elo",
-                epoch=i,
-                step=total_train_steps,
-                context={"type": "best"},
-            )
-            postfix["elo"] = int(elo[i])
-            pbar.set_postfix(postfix)
-            np.savetxt(os.path.join("data", "elo.csv"), elo, delimiter=",")
-            stage_times["elo"] = time.time() - stage_start
-
-            stage_start = time.time()
-            win_rates, hit_rate, game_length, resign_win_rates, resignation_rate = (
-                self_play(
-                    Game,
-                    current_best,
-                    i,
-                    nn_selfplay_mcts_depth,
-                    nn_selfplay_fast_mcts_depth,
-                )
-            )
-            for j in range(len(win_rates) - 1):
-                run.track(
-                    win_rates[j],
-                    name="win_rate",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"vs": "self", "player": j + 1, "from": "all_games"},
-                )
-            for j in range(len(resign_win_rates) - 1):
-                run.track(
-                    resign_win_rates[j],
-                    name="win_rate",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"vs": "self", "player": j + 1, "from": "resignation"},
-                )
-            run.track(
-                resignation_rate,
-                name="resignation_rate",
-                epoch=i,
-                step=total_train_steps,
-                context={"vs": "self"},
-            )
-            run.track(
-                win_rates[-1],
-                name="draw_rate",
-                epoch=i,
-                step=total_train_steps,
-                context={"vs": "self", "from": "all_games"},
-            )
-            run.track(
-                resign_win_rates[-1],
-                name="draw_rate",
-                epoch=i,
-                step=total_train_steps,
-                context={"vs": "self", "from": "resignation"},
-            )
-            run.track(
-                float(hit_rate),
-                name="cache_hit_rate",
-                epoch=i,
-                step=total_train_steps,
-                context={"vs": "self"},
-            )
-            run.track(
-                game_length,
-                name="average_game_length",
-                epoch=i,
-                step=total_train_steps,
-                context={"vs": "self"},
-            )
-            postfix["win_rates"] = list(map(lambda x: f"{x:0.3f}", win_rates))
-            pbar.set_postfix(postfix)
-            gc.collect()
             stage_times["selfplay"] = time.time() - stage_start
 
             stage_start = time.time()
-            exploit_symmetries(Game, i)
-            gc.collect()
+            with TracyZone("stage_symmetries"):
+                exploit_symmetries(Game, i)
+                gc.collect()
             stage_times["symmetries"] = time.time() - stage_start
 
             stage_start = time.time()
-            resample_by_surprise(Game, i)
-            gc.collect()
+            with TracyZone("stage_resampling"):
+                resample_by_surprise(Game, i)
+                gc.collect()
             stage_times["resampling"] = time.time() - stage_start
 
             stage_start = time.time()
-            hist_size = calc_hist_size(i)
-            run.track(hist_size, name="history_size", epoch=i, step=total_train_steps)
-            v_loss, pi_loss, total_train_steps = train(
-                Game, i, hist_size, run, total_train_steps
-            )
-            np.savetxt(
-                os.path.join("data", "total_train_steps.txt"),
-                [total_train_steps],
-                delimiter=",",
-            )
-            postfix["vloss"] = v_loss
-            postfix["ploss"] = pi_loss
-            pbar.set_postfix(postfix)
-            gc.collect()
+            with TracyZone("stage_training"):
+                hist_size = calc_hist_size(i)
+                run.track(hist_size, name="history_size", epoch=i, step=total_train_steps)
+                v_loss, pi_loss, total_train_steps = train(
+                    Game, i, hist_size, run, total_train_steps
+                )
+                np.savetxt(
+                    os.path.join("data", "total_train_steps.txt"),
+                    [total_train_steps],
+                    delimiter=",",
+                )
+                postfix["vloss"] = v_loss
+                postfix["ploss"] = pi_loss
+                pbar.set_postfix(postfix)
+                gc.collect()
             stage_times["training"] = time.time() - stage_start
 
             stage_start = time.time()
-            # Eval for gating
-            next_net = i + 1
-            panel_nn_rate = 0
-            panel_draw_rate = 0
-            panel_game_length = 0
-            best_win_rate = 0
-            for gate_net in tqdm.tqdm(
-                panel, desc=f"Pitting against Panel {panel}", leave=False
-            ):
-                nn_rate, draw_rate, _, game_length = play_past(
-                    Game, nn_compare_mcts_depth, next_net, gate_net
+            with TracyZone("stage_gating"):
+                # Eval for gating
+                next_net = i + 1
+                panel_nn_rate = 0
+                panel_draw_rate = 0
+                panel_game_length = 0
+                best_win_rate = 0
+                for gate_net in tqdm.tqdm(
+                    panel, desc=f"Pitting against Panel {panel}", leave=False
+                ):
+                    nn_rate, draw_rate, _, game_length = play_past(
+                        Game, nn_compare_mcts_depth, next_net, gate_net
+                    )
+                    panel_nn_rate += nn_rate
+                    panel_draw_rate += draw_rate
+                    panel_game_length += game_length
+                    wr[next_net, gate_net] = nn_rate + draw_rate / Game.NUM_PLAYERS()
+                    wr[gate_net, next_net] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
+                    gc.collect()
+                    if gate_net == current_best:
+                        run.track(
+                            nn_rate,
+                            name="win_rate",
+                            epoch=next_net,
+                            step=total_train_steps,
+                            context={"vs": "best", "from": "all_games"},
+                        )
+                        run.track(
+                            draw_rate,
+                            name="draw_rate",
+                            epoch=next_net,
+                            step=total_train_steps,
+                            context={"vs": "best", "from": "all_games"},
+                        )
+                        run.track(
+                            game_length,
+                            name="average_game_length",
+                            epoch=next_net,
+                            context={"vs": "best"},
+                        )
+                        best_win_rate = nn_rate + draw_rate / Game.NUM_PLAYERS()
+                        postfix["vs best"] = best_win_rate
+                        pbar.set_postfix(postfix)
+                panel_nn_rate /= len(panel)
+                panel_draw_rate /= len(panel)
+                panel_game_length /= len(panel)
+                run.track(
+                    panel_nn_rate,
+                    name="win_rate",
+                    epoch=next_net,
+                    step=total_train_steps,
+                    context={"vs": "panel", "from": "all_games"},
                 )
-                panel_nn_rate += nn_rate
-                panel_draw_rate += draw_rate
-                panel_game_length += game_length
-                wr[next_net, gate_net] = nn_rate + draw_rate / Game.NUM_PLAYERS()
-                wr[gate_net, next_net] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
-                gc.collect()
-                if gate_net == current_best:
-                    run.track(
-                        nn_rate,
-                        name="win_rate",
-                        epoch=next_net,
-                        step=total_train_steps,
-                        context={"vs": "best", "from": "all_games"},
-                    )
-                    run.track(
-                        draw_rate,
-                        name="draw_rate",
-                        epoch=next_net,
-                        step=total_train_steps,
-                        context={"vs": "best", "from": "all_games"},
-                    )
-                    run.track(
-                        game_length,
-                        name="average_game_length",
-                        epoch=next_net,
-                        context={"vs": "best"},
-                    )
-                    best_win_rate = nn_rate + draw_rate / Game.NUM_PLAYERS()
-                    postfix["vs best"] = best_win_rate
+                run.track(
+                    panel_draw_rate,
+                    name="draw_rate",
+                    epoch=next_net,
+                    step=total_train_steps,
+                    context={"vs": "panel", "from": "all_games"},
+                )
+                run.track(
+                    panel_game_length,
+                    name="average_game_length",
+                    epoch=next_net,
+                    context={"vs": "panel"},
+                )
+                panel_win_rate = panel_nn_rate + panel_draw_rate / Game.NUM_PLAYERS()
+                postfix["vs panel"] = panel_win_rate
+                # Scale panel win rate based on size of the panel.
+                panel_ratio = len(panel) / GATING_PANEL_SIZE
+                wanted_panel_win_rate = (GATING_PANEL_WIN_RATE * panel_ratio) + (
+                    GATING_BEST_WIN_RATE * (1.0 - panel_ratio)
+                )
+                if (
+                    panel_win_rate > wanted_panel_win_rate
+                    and best_win_rate > GATING_BEST_WIN_RATE
+                ):
+                    current_best = next_net
+                    postfix["best"] = current_best
                     pbar.set_postfix(postfix)
-            panel_nn_rate /= len(panel)
-            panel_draw_rate /= len(panel)
-            panel_game_length /= len(panel)
-            run.track(
-                panel_nn_rate,
-                name="win_rate",
-                epoch=next_net,
-                step=total_train_steps,
-                context={"vs": "panel", "from": "all_games"},
-            )
-            run.track(
-                panel_draw_rate,
-                name="draw_rate",
-                epoch=next_net,
-                step=total_train_steps,
-                context={"vs": "panel", "from": "all_games"},
-            )
-            run.track(
-                panel_game_length,
-                name="average_game_length",
-                epoch=next_net,
-                context={"vs": "panel"},
-            )
-            panel_win_rate = panel_nn_rate + panel_draw_rate / Game.NUM_PLAYERS()
-            postfix["vs panel"] = panel_win_rate
-            # Scale panel win rate based on size of the panel.
-            panel_ratio = len(panel) / GATING_PANEL_SIZE
-            wanted_panel_win_rate = (GATING_PANEL_WIN_RATE * panel_ratio) + (
-                GATING_BEST_WIN_RATE * (1.0 - panel_ratio)
-            )
-            if (
-                panel_win_rate > wanted_panel_win_rate
-                and best_win_rate > GATING_BEST_WIN_RATE
-            ):
-                current_best = next_net
-                postfix["best"] = current_best
-                pbar.set_postfix(postfix)
-                panel.append(current_best)
-                while len(panel) > GATING_PANEL_SIZE:
-                    panel = panel[1:]
-            np.savetxt(os.path.join("data", "win_rate.csv"), wr, delimiter=",")
+                    panel.append(current_best)
+                    while len(panel) > GATING_PANEL_SIZE:
+                        panel = panel[1:]
+                np.savetxt(os.path.join("data", "win_rate.csv"), wr, delimiter=",")
             stage_times["gating"] = time.time() - stage_start
 
             # Log time percentages for each stage
@@ -1257,3 +1284,6 @@ if __name__ == "__main__":
                     step=total_train_steps,
                     context={"stage": stage_name},
                 )
+
+            # Mark end of training iteration for Tracy
+            tracy_frame()

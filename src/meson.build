@@ -8,8 +8,8 @@ absl_proj = subproject('abseil-cpp')
 absl_container_dep = absl_proj.get_variable('absl_container_dep')
 absl_hash_dep = absl_proj.get_variable('absl_hash_dep')
 
-eigen_proj = subproject('eigen')
-eigen_dep = eigen_proj.get_variable('eigen_dep')
+# eigen uses meson.override_dependency in newer versions
+eigen_dep = dependency('eigen3')
 
 gtest_proj = subproject('gtest')
 gtest_dep = gtest_proj.get_variable('gtest_main_dep')
@@ -20,7 +20,17 @@ gbench_dep = gbench_proj.get_variable('google_benchmark_dep')
 
 thread_dep = dependency('threads')
 
-lib_args = ['-DBUILDLIB']
+# Tracy profiler (opt-in via -Dtracy_enabled=true)
+tracy_enabled = get_option('tracy_enabled')
+tracy_args = []
+tracy_dep = []
+if tracy_enabled
+  tracy_proj = subproject('tracy')
+  tracy_dep = tracy_proj.get_variable('tracy_dep')
+  tracy_args = ['-DTRACY_ENABLE']
+endif
+
+lib_args = ['-DBUILDLIB'] + tracy_args
 
 tafl_helper_test = executable(
   'tafl_helper_test',
@@ -100,7 +110,7 @@ test('gtest tests', connect4_gs_test)
 star_gambit_gs = library(
     'star_gambit_gs',
     'star_gambit_gs.cc',
-    dependencies: [eigen_dep, absl_hash_dep, absl_container_dep],
+    dependencies: [eigen_dep, absl_hash_dep, absl_container_dep, tracy_dep],
     cpp_args: lib_args,
 )
 
@@ -122,7 +132,7 @@ test('gtest tests', photosynthesis_gs_test)
 mcts = library(
     'mcts',
     'mcts.cc',
-    dependencies: [eigen_dep, absl_hash_dep],
+    dependencies: [eigen_dep, absl_hash_dep, tracy_dep],
     cpp_args: lib_args,
 )
 
@@ -153,7 +163,7 @@ test('gtest tests', lru_cache_test)
 play_manager = library(
   'play_manager',
   'play_manager.cc',
-  dependencies: [eigen_dep, absl_container_dep, absl_hash_dep, thread_dep],
+  dependencies: [eigen_dep, absl_container_dep, absl_hash_dep, thread_dep, tracy_dep],
   link_with: [mcts],
   cpp_args: lib_args,
 )
@@ -177,6 +187,7 @@ py3_install.extension_module(
   'alphazero',
   sources: ['py_wrapper.cc'],
   link_with: [connect4_gs, onitama_gs, brandubh_gs, opentafl_gs, tawlbwrdd_gs, star_gambit_gs, play_manager, mcts],
-  dependencies : [pybind11_dep, py3_dep, eigen_dep, absl_container_dep, absl_hash_dep],
+  dependencies : [pybind11_dep, py3_dep, eigen_dep, absl_container_dep, absl_hash_dep, tracy_dep],
+  cpp_args: lib_args,
   install: true,
 )

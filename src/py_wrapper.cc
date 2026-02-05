@@ -1,4 +1,5 @@
 #include <cmath>
+#include <vector>
 
 #include "brandubh_gs.h"
 #include "connect4_gs.h"
@@ -12,9 +13,56 @@
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "tawlbwrdd_gs.h"
+#include "tracy_zones.h"
 
 // This file deals with exposing C++ to Python.
 // It uses Pybind11 for this.
+
+// Tracy Python bindings
+#ifdef TRACY_ENABLE
+#include <tracy/Tracy.hpp>
+
+// Thread-local zone storage for Python decorator pattern
+// Uses a simple struct to track active zones
+struct PythonZone {
+  tracy::ScopedZone* zone;
+  const char* name_storage;
+  const char* file_storage;
+};
+thread_local std::vector<PythonZone> py_zone_stack;
+
+// Start a zone with dynamic name (for decorator)
+void py_tracy_zone_begin(const std::string& name, const std::string& file, uint32_t line) {
+  // Allocate copies of the strings since Tracy needs them to persist
+  auto* name_copy = new char[name.size() + 1];
+  std::strcpy(name_copy, name.c_str());
+  auto* file_copy = new char[file.size() + 1];
+  std::strcpy(file_copy, file.c_str());
+
+  auto* zone = new tracy::ScopedZone(
+    line, file_copy, file.size(), nullptr, 0, name_copy, name.size(), true
+  );
+  py_zone_stack.push_back({zone, name_copy, file_copy});
+}
+
+void py_tracy_zone_end() {
+  if (!py_zone_stack.empty()) {
+    auto& pz = py_zone_stack.back();
+    delete pz.zone;
+    delete[] pz.name_storage;
+    delete[] pz.file_storage;
+    py_zone_stack.pop_back();
+  }
+}
+
+void py_tracy_frame_mark() {
+  FrameMark;
+}
+
+void py_tracy_set_thread_name(const std::string& name) {
+  tracy::SetThreadName(name.c_str());
+}
+#endif
 
 namespace alphazero {
 
@@ -433,6 +481,21 @@ PYBIND11_MODULE(alphazero, m) {
                   [] { return photosynthesis_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return PhotosynthesisGS<4>::CANONICAL_SHAPE; });
+
+  // Tracy profiler bindings
+#ifdef TRACY_ENABLE
+  m.def("_tracy_zone_begin", &py_tracy_zone_begin,
+        py::arg("name"), py::arg("file"), py::arg("line"));
+  m.def("_tracy_zone_end", &py_tracy_zone_end);
+  m.def("tracy_frame_mark", &py_tracy_frame_mark);
+  m.def("_tracy_set_thread_name", &py_tracy_set_thread_name, py::arg("name"));
+#else
+  // No-op stubs when Tracy disabled
+  m.def("_tracy_zone_begin", [](const std::string&, const std::string&, uint32_t) {});
+  m.def("_tracy_zone_end", []() {});
+  m.def("tracy_frame_mark", []() {});
+  m.def("_tracy_set_thread_name", [](const std::string&) {});
+#endif
 }
 
 }  // namespace alphazero

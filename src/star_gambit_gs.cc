@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include "color.h"
+#include "tracy_zones.h"
 
 namespace alphazero::star_gambit_gs {
 
@@ -760,6 +761,7 @@ bool StarGambitGS<Config>::is_end_turn_valid() const {
 
 template<typename Config>
 Vector<uint8_t> StarGambitGS<Config>::valid_moves() const noexcept {
+  AZ_ZONE_SCOPED;
   Vector<uint8_t> valids(AS::NUM_MOVES);
   valids.setZero();
 
@@ -1022,6 +1024,7 @@ void StarGambitGS<Config>::execute_deploy(UnitType type, int facing) {
 
 template<typename Config>
 void StarGambitGS<Config>::play_move(uint32_t move) {
+  AZ_ZONE_SCOPED;
   if (move < static_cast<uint32_t>(AS::CRUISER_MOVE_OFFSET)) {
     // Fighter move
     int rel = move - AS::FIGHTER_MOVE_OFFSET;
@@ -1208,6 +1211,7 @@ uint64_t StarGambitGS<Config>::compute_position_hash() const {
 
 template<typename Config>
 Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
+  AZ_ZONE_SCOPED;
   Tensor<float, 3> tensor(AS::CANONICAL_SHAPE[0], AS::CANONICAL_SHAPE[1],
                           AS::CANONICAL_SHAPE[2]);
   tensor.setZero();
@@ -1225,7 +1229,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
       if (unit && unit->is_alive()) {
         auto hexes = get_unit_hexes(unit->type, {unit->anchor_q, unit->anchor_r}, unit->facing);
         for (const auto& h : hexes) {
-          int idx = hex_to_index(h, Config::BOARD_SIDE);
+          int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
           if (idx >= 0 && idx < AS::NUM_HEXES) {
             tensor(channel, 0, idx) = 1.0f;
           }
@@ -1242,7 +1246,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
       if (unit && unit->is_alive()) {
         auto hexes = get_unit_hexes(unit->type, {unit->anchor_q, unit->anchor_r}, unit->facing);
         for (const auto& h : hexes) {
-          int idx = hex_to_index(h, Config::BOARD_SIDE);
+          int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
           if (idx >= 0 && idx < AS::NUM_HEXES) {
             tensor(channel, 0, idx) = 1.0f;
           }
@@ -1259,7 +1263,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
       if (unit && unit->is_alive()) {
         auto hexes = get_unit_hexes(unit->type, {unit->anchor_q, unit->anchor_r}, unit->facing);
         for (const auto& h : hexes) {
-          int idx = hex_to_index(h, Config::BOARD_SIDE);
+          int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
           if (idx >= 0 && idx < AS::NUM_HEXES) {
             tensor(channel, 0, idx) = 1.0f;
           }
@@ -1275,7 +1279,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
     if (portal && portal->is_alive()) {
       auto hexes = get_portal_hexes(p, Config::BOARD_SIDE);
       for (const auto& h : hexes) {
-        int idx = hex_to_index(h, Config::BOARD_SIDE);
+        int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
         if (idx >= 0 && idx < AS::NUM_HEXES) {
           tensor(channel, 0, idx) = 1.0f;
         }
@@ -1294,7 +1298,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
     int plane = channel + unit.facing * 2 + unit.player;
     auto hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
     for (const auto& h : hexes) {
-      int idx = hex_to_index(h, Config::BOARD_SIDE);
+      int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
       if (idx >= 0 && idx < AS::NUM_HEXES) {
         tensor(plane, 0, idx) = 1.0f;
       }
@@ -1316,7 +1320,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
       hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
     }
     for (const auto& h : hexes) {
-      int idx = hex_to_index(h, Config::BOARD_SIDE);
+      int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
       if (idx >= 0 && idx < AS::NUM_HEXES) {
         tensor(hp_plane, 0, idx) = 1.0f;
       }
@@ -1364,7 +1368,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
         hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
       }
       for (const auto& h : hexes) {
-        int idx = hex_to_index(h, Config::BOARD_SIDE);
+        int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
         if (idx >= 0 && idx < AS::NUM_HEXES) {
           tensor(channel, 0, idx) = 1.0f;
         }
@@ -1387,7 +1391,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
 
       auto hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
       for (const auto& h : hexes) {
-        int idx = hex_to_index(h, Config::BOARD_SIDE);
+        int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
         if (idx >= 0 && idx < AS::NUM_HEXES) {
           tensor(channel, 0, idx) = 1.0f;
         }
@@ -1411,6 +1415,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
 template<typename Config>
 std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
     const PlayHistory& base) const noexcept {
+  AZ_ZONE_SCOPED;
   std::vector<PlayHistory> syms;
   syms.push_back(base);
 
@@ -1423,9 +1428,9 @@ std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
   // ========================================
   std::array<int, AS::NUM_HEXES> hex_rotation_map;
   for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-    Hex h = index_to_hex(idx, Config::BOARD_SIDE);
+    Hex h = index_to_hex_fast<Config::BOARD_SIDE>(idx);
     Hex rotated_h = {static_cast<int8_t>(-h.q), static_cast<int8_t>(-h.r)};
-    hex_rotation_map[idx] = hex_to_index(rotated_h, Config::BOARD_SIDE);
+    hex_rotation_map[idx] = hex_to_index_fast<Config::BOARD_SIDE>(rotated_h);
   }
 
   // ========================================
@@ -1671,7 +1676,7 @@ std::string StarGambitGS<Config>::dump() const noexcept {
 
     // Store display info for each occupied hex
     for (const auto& h : hexes) {
-      int idx = hex_to_index(h, Config::BOARD_SIDE);
+      int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
       if (idx >= 0) {
         hex_display[idx] = {piece_id, unit.player, true};
       }
@@ -1684,7 +1689,7 @@ std::string StarGambitGS<Config>::dump() const noexcept {
         if (cannon.source_hex_idx < static_cast<int>(hexes.size())) {
           Hex source_hex = hexes[cannon.source_hex_idx];
           int fire_dir = rotate_direction(unit.facing, cannon.direction_offset);
-          int source_idx = hex_to_index(source_hex, Config::BOARD_SIDE);
+          int source_idx = hex_to_index_fast<Config::BOARD_SIDE>(source_hex);
           if (source_idx >= 0) {
             cannon_arrows.insert({source_idx, fire_dir});
           }
@@ -1714,7 +1719,7 @@ std::string StarGambitGS<Config>::dump() const noexcept {
     int indent = std::abs(r) * ROW_INDENT_SCALE;
 
     // Check if first hex fires W (off the left edge)
-    int first_idx = hex_to_index(row_hexes[0], Config::BOARD_SIDE);
+    int first_idx = hex_to_index_fast<Config::BOARD_SIDE>(row_hexes[0]);
     bool first_fires_w = cannon_arrows.count({first_idx, 3}) > 0;
     if (first_fires_w && indent >= 2) {
       out << std::string(indent - 2, ' ') << " ←";
@@ -1726,7 +1731,7 @@ std::string StarGambitGS<Config>::dump() const noexcept {
 
     for (size_t i = 0; i < row_hexes.size(); ++i) {
       Hex h = row_hexes[i];
-      int idx = hex_to_index(h, Config::BOARD_SIDE);
+      int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
 
       // Render hex content (4 chars)
       if (hex_display.count(idx) && hex_display[idx].has_unit) {
@@ -1748,7 +1753,7 @@ std::string StarGambitGS<Config>::dump() const noexcept {
       // Render gap after this hex (2 chars) - contains E/W arrows
       if (i < row_hexes.size() - 1) {
         Hex next = row_hexes[i + 1];
-        int next_idx = hex_to_index(next, Config::BOARD_SIDE);
+        int next_idx = hex_to_index_fast<Config::BOARD_SIDE>(next);
 
         bool arrow_e = cannon_arrows.count({idx, 0}) > 0;       // current fires E
         bool arrow_w = cannon_arrows.count({next_idx, 3}) > 0;  // next fires W
@@ -1822,7 +1827,7 @@ std::string StarGambitGS<Config>::dump() const noexcept {
     // Place arrows from hexes_above firing down (SE=5, SW=4)
     // Arrow positioned at midpoint between source and target hex centers
     for (const auto& h : hexes_above) {
-      int idx = hex_to_index(h, Config::BOARD_SIDE);
+      int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
 
       if (cannon_arrows.count({idx, 5})) {  // SE: target is (q, r+1)
         int source_x = hex_to_x(h.q, r_above);
@@ -1845,7 +1850,7 @@ std::string StarGambitGS<Config>::dump() const noexcept {
 
     // Place arrows from hexes_below firing up (NE=1, NW=2)
     for (const auto& h : hexes_below) {
-      int idx = hex_to_index(h, Config::BOARD_SIDE);
+      int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
 
       if (cannon_arrows.count({idx, 1})) {  // NE: target is (q+1, r-1)
         int source_x = hex_to_x(h.q, r_below);

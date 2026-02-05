@@ -95,7 +95,8 @@ struct GameStateKeyWrapper {
 };
 template <typename H>
 H AbslHashValue(H h, const GameStateKeyWrapper& wrapper) {
-  h = H::combine(std::move(h), std::type_index(typeid(*wrapper.gs)));
+  const GameState& gs = *wrapper.gs;
+  h = H::combine(std::move(h), std::type_index(typeid(gs)));
   wrapper.gs->hash(absl::HashState::Create(&h));
   return std::move(h);
 }

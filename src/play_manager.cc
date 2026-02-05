@@ -3,6 +3,8 @@
 #include <cmath>
 #include <optional>
 
+#include "tracy_zones.h"
+
 namespace alphazero {
 
 PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
@@ -43,10 +45,16 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
 }
 
 void PlayManager::play() {
+  AZ_SET_THREAD_NAME("mcts_worker");
+  AZ_ZONE_SCOPED;
   thread_local std::default_random_engine re{std::random_device{}()};
   thread_local std::uniform_real_distribution<float> dist{0.0F, 1.0F};
   while (games_completed_ < params_.games_to_play) {
-    auto i = awaiting_mcts_.pop(MAX_WAIT);
+    std::optional<uint32_t> i;
+    {
+      AZ_ZONE_NAMED("pop_mcts_queue");
+      i = awaiting_mcts_.pop(MAX_WAIT);
+    }
     if (!i.has_value()) {
       continue;
     }
@@ -133,7 +141,7 @@ void PlayManager::play() {
           }
           // Game ended, reset.
           {
-            std::unique_lock<std::mutex>{game_end_mutex_};
+            std::unique_lock<std::mutex> lock{game_end_mutex_};
             scores_ += scores.value();
             if (resign_score.has_value()) {
               resign_scores_ += resign_score.value();
@@ -174,13 +182,21 @@ void PlayManager::play() {
     }
     // Find the next leaf to process and put it in the inference queue.
     auto& mcts = game.mcts[game.gs->current_player()];
-    auto leaf = mcts.find_leaf(*game.gs);
-    game.canonical = leaf->canonicalized();
+    std::unique_ptr<GameState> leaf;
+    {
+      AZ_ZONE_NAMED("find_leaf");
+      leaf = mcts.find_leaf(*game.gs);
+    }
+    {
+      AZ_ZONE_NAMED("canonicalize");
+      game.canonical = leaf->canonicalized();
+    }
     // Minimize the storage of the leaf node. It is only used as a hash key and
     // network input.
     leaf->minimize_storage();
     game.leaf = std::move(leaf);
     if (params_.max_cache_size > 0) {
+      AZ_ZONE_NAMED("cache_lookup");
       auto opt = caches_[game.gs->current_player()].find(game.leaf);
       if (opt.has_value()) {
         std::tie(game.v, game.pi) = opt.value();
@@ -196,6 +212,7 @@ void PlayManager::update_inferences(const uint8_t player,
                                     const std::vector<uint32_t>& game_indices,
                                     const Eigen::Ref<const Matrix<float>>& v,
                                     const Eigen::Ref<const Matrix<float>>& pi) {
+  AZ_ZONE_SCOPED;
   std::vector<GameStateKeyWrapper> keys;
   std::vector<std::tuple<Vector<float>, Vector<float>>> values;
   for (auto i = 0UL; i < game_indices.size(); ++i) {
@@ -214,6 +231,8 @@ void PlayManager::update_inferences(const uint8_t player,
 }
 
 void PlayManager::dumb_inference(const uint8_t player) {
+  AZ_SET_THREAD_NAME("dumb_inference");
+  AZ_ZONE_SCOPED;
   // int count = 0;
   while (games_completed_ < params_.games_to_play) {
     auto i = awaiting_inference_[player]->pop(MAX_WAIT);

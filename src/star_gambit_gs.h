@@ -123,6 +123,65 @@ struct Hex {
   bool operator!=(const Hex& other) const { return !(*this == other); }
 };
 
+// ============================================================================
+// Hex Lookup Tables (precomputed for O(1) access)
+// ============================================================================
+
+template<int BoardSide>
+struct HexLookupTables {
+  static constexpr int NUM_HEXES = 3 * BoardSide * BoardSide - 3 * BoardSide + 1;
+  static constexpr int COORD_RANGE = 2 * BoardSide - 1;
+
+  std::array<Hex, NUM_HEXES> index_to_hex;
+  // 2D array indexed by (q + BoardSide-1, r + BoardSide-1) to handle negative coords
+  // Invalid entries are set to -1
+  std::array<std::array<int, COORD_RANGE>, COORD_RANGE> hex_to_index;
+
+  HexLookupTables() {
+    // Initialize hex_to_index with -1 (invalid)
+    for (auto& row : hex_to_index) {
+      row.fill(-1);
+    }
+
+    // Build tables using same iteration order as original functions
+    int idx = 0;
+    for (int r = -(BoardSide - 1); r < BoardSide; ++r) {
+      for (int q = -(BoardSide - 1); q < BoardSide; ++q) {
+        int s = -q - r;
+        if (std::abs(q) < BoardSide && std::abs(r) < BoardSide &&
+            std::abs(s) < BoardSide) {
+          index_to_hex[idx] = {static_cast<int8_t>(q), static_cast<int8_t>(r)};
+          hex_to_index[q + BoardSide - 1][r + BoardSide - 1] = idx;
+          ++idx;
+        }
+      }
+    }
+  }
+};
+
+// Global lookup table instances (initialized once at program startup)
+inline const HexLookupTables<5> HEX_TABLES_5{};
+inline const HexLookupTables<6> HEX_TABLES_6{};
+
+// O(1) lookup functions
+template<int BoardSide>
+inline int hex_to_index_fast(const Hex& h) {
+  if constexpr (BoardSide == 5) {
+    return HEX_TABLES_5.hex_to_index[h.q + BoardSide - 1][h.r + BoardSide - 1];
+  } else {
+    return HEX_TABLES_6.hex_to_index[h.q + BoardSide - 1][h.r + BoardSide - 1];
+  }
+}
+
+template<int BoardSide>
+inline Hex index_to_hex_fast(int index) {
+  if constexpr (BoardSide == 5) {
+    return HEX_TABLES_5.index_to_hex[index];
+  } else {
+    return HEX_TABLES_6.index_to_hex[index];
+  }
+}
+
 // 6 hex directions for flat-top hexes
 // Direction indices: 0=E, 1=NE, 2=NW, 3=W, 4=SW, 5=SE
 constexpr std::array<Hex, 6> HEX_DIRECTIONS = {{

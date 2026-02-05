@@ -5,6 +5,7 @@
 #include <random>
 
 #include "pcg/pcg_random.hpp"
+#include "tracy_zones.h"
 
 namespace alphazero {
 
@@ -12,6 +13,7 @@ constexpr const float NOISE_ALPHA_RATIO = 10.83;
 thread_local pcg32 re{pcg_extras::seed_seq_from<std::random_device>{}};
 
 void Node::add_children(const Vector<uint8_t>& valids) noexcept {
+  AZ_ZONE_SCOPED;
   children.reserve(valids.sum());
   for (auto w = 0; w < valids.size(); ++w) {
     if (valids(w) == 1) {
@@ -34,6 +36,7 @@ float Node::uct(float sqrt_parent_n, float cpuct,
 }
 
 Node* Node::best_child(float cpuct, float fpu_reduction) noexcept {
+  AZ_ZONE_SCOPED;
   auto seen_policy = 0.0f;
   for (const auto& c : children) {
     if (c.n > 0) {
@@ -85,6 +88,7 @@ void MCTS::add_root_noise() {
 }
 
 std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
+  AZ_ZONE_SCOPED;
   current_ = &root_;
   auto leaf = gs.copy();
   while (current_->n > 0 && !current_->scores.has_value()) {
@@ -102,6 +106,7 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
 
 void MCTS::process_result(const GameState& gs, Vector<float>& value,
                           Vector<float>& pi, bool root_noise_enabled) {
+  AZ_ZONE_SCOPED;
   if (current_->scores.has_value()) {
     value = current_->scores.value();
   } else {
@@ -114,7 +119,7 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
     pi.array() *= valids.array();
     pi /= pi.sum();
     if (current_ == &root_) {
-      pi = pi.array().pow(1.0 / root_policy_temp_);
+      pi = pi.array().pow(1.0f / root_policy_temp_);
       pi /= pi.sum();
       current_->update_policy(pi);
       if (root_noise_enabled) {

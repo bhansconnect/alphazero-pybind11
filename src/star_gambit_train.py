@@ -22,6 +22,13 @@ VARIANTS = {
     '3': ('battle', alphazero.StarGambitBattleGS, '4F, 3C, 2D - 75 actions, 6-side board'),
 }
 
+# Variant-specific opening lengths (half-life of temperature decay)
+OPENING_LENGTHS = {
+    'skirmish': 8,
+    'clash': 10,
+    'battle': 12,
+}
+
 # === Game Configuration (set by select_variant) ===
 Game = None
 game_name = None
@@ -66,11 +73,9 @@ nn_compare_mcts_depth = 50         # Comparison depth for gating
 # === Training Parameters ===
 CPUCT = 1.25                       # Exploration constant
 FPU_REDUCTION = 0.25               # First Play Urgency reduction
-EXPECTED_OPENING_LENGTH = 5        # ~5 turn per player opening phase
 SELF_PLAY_TEMP = 1.0               # Temperature during self-play
 EVAL_TEMP = 0.5                    # Temperature during evaluation
 FINAL_TEMP = 0.2                   # Final temperature
-TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
 
 # === Batch Configuration ===
 SELF_PLAY_BATCH_SIZE = 128         # Games per batch
@@ -144,11 +149,12 @@ def configure_game_runner():
     # Training parameters
     game_runner.CPUCT = CPUCT
     game_runner.FPU_REDUCTION = FPU_REDUCTION
-    game_runner.EXPECTED_OPENING_LENGTH = EXPECTED_OPENING_LENGTH
+    opening_length = OPENING_LENGTHS[variant_name]
+    game_runner.EXPECTED_OPENING_LENGTH = opening_length
     game_runner.SELF_PLAY_TEMP = SELF_PLAY_TEMP
     game_runner.EVAL_TEMP = EVAL_TEMP
     game_runner.FINAL_TEMP = FINAL_TEMP
-    game_runner.TEMP_DECAY_HALF_LIFE = TEMP_DECAY_HALF_LIFE
+    game_runner.TEMP_DECAY_HALF_LIFE = opening_length
 
     # Batch
     game_runner.SELF_PLAY_BATCH_SIZE = SELF_PLAY_BATCH_SIZE

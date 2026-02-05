@@ -95,13 +95,13 @@ struct GameStateKeyWrapper {
 };
 template <typename H>
 H AbslHashValue(H h, const GameStateKeyWrapper& wrapper) {
-  h = H::combine(std::move(h), std::type_index(typeid(wrapper.gs.get())));
+  h = H::combine(std::move(h), std::type_index(typeid(*wrapper.gs)));
   wrapper.gs->hash(absl::HashState::Create(&h));
   return std::move(h);
 }
 
-bool operator==(const GameStateKeyWrapper& lhs,
-                const GameStateKeyWrapper& rhs) {
+inline bool operator==(const GameStateKeyWrapper& lhs,
+                       const GameStateKeyWrapper& rhs) {
   return *lhs.gs == *rhs.gs;
 }
 

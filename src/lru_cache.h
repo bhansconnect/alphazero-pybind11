@@ -52,7 +52,7 @@ class LRUCache {
       const auto k = ks[i];
       const auto it = cache_.find(k);
       if (it != cache_.end()) {
-        return;
+        continue;
       }
       const auto v = vs[i];
       lru_.emplace_front(k, v);

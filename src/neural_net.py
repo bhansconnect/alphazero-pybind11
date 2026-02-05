@@ -230,11 +230,11 @@ class NNWrapper:
         return l_v / len(dataset), l_pi / len(dataset)
 
     @tracy_zone
-    def sample_loss(self, dataset, size):
+    def sample_loss(self, dataset, size, quiet=False):
         loss = np.zeros(size)
         self.nnet.eval()
         i = 0
-        for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
+        for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False, disable=quiet):
             canonical, target_vs, target_pis = batch
             canonical = canonical.contiguous().to(self.device, non_blocking=True)
             target_vs = target_vs.contiguous().to(self.device, non_blocking=True)
@@ -250,14 +250,15 @@ class NNWrapper:
         return loss
 
     @tracy_zone
-    def train(self, batches, steps_to_train, run, epoch, total_train_steps):
+    def train(self, batches, steps_to_train, run, epoch, total_train_steps, progress_callback=None):
         self.nnet.train()
 
         v_loss = 0
         pi_loss = 0
         current_step = 0
+        use_tqdm = progress_callback is None
         pbar = tqdm(
-            total=steps_to_train, unit="batches", desc="Training NN", leave=False
+            total=steps_to_train, unit="batches", desc="Training NN", leave=False, disable=not use_tqdm
         )
         past_states = []
         while current_step < steps_to_train:
@@ -313,14 +314,19 @@ class NNWrapper:
                 pi_loss += l_pi.item()
                 v_loss += l_v.item()
                 current_step += 1
-                pbar.set_postfix(
-                    {
-                        "v loss": v_loss / current_step,
-                        "pi loss": pi_loss / current_step,
-                        "total": (v_loss + pi_loss) / current_step,
-                    }
-                )
-                pbar.update()
+                if use_tqdm:
+                    pbar.set_postfix(
+                        {
+                            "v loss": v_loss / current_step,
+                            "pi loss": pi_loss / current_step,
+                            "total": (v_loss + pi_loss) / current_step,
+                        }
+                    )
+                    pbar.update()
+                elif progress_callback and steps_to_train > 0:
+                    pct = (current_step * 100) // steps_to_train
+                    if pct % 5 == 0:  # Update every 5%
+                        progress_callback(current_step, steps_to_train, "training")
 
         # Perform expontential averaging of network weights.
         past_states.append(dict(self.nnet.named_parameters()))
@@ -335,7 +341,10 @@ class NNWrapper:
         self.nnet.load_state_dict(nnet_dict)
 
         self.scheduler.step()
-        pbar.close()
+        if use_tqdm:
+            pbar.close()
+        if progress_callback:
+            progress_callback(steps_to_train, steps_to_train, "training")
         return v_loss / steps_to_train, pi_loss / steps_to_train
 
     def predict(self, canonical):

@@ -401,13 +401,13 @@ def elo_prob(r1, r2):
 
 
 @tracy_zone
-def get_elo(past_elo, win_rates, new_agent):
+def get_elo(past_elo, win_rates, new_agent, quiet=False):
     # Everything but the newest agent is anchored for consitency.
     # Start with the assumption it is equal to the agent before it.
     if new_agent != 0:
         past_elo[new_agent] = past_elo[new_agent - 1]
     iters = 5000
-    for _ in tqdm.trange(iters, leave=False):
+    for _ in tqdm.trange(iters, leave=False, disable=quiet):
         mean_update = 0
         for j in range(past_elo.shape[0]):
             if not math.isnan(win_rates[new_agent, j]):
@@ -476,9 +476,11 @@ if __name__ == "__main__":
         return False
 
     @tracy_zone
-    def exploit_symmetries(Game, iteration):
+    def exploit_symmetries(Game, iteration, progress_callback=None):
         # In games with symmetries, create symmetric samples of the data.
         if Game.NUM_SYMMETRIES() <= 1:
+            if progress_callback:
+                progress_callback(1, 1, "symmetries")
             return
 
         c_names = sorted(
@@ -517,9 +519,15 @@ if __name__ == "__main__":
         v_out = torch.zeros(HIST_SIZE, Game.NUM_PLAYERS() + 1)
         p_out = torch.zeros(HIST_SIZE, Game.NUM_MOVES())
 
-        for i in tqdm.trange(
-            sample_count, desc="Creating Symmetric Samples", leave=False
-        ):
+        # Use callback for progress if provided, otherwise use tqdm
+        use_tqdm = progress_callback is None
+        iterator = tqdm.trange(sample_count, desc="Creating Symmetric Samples", leave=False) if use_tqdm else range(sample_count)
+        for i in iterator:
+            # Update progress callback periodically (every 1%)
+            if progress_callback and sample_count > 0:
+                pct = (i * 100) // sample_count
+                if pct % 5 == 0:  # Update every 5%
+                    progress_callback(i, sample_count, "symmetries")
             c, v, pi = dataset[i]
             ph = alphazero.PlayHistory(c, v, pi)
             syms = new_game().symmetries(ph)
@@ -542,6 +550,8 @@ if __name__ == "__main__":
                     i_out = 0
                     batch_out += 1
             del c, v, pi, ph, syms
+        if progress_callback:
+            progress_callback(sample_count, sample_count, "symmetries")
         maybe_save(
             Game,
             c_out,
@@ -563,7 +573,7 @@ if __name__ == "__main__":
             os.remove(fn)
 
     @tracy_zone
-    def resample_by_surprise(Game, iteration):
+    def resample_by_surprise(Game, iteration, progress_callback=None):
         # Used to resample the latest iteration by how surprising each sample is.
         # Each sample is given 0.5 weight as a base.
         # The other half of the weight is distributed based on the sample loss.
@@ -601,7 +611,8 @@ if __name__ == "__main__":
         nn = neural_net.NNWrapper.load_checkpoint(
             Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{run_name}.pt"
         )
-        loss = nn.sample_loss(dataloader, sample_count)
+        # Use quiet mode when progress_callback is provided (async mode)
+        loss = nn.sample_loss(dataloader, sample_count, quiet=(progress_callback is not None))
         total_loss = np.sum(loss)
 
         i_out = 0
@@ -617,7 +628,15 @@ if __name__ == "__main__":
         for fn in glob.glob(os.path.join(f"{HIST_LOCATION}", f"{iteration:04d}-*.pt")):
             os.remove(fn)
 
-        for i in tqdm.trange(sample_count, desc="Resampling Data", leave=False):
+        # Use callback for progress if provided, otherwise use tqdm
+        use_tqdm = progress_callback is None
+        iterator = tqdm.trange(sample_count, desc="Resampling Data", leave=False) if use_tqdm else range(sample_count)
+        for i in iterator:
+            # Update progress callback periodically
+            if progress_callback and sample_count > 0:
+                pct = (i * 100) // sample_count
+                if pct % 5 == 0:  # Update every 5%
+                    progress_callback(i, sample_count, "resampling")
             sample_weight = 0.5 + (loss[i] / total_loss) * 0.5 * sample_count
             for _ in range(math.floor(sample_weight)):
                 c, v, pi = dataset[i]
@@ -639,6 +658,8 @@ if __name__ == "__main__":
                     i_out = 0
                     batch_out += 1
                 del c, v, pi
+        if progress_callback:
+            progress_callback(sample_count, sample_count, "resampling")
 
         maybe_save(Game, c_out, v_out, p_out, i_out, batch_out, iteration, force=True)
 
@@ -684,7 +705,7 @@ if __name__ == "__main__":
         return v_loss, pi_loss
 
     @tracy_zone
-    def train(Game, iteration, hist_size, run, total_train_steps):
+    def train(Game, iteration, hist_size, run, total_train_steps, progress_callback=None):
         total_size = 0
         datasets = []
         for i in range(max(0, iteration - hist_size), iteration + 1):
@@ -715,7 +736,7 @@ if __name__ == "__main__":
         )
         steps_to_train = int(math.ceil(average_generation / bs * TRAIN_SAMPLE_RATE))
         v_loss, pi_loss = nn.train(
-            dataloader, steps_to_train, run, iteration, total_train_steps
+            dataloader, steps_to_train, run, iteration, total_train_steps, progress_callback
         )
         total_train_steps += steps_to_train
         nn.save_checkpoint(CHECKPOINT_LOCATION, f"{iteration + 1:04d}-{run_name}.pt")
@@ -790,7 +811,7 @@ if __name__ == "__main__":
         return win_rates, hr, agl, resign_win_rates, resign_rate
 
     @tracy_zone
-    def play_past(Game, depth, iteration, past_iter, stream=None):
+    def play_past(Game, depth, iteration, past_iter, stream=None, quiet=False):
         nn_rate = 0
         draw_rate = 0
         hr = 0
@@ -814,6 +835,7 @@ if __name__ == "__main__":
                 Game.NUM_PLAYERS(),
                 leave=False,
                 desc=f"Bench 1 new vs {Game.NUM_PLAYERS() - 1} old",
+                disable=quiet,
             ):
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
@@ -848,6 +870,7 @@ if __name__ == "__main__":
                 Game.NUM_PLAYERS(),
                 leave=False,
                 desc=f"Bench {Game.NUM_PLAYERS() - 1} new vs 1 old",
+                disable=quiet,
             ):
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
@@ -887,7 +910,8 @@ if __name__ == "__main__":
             bs = 64
             n = bs * cb
             for i in tqdm.trange(
-                Game.NUM_PLAYERS(), leave=False, desc="Bench new vs old"
+                Game.NUM_PLAYERS(), leave=False, desc="Bench new vs old",
+                disable=quiet,
             ):
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
@@ -1057,49 +1081,63 @@ if __name__ == "__main__":
         else:
             print("Note: ASYNC_EVAL disabled (requires CUDA GPU)")
 
-    def run_srtg_task(iteration, hist_size, train_steps_in, panel_copy):
+    def run_srtg_task(iteration, hist_size, train_steps_in, panel_copy, pbar=None):
         """Run Symmetries, Resampling, Training, Gating sequentially in background.
         Returns (v_loss, pi_loss, total_train_steps, gating_results)."""
         tracy_thread("srtg_worker")
 
+        def progress_callback(current, total, stage):
+            """Update progress bar with current/total for each stage."""
+            if pbar is not None:
+                pbar.set_description(f"SRTG iter {iteration}: {stage} {current}/{total}")
+
         # 1. Symmetries
         with TracyZone("srtg_symmetries"):
-            exploit_symmetries(Game, iteration)
+            exploit_symmetries(Game, iteration, progress_callback)
             gc.collect()
 
         # 2. Resampling (sample loss calculation)
         with TracyZone("srtg_resampling"):
-            resample_by_surprise(Game, iteration)
+            resample_by_surprise(Game, iteration, progress_callback)
             gc.collect()
 
         # 3. Training
         with TracyZone("srtg_training"):
             v_loss, pi_loss, total_train_steps = train(
-                Game, iteration, hist_size, run, train_steps_in
+                Game, iteration, hist_size, run, train_steps_in, progress_callback
             )
             gc.collect()
 
         # 4. Gating
         with TracyZone("srtg_gating"):
             gating_results = []
-            for gate_net in panel_copy:
+            for idx, gate_net in enumerate(panel_copy):
+                progress_callback(idx, len(panel_copy), "gating")
                 nn_rate, draw_rate, _, game_length = play_past(
-                    Game, nn_compare_mcts_depth, iteration + 1, gate_net, stream=gating_stream
+                    Game, nn_compare_mcts_depth, iteration + 1, gate_net, stream=gating_stream, quiet=True
                 )
                 gating_results.append((gate_net, nn_rate, draw_rate, game_length))
                 gc.collect()
+            progress_callback(len(panel_copy), len(panel_copy), "gating")
 
+        if pbar is not None:
+            pbar.set_description(f"SRTG iter {iteration}: done")
         return (v_loss, pi_loss, total_train_steps, gating_results)
 
-    def run_history_elo_task(iteration, past_iter, elo_in, wr_ref):
+    def run_history_elo_task(iteration, past_iter, elo_in, wr_ref, pbar=None):
         """Run History comparison then ELO calculation with complete data.
         Returns (nn_rate, draw_rate, game_length, elo_val, elo_arr, wr_i_past, wr_past_i)."""
         tracy_thread("history_elo_worker")
 
+        def update_pbar(msg):
+            if pbar is not None:
+                pbar.set_description(f"HistoryELO iter {iteration}: {msg}")
+
         # 1. History comparison
+        update_pbar("playing...")
         with TracyZone("history_elo_play"):
             nn_rate, draw_rate, _, game_length = play_past(
-                Game, nn_compare_mcts_depth, iteration, past_iter, stream=history_stream
+                Game, nn_compare_mcts_depth, iteration, past_iter, stream=history_stream, quiet=True
             )
             gc.collect()
 
@@ -1113,8 +1151,11 @@ if __name__ == "__main__":
         wr_copy[past_iter, iteration] = wr_past_i
 
         # 2. ELO calculation (now has complete wr data for this network)
+        update_pbar("ELO calc...")
         with TracyZone("history_elo_calc"):
-            elo_out = get_elo(elo_in.copy(), wr_copy, iteration)
+            elo_out = get_elo(elo_in.copy(), wr_copy, iteration, quiet=True)
+
+        update_pbar("done")
 
         return (nn_rate, draw_rate, game_length, elo_out[iteration], elo_out, wr_i_past, wr_past_i)
 
@@ -1129,80 +1170,6 @@ if __name__ == "__main__":
         for i in pbar:
             stage_times = {}
             iteration_start = time.time()
-
-            # === ASYNC: Block on previous SRTG if still running ===
-            if pending_srtg is not None:
-                future, srtg_iter, srtg_panel, train_steps_at_submit = pending_srtg
-                if not future.done():
-                    if srtg_pbar is not None:
-                        srtg_pbar.set_description(f"SRTG iter {srtg_iter}: waiting...")
-                    future.result()  # Block until complete
-
-                # Process SRTG result
-                if gating_stream:
-                    gating_stream.synchronize()
-
-                try:
-                    v_loss, pi_loss, new_total_train_steps, gating_results = future.result()
-                    total_train_steps = new_total_train_steps
-
-                    # Save total_train_steps
-                    np.savetxt(os.path.join("data", "total_train_steps.txt"), [total_train_steps], delimiter=",")
-
-                    # Update postfix with training results
-                    postfix["vloss"] = v_loss
-                    postfix["ploss"] = pi_loss
-
-                    # Process gating results
-                    next_net = srtg_iter + 1
-                    panel_nn_rate = 0
-                    panel_draw_rate = 0
-                    panel_game_length = 0
-                    best_win_rate = 0
-                    for gate_net, nn_rate, draw_rate, game_length in gating_results:
-                        panel_nn_rate += nn_rate
-                        panel_draw_rate += draw_rate
-                        panel_game_length += game_length
-                        wr[next_net, gate_net] = nn_rate + draw_rate / Game.NUM_PLAYERS()
-                        wr[gate_net, next_net] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
-                        if gate_net == current_best:
-                            run.track(nn_rate, name="win_rate", epoch=next_net,
-                                      step=total_train_steps, context={"vs": "best", "from": "all_games"})
-                            run.track(draw_rate, name="draw_rate", epoch=next_net,
-                                      step=total_train_steps, context={"vs": "best", "from": "all_games"})
-                            run.track(game_length, name="average_game_length", epoch=next_net,
-                                      context={"vs": "best"})
-                            best_win_rate = nn_rate + draw_rate / Game.NUM_PLAYERS()
-                    panel_nn_rate /= len(srtg_panel)
-                    panel_draw_rate /= len(srtg_panel)
-                    panel_game_length /= len(srtg_panel)
-                    run.track(panel_nn_rate, name="win_rate", epoch=next_net,
-                              step=total_train_steps, context={"vs": "panel", "from": "all_games"})
-                    run.track(panel_draw_rate, name="draw_rate", epoch=next_net,
-                              step=total_train_steps, context={"vs": "panel", "from": "all_games"})
-                    run.track(panel_game_length, name="average_game_length", epoch=next_net,
-                              context={"vs": "panel"})
-                    panel_win_rate = panel_nn_rate + panel_draw_rate / Game.NUM_PLAYERS()
-                    postfix["vs panel"] = panel_win_rate
-                    panel_ratio = len(srtg_panel) / GATING_PANEL_SIZE
-                    wanted_panel_win_rate = (GATING_PANEL_WIN_RATE * panel_ratio) + (
-                        GATING_BEST_WIN_RATE * (1.0 - panel_ratio)
-                    )
-                    if panel_win_rate > wanted_panel_win_rate and best_win_rate > GATING_BEST_WIN_RATE:
-                        current_best = next_net
-                        postfix["best"] = current_best
-                        panel.append(current_best)
-                        while len(panel) > GATING_PANEL_SIZE:
-                            panel = panel[1:]
-                    np.savetxt(os.path.join("data", "win_rate.csv"), wr, delimiter=",")
-                    postfix["vs best"] = best_win_rate
-                except Exception as e:
-                    print(f"SRTG task failed: {e}")
-                    import traceback
-                    traceback.print_exc()
-                pending_srtg = None
-                if srtg_pbar is not None:
-                    srtg_pbar.set_description("SRTG: idle")
 
             # === ASYNC: Check HistoryELO results (non-blocking) ===
             if pending_history_elo:
@@ -1378,6 +1345,84 @@ if __name__ == "__main__":
                 gc.collect()
             stage_times["selfplay"] = time.time() - stage_start
 
+            # === ASYNC: Block on previous SRTG (after selfplay ran in parallel) ===
+            if pending_srtg is not None:
+                future, srtg_iter, srtg_panel, train_steps_at_submit = pending_srtg
+                stage_start = time.time()
+
+                if not future.done():
+                    if srtg_pbar is not None:
+                        srtg_pbar.set_description(f"SRTG iter {srtg_iter}: waiting...")
+                    future.result()  # Block until complete
+
+                # Process SRTG result
+                if gating_stream:
+                    gating_stream.synchronize()
+
+                try:
+                    v_loss, pi_loss, new_total_train_steps, gating_results = future.result()
+                    total_train_steps = new_total_train_steps
+
+                    # Save total_train_steps
+                    np.savetxt(os.path.join("data", "total_train_steps.txt"), [total_train_steps], delimiter=",")
+
+                    # Update postfix with training results
+                    postfix["vloss"] = v_loss
+                    postfix["ploss"] = pi_loss
+
+                    # Process gating results
+                    next_net = srtg_iter + 1
+                    panel_nn_rate = 0
+                    panel_draw_rate = 0
+                    panel_game_length = 0
+                    best_win_rate = 0
+                    for gate_net, nn_rate, draw_rate, game_length in gating_results:
+                        panel_nn_rate += nn_rate
+                        panel_draw_rate += draw_rate
+                        panel_game_length += game_length
+                        wr[next_net, gate_net] = nn_rate + draw_rate / Game.NUM_PLAYERS()
+                        wr[gate_net, next_net] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
+                        if gate_net == current_best:
+                            run.track(nn_rate, name="win_rate", epoch=next_net,
+                                      step=total_train_steps, context={"vs": "best", "from": "all_games"})
+                            run.track(draw_rate, name="draw_rate", epoch=next_net,
+                                      step=total_train_steps, context={"vs": "best", "from": "all_games"})
+                            run.track(game_length, name="average_game_length", epoch=next_net,
+                                      context={"vs": "best"})
+                            best_win_rate = nn_rate + draw_rate / Game.NUM_PLAYERS()
+                    panel_nn_rate /= len(srtg_panel)
+                    panel_draw_rate /= len(srtg_panel)
+                    panel_game_length /= len(srtg_panel)
+                    run.track(panel_nn_rate, name="win_rate", epoch=next_net,
+                              step=total_train_steps, context={"vs": "panel", "from": "all_games"})
+                    run.track(panel_draw_rate, name="draw_rate", epoch=next_net,
+                              step=total_train_steps, context={"vs": "panel", "from": "all_games"})
+                    run.track(panel_game_length, name="average_game_length", epoch=next_net,
+                              context={"vs": "panel"})
+                    panel_win_rate = panel_nn_rate + panel_draw_rate / Game.NUM_PLAYERS()
+                    postfix["vs panel"] = panel_win_rate
+                    panel_ratio = len(srtg_panel) / GATING_PANEL_SIZE
+                    wanted_panel_win_rate = (GATING_PANEL_WIN_RATE * panel_ratio) + (
+                        GATING_BEST_WIN_RATE * (1.0 - panel_ratio)
+                    )
+                    if panel_win_rate > wanted_panel_win_rate and best_win_rate > GATING_BEST_WIN_RATE:
+                        current_best = next_net
+                        postfix["best"] = current_best
+                        panel.append(current_best)
+                        while len(panel) > GATING_PANEL_SIZE:
+                            panel = panel[1:]
+                    np.savetxt(os.path.join("data", "win_rate.csv"), wr, delimiter=",")
+                    postfix["vs best"] = best_win_rate
+                except Exception as e:
+                    print(f"SRTG task failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+                pending_srtg = None
+                stage_times["srtg_wait"] = time.time() - stage_start
+                if srtg_pbar is not None:
+                    srtg_pbar.set_description("SRTG: idle")
+
             # === ASYNC: Submit SRTG and HistoryELO tasks ===
             if bg_executor is not None:
                 # Submit SRTG task (Symmetries, Resampling, Training, Gating)
@@ -1385,11 +1430,9 @@ if __name__ == "__main__":
                 hist_size = calc_hist_size(i)
                 run.track(hist_size, name="history_size", epoch=i, step=total_train_steps)
                 future = bg_executor.submit(
-                    run_srtg_task, i, hist_size, total_train_steps, panel.copy()
+                    run_srtg_task, i, hist_size, total_train_steps, panel.copy(), srtg_pbar
                 )
                 pending_srtg = (future, i, panel.copy(), total_train_steps)
-                if srtg_pbar is not None:
-                    srtg_pbar.set_description(f"SRTG iter {i}: running...")
                 stage_times["srtg_submit"] = time.time() - stage_start
 
                 # Submit HistoryELO task (after SRTG submission ensures gating_i-1 data is ready)
@@ -1397,11 +1440,9 @@ if __name__ == "__main__":
                 past_iter = max(0, i - compare_past)
                 if past_iter != i and math.isnan(wr[i, past_iter]):
                     future = bg_executor.submit(
-                        run_history_elo_task, i, past_iter, elo.copy(), wr
+                        run_history_elo_task, i, past_iter, elo.copy(), wr, history_pbar
                     )
                     pending_history_elo[i] = (future, past_iter)
-                    if history_pbar is not None:
-                        history_pbar.set_description(f"HistoryELO: {len(pending_history_elo)} pending")
                 stage_times["history_elo_submit"] = time.time() - stage_start
 
             # === SYNC ONLY: Symmetries, Resampling, Training, Gating ===

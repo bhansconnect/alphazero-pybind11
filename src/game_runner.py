@@ -34,10 +34,11 @@ GRArgs = namedtuple(
         "nn_workers",
         "result_workers",
         "mcts_workers",
+        "pbar_position",
     ],
     # NOTE: data_folder default is None to avoid early-binding issues when module
     # variables are changed after import. Resolved at runtime in hist_saver().
-    defaults=(0, HIST_SIZE, None, 0, 0, 1, 1, os.cpu_count() - 1),
+    defaults=(0, HIST_SIZE, None, 0, 0, 1, 1, os.cpu_count() - 1, None),
 )
 
 # In some games, setting this to max out your memory can have huge performance gains.
@@ -240,7 +241,8 @@ class GameRunner:
         last_completed = 0
         last_update = time.time()
         n = self.pm.params().games_to_play
-        pbar = tqdm.tqdm(total=n, unit="games", desc=self.args.title, leave=False)
+        pbar = tqdm.tqdm(total=n, unit="games", desc=self.args.title, leave=False,
+                         position=self.args.pbar_position)
         while self.pm.remaining_games() > 0:
             try:
                 self.monitor_queue.get(timeout=1)
@@ -782,6 +784,7 @@ if __name__ == "__main__":
             max_batch_size=bs,
             concurrent_batches=cb,
             result_workers=RESULT_WORKERS,
+            pbar_position=3,  # Below main/SRTG/HistoryELO bars in async mode
         )
 
         players = []

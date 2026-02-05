@@ -12,6 +12,8 @@ import alphazero
 import numpy as np
 import time
 import os
+import glob
+import re
 import readline  # Enable line editing (backspace, arrow keys) in input()
 
 try:
@@ -21,6 +23,203 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
     print("Warning: torch/neural_net not available. AI features disabled.")
+
+
+def discover_networks(base_path="data/checkpoint"):
+    """
+    Discover available network checkpoints organized by training run.
+    Returns: {run_name: [(iter_num, full_path), ...]} sorted by iter descending (newest first)
+    """
+    runs = {}
+    if not os.path.isdir(base_path):
+        return runs
+
+    for run_name in sorted(os.listdir(base_path)):
+        run_path = os.path.join(base_path, run_name)
+        if not os.path.isdir(run_path):
+            continue
+
+        checkpoints = []
+        for pt_file in glob.glob(os.path.join(run_path, "*.pt")):
+            filename = os.path.basename(pt_file)
+            # Extract iteration number from prefix (e.g., "0049" from "0049-name.pt")
+            match = re.match(r'^(\d+)-', filename)
+            if match:
+                iter_num = int(match.group(1))
+                checkpoints.append((iter_num, pt_file))
+
+        if checkpoints:
+            # Sort by iteration descending (newest first)
+            checkpoints.sort(key=lambda x: x[0], reverse=True)
+            runs[run_name] = checkpoints
+
+    return runs
+
+
+def load_network_for_players(ctx, path, players):
+    """Load a network and assign it to specified players."""
+    if not TORCH_AVAILABLE:
+        print("Error: torch not available")
+        return False
+    try:
+        net = neural_net.NNWrapper.load_checkpoint(
+            ctx.game_class, os.path.dirname(path), os.path.basename(path)
+        )
+        for p in players:
+            ctx.players[p].network = net
+            ctx.players[p].network_path = path
+            ctx.players[p].mcts = None
+        return True
+    except Exception as e:
+        print(f"Error loading network: {e}")
+        return False
+
+
+def select_checkpoint_from_run(checkpoints, prompt_prefix=""):
+    """
+    Select a checkpoint from a list of (iter_num, path) tuples.
+    Returns path string, or None for random policy.
+    """
+    latest_iter, latest_path = checkpoints[0]
+
+    print(f"\nCheckpoints (newest first):")
+    print(f"  l. Latest   -> iter {latest_iter:04d} ({os.path.basename(latest_path)})")
+    print(f"  r. Random policy (no network)")
+    print("  " + "-" * 50)
+
+    # Show first few checkpoints
+    show_count = min(10, len(checkpoints))
+    for i in range(show_count):
+        iter_num, path = checkpoints[i]
+        print(f"  {i}. iter {iter_num:04d}")
+    if len(checkpoints) > show_count:
+        print(f"  ... ({len(checkpoints) - show_count} more, use -N to go back N from latest)")
+
+    print("\nShortcuts: Enter=latest, -N=back N iters, iN=specific iter")
+
+    while True:
+        choice = input(f"\n{prompt_prefix}Select checkpoint: ").strip().lower()
+
+        # Enter or 'l' = latest
+        if choice in ['', 'l', 'latest']:
+            return latest_path
+
+        # 'r' = random
+        if choice == 'r':
+            return None
+
+        # Negative number = go back N from latest
+        if choice.startswith('-'):
+            try:
+                offset = int(choice)  # negative
+                idx = -offset  # convert to positive index
+                if 0 <= idx < len(checkpoints):
+                    return checkpoints[idx][1]
+                print(f"Only {len(checkpoints)} checkpoints available")
+            except ValueError:
+                print("Invalid offset")
+            continue
+
+        # iN or iter:N = specific iteration
+        iter_match = re.match(r'^i(?:ter:?)?(\d+)$', choice)
+        if iter_match:
+            target_iter = int(iter_match.group(1))
+            for iter_num, path in checkpoints:
+                if iter_num == target_iter:
+                    return path
+            print(f"Iteration {target_iter} not found")
+            continue
+
+        # Numeric index
+        try:
+            idx = int(choice)
+            if 0 <= idx < len(checkpoints):
+                return checkpoints[idx][1]
+            print(f"Enter 0-{len(checkpoints)-1}")
+        except ValueError:
+            print("Invalid input")
+
+
+def select_network_interactive(ctx):
+    """
+    Interactive network selection menu.
+    Returns True if a network was selected, False if both players use random.
+    """
+    if not TORCH_AVAILABLE:
+        print("torch not available - using random policy")
+        return False
+
+    runs = discover_networks()
+
+    if not runs:
+        print("No checkpoints found in data/checkpoint/")
+        print("Using random policy")
+        return False
+
+    print("\n=== Network Selection ===")
+
+    # Run selection
+    run_names = list(runs.keys())
+    if len(run_names) == 1:
+        selected_run = run_names[0]
+        print(f"Training run: {selected_run}")
+    else:
+        print("Available training runs:")
+        for i, name in enumerate(run_names):
+            cpts = runs[name]
+            iter_range = f"{cpts[-1][0]:04d}-{cpts[0][0]:04d}"
+            print(f"  {i+1}. {name} ({len(cpts)} checkpoints: {iter_range})")
+
+        while True:
+            choice = input("\nSelect run (number, or 'r' for random): ").strip().lower()
+            if choice == 'r':
+                print("Using random policy for both players")
+                return False
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(run_names):
+                    selected_run = run_names[idx]
+                    break
+                print(f"Enter 1-{len(run_names)}")
+            except ValueError:
+                if choice == '':
+                    selected_run = run_names[0]
+                    break
+                print("Invalid input")
+
+    checkpoints = runs[selected_run]
+
+    # Ask if same or different networks
+    print(f"\nRun: {selected_run}")
+    choice = input("Same network for both players? [y]es / [n]o / [r]andom (default=yes): ").strip().lower()
+
+    if choice == 'r':
+        print("Using random policy for both players")
+        return False
+
+    if choice == 'n':
+        # Different networks per player
+        any_loaded = False
+        for player in [0, 1]:
+            print(f"\n--- Player {player} ---")
+            path = select_checkpoint_from_run(checkpoints, f"P{player} ")
+            if path is None:
+                print(f"Player {player} using random policy")
+            elif load_network_for_players(ctx, path, [player]):
+                print(f"Player {player} loaded: {os.path.basename(path)}")
+                any_loaded = True
+        return any_loaded
+    else:
+        # Same network for both
+        path = select_checkpoint_from_run(checkpoints)
+        if path is None:
+            print("Using random policy for both players")
+            return False
+        if load_network_for_players(ctx, path, [0, 1]):
+            print(f"Loaded for both players: {os.path.basename(path)}")
+            return True
+        return False
+
 
 # ANSI color codes
 RED = '\033[91m'
@@ -197,7 +396,7 @@ def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None):
             v[-1] = 1.0  # Uniform draw assumption
             pi = np.ones(gs.NUM_MOVES()) / gs.NUM_MOVES()
         else:
-            canonical = torch.from_numpy(np.array(leaf.canonicalized())).unsqueeze(0)
+            canonical = torch.from_numpy(np.array(leaf.canonicalized()))
             v, pi = agent.predict(canonical)
             v = v.cpu().numpy().flatten()
             pi = pi.cpu().numpy().flatten()
@@ -243,7 +442,7 @@ def get_ai_probs(ctx, player_idx, valids):
         # Use raw policy network (or uniform for random)
         sims = 0
         if pcfg.network is not None:
-            canonical = torch.from_numpy(np.array(ctx.game.canonicalized())).unsqueeze(0)
+            canonical = torch.from_numpy(np.array(ctx.game.canonicalized()))
             _, pi = pcfg.network.predict(canonical)
             probs = pi.cpu().numpy().flatten()
             # Softmax is already applied by network
@@ -594,39 +793,40 @@ def parse_command(cmd, valids, cfg, ctx=None):
         return 'config'
 
     if cmd_lower == 'net' and ctx:
-        # net <0|1> <path|random>
-        if len(parts) < 3:
-            print("Usage: net <0|1> <path|random>")
-            return 'config'
-        try:
-            player = int(parts[1])
-            if player not in [0, 1]:
-                raise ValueError()
-        except ValueError:
-            print("Player must be 0 or 1")
+        # net (no args) -> interactive selection
+        # net <0|1|both> <path|random>
+        if len(parts) == 1:
+            # Interactive selection
+            select_network_interactive(ctx)
             return 'config'
 
+        if len(parts) < 3:
+            print("Usage: net  (interactive)")
+            print("       net <0|1|both> <path|random>")
+            return 'config'
+
+        player_arg = parts[1].lower()
         path_arg = parts[2]  # Keep original case for path
-        if path_arg.lower() == 'random':
-            ctx.players[player].network = None
-            ctx.players[player].network_path = None
-            ctx.players[player].mcts = None
-            print(f"Player {player} using random policy")
+
+        if player_arg == 'both':
+            players = [0, 1]
+        elif player_arg in ['0', '1']:
+            players = [int(player_arg)]
         else:
-            if not TORCH_AVAILABLE:
-                print("Error: torch not available, cannot load networks")
-                return 'config'
-            try:
-                # Try loading the network
-                net = neural_net.NNWrapper.load_checkpoint(
-                    ctx.game_class, os.path.dirname(path_arg), os.path.basename(path_arg)
-                )
-                ctx.players[player].network = net
-                ctx.players[player].network_path = path_arg
-                ctx.players[player].mcts = None
-                print(f"Player {player} loaded network: {path_arg}")
-            except Exception as e:
-                print(f"Error loading network: {e}")
+            print("Player must be 0, 1, or 'both'")
+            return 'config'
+
+        if path_arg.lower() == 'random':
+            for p in players:
+                ctx.players[p].network = None
+                ctx.players[p].network_path = None
+                ctx.players[p].mcts = None
+            player_str = "Both players" if len(players) == 2 else f"Player {players[0]}"
+            print(f"{player_str} using random policy")
+        else:
+            if load_network_for_players(ctx, path_arg, players):
+                player_str = "both players" if len(players) == 2 else f"Player {players[0]}"
+                print(f"Loaded for {player_str}: {path_arg}")
         return 'config'
 
     # Now lowercase for game commands
@@ -849,8 +1049,9 @@ def print_help():
     print("  q           - Quit")
     print("  <number>    - Play action by ID")
     print("\n=== AI Configuration ===")
-    print("  ai <0|1|both|none>     - Set which players are AI")
-    print("  net <0|1> <path|random> - Load network or use random policy")
+    print("  ai <0|1|both|none>      - Set which players are AI")
+    print("  net                     - Interactive network selection")
+    print("  net <0|1|both> <path>   - Load network directly")
     print("  time <0|1> <secs|off>  - Set thinking time limit")
     print("  nodes <0|1> <count|off> - Set node expansion limit")
     print("  temp <0|1> <value>     - Set temperature for move selection")
@@ -918,11 +1119,15 @@ def main():
         ctx.players[0].is_ai = False
         ctx.players[1].is_ai = True
 
-    # Configuration phase - allow setting up AI before starting
+    # Network selection and configuration phase
     if ctx.players[0].is_ai or ctx.players[1].is_ai:
+        # Interactive network selection first
+        select_network_interactive(ctx)
+
         print("\n=== AI Configuration ===")
-        print("Configure AI settings before starting (type 'start' or press Enter to begin):")
-        print("  net <0|1> <path|random>  - Load network")
+        print("Adjust settings (or 'start'/Enter to begin):")
+        print("  net                      - Re-select network")
+        print("  net <0|1> <path|random>  - Load specific network")
         print("  nodes <0|1> <count|off>  - Node limit (default: 100)")
         print("  time <0|1> <secs|off>    - Time limit")
         print("  temp <0|1> <value>       - Temperature (default: 0.5)")

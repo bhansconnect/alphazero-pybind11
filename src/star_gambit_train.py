@@ -110,6 +110,9 @@ DATA_WORKERS = None                # None = use cpu_count() - 1
 # === Comparison ===
 compare_past = 20                  # Iterations back to compare ELO
 
+# === Async Evaluation ===
+ASYNC_EVAL = True                  # Run gating/history in background with CUDA streams
+
 # === Training Iterations ===
 bootstrap_iters = 0
 start = 0
@@ -197,6 +200,9 @@ def configure_game_runner():
 
     # Comparison
     game_runner.compare_past = compare_past
+
+    # Async evaluation
+    game_runner.ASYNC_EVAL = ASYNC_EVAL
 
 
 if __name__ == "__main__":

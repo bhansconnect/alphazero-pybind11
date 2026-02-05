@@ -1,4 +1,5 @@
 from collections import namedtuple
+from contextlib import nullcontext
 import os
 import torch
 from torch import optim, nn
@@ -209,6 +210,7 @@ class NNWrapper:
         #     self.optimizer, milestones=args.lr_milestones, gamma=0.1)
         self.device = get_device()
         self.cv = args.cv
+        self.stream = None  # CUDA stream for async inference
         self.nnet.to(self.device)
 
     @tracy_zone
@@ -342,17 +344,20 @@ class NNWrapper:
 
     @tracy_zone
     def process(self, batch):
-        batch = batch.contiguous().to(self.device, non_blocking=True)
-        self.nnet.eval()
-        with torch.no_grad():
-            v, pi = self.nnet(batch)
-            res = (torch.exp(v), torch.exp(pi))
-        # GPU sync for accurate Tracy timing when profiling is enabled
-        if alphazero.tracy_is_enabled():
-            if self.device.type == 'cuda':
-                torch.cuda.synchronize()
-            elif self.device.type == 'mps':
-                torch.mps.synchronize()
+        # Use CUDA stream context only on CUDA (MPS has no stream API)
+        stream_ctx = torch.cuda.stream(self.stream) if (self.stream and self.device.type == 'cuda') else nullcontext()
+        with stream_ctx:
+            batch = batch.contiguous().to(self.device, non_blocking=True)
+            self.nnet.eval()
+            with torch.no_grad():
+                v, pi = self.nnet(batch)
+                res = (torch.exp(v), torch.exp(pi))
+            # GPU sync for accurate Tracy timing when profiling is enabled
+            if alphazero.tracy_is_enabled():
+                if self.device.type == 'cuda':
+                    torch.cuda.synchronize()
+                elif self.device.type == 'mps':
+                    torch.mps.synchronize()
         return res
 
     def sample_loss_pi(self, targets, outputs):
@@ -393,7 +398,8 @@ class NNWrapper:
     @staticmethod
     @tracy_zone
     def load_checkpoint(
-        Game, folder=os.path.join("data", "checkpoint"), filename="checkpoint.pt"
+        Game, folder=os.path.join("data", "checkpoint"), filename="checkpoint.pt",
+        stream=None
     ):
         if folder != "":
             filepath = os.path.join(folder, filename)
@@ -420,6 +426,7 @@ class NNWrapper:
         net.nnet.load_state_dict(checkpoint["state_dict"])
         net.optimizer.load_state_dict(checkpoint["opt_state"])
         net.scheduler.load_state_dict(checkpoint["sch_state"])
+        net.stream = stream  # Set CUDA stream for async inference
         return net
 
 

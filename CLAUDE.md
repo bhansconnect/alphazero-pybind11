@@ -126,19 +126,11 @@ with TracyZone("my_operation"):
 tracy_frame()
 ```
 
-### GPU Synchronization
-
-By default, GPU synchronization is disabled in `NNWrapper.process()` to avoid overhead.
-To enable accurate GPU timing in Tracy (at the cost of performance):
-
-```python
-import neural_net
-neural_net.TRACY_GPU_SYNC = True
-```
-
 ### Instrumented Components
 
-**C++:** play_manager, mcts, lru_cache, concurrent_queue, star_gambit_gs
+**C++:** play_manager (high-level thread zones only)
 **Python:** game_runner (with training stage zones), neural_net, play_agent, monrad, roundrobin
 
 **Training Stages:** Each training iteration has Tracy zones for: history, elo, selfplay, symmetries, resampling, training, gating
+
+GPU synchronization is automatically enabled when Tracy is active for accurate timing.

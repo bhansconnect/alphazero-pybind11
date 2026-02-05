@@ -6,7 +6,6 @@
 #include <sstream>
 
 #include "color.h"
-#include "tracy_zones.h"
 
 namespace alphazero::star_gambit_gs {
 
@@ -761,7 +760,6 @@ bool StarGambitGS<Config>::is_end_turn_valid() const {
 
 template<typename Config>
 Vector<uint8_t> StarGambitGS<Config>::valid_moves() const noexcept {
-  AZ_ZONE_SCOPED;
   Vector<uint8_t> valids(AS::NUM_MOVES);
   valids.setZero();
 
@@ -1024,7 +1022,6 @@ void StarGambitGS<Config>::execute_deploy(UnitType type, int facing) {
 
 template<typename Config>
 void StarGambitGS<Config>::play_move(uint32_t move) {
-  AZ_ZONE_SCOPED;
   if (move < static_cast<uint32_t>(AS::CRUISER_MOVE_OFFSET)) {
     // Fighter move
     int rel = move - AS::FIGHTER_MOVE_OFFSET;
@@ -1211,7 +1208,6 @@ uint64_t StarGambitGS<Config>::compute_position_hash() const {
 
 template<typename Config>
 Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
-  AZ_ZONE_SCOPED;
   Tensor<float, 3> tensor(AS::CANONICAL_SHAPE[0], AS::CANONICAL_SHAPE[1],
                           AS::CANONICAL_SHAPE[2]);
   tensor.setZero();
@@ -1415,7 +1411,6 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
 template<typename Config>
 std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
     const PlayHistory& base) const noexcept {
-  AZ_ZONE_SCOPED;
   std::vector<PlayHistory> syms;
   syms.push_back(base);
 

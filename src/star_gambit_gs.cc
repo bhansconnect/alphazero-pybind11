@@ -203,10 +203,10 @@ std::vector<CannonInfo> get_cannon_info(UnitType type) {
       break;
 
     case UnitType::CRUISER:
-      // Cannon order: left (-1), forward (0), right (+1) from front hex
-      cannons.push_back({-1, 1});  // Left cannon
+      // Cannon order: left (+1), forward (0), right (-1) from front hex
+      cannons.push_back({1, 1});   // Left cannon (counter-clockwise from facing)
       cannons.push_back({0, 1});   // Forward cannon
-      cannons.push_back({1, 1});   // Right cannon
+      cannons.push_back({-1, 1});  // Right cannon (clockwise from facing)
       break;
 
     case UnitType::DREADNOUGHT:

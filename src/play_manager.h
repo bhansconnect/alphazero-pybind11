@@ -37,6 +37,7 @@ struct GameData {
   bool playthrough = false;
   double total_avg_leaf_depth = 0;
   double total_search_entropy = 0;
+  uint32_t move_count = 0;
 };
 
 struct PlayParams {
@@ -112,12 +113,16 @@ class DLLEXPORT PlayManager {
            static_cast<float>(games_completed_);
   }
   float avg_leaf_depth() const noexcept {
-    if (game_length_ == 0) return 0;
-    return static_cast<float>(total_avg_leaf_depth_ / static_cast<double>(game_length_));
+    if (total_move_count_ == 0) return 0;
+    return static_cast<float>(total_avg_leaf_depth_ / static_cast<double>(total_move_count_));
   }
   float avg_search_entropy() const noexcept {
+    if (total_move_count_ == 0) return 0;
+    return static_cast<float>(total_search_entropy_ / static_cast<double>(total_move_count_));
+  }
+  float avg_moves_per_turn() const noexcept {
     if (game_length_ == 0) return 0;
-    return static_cast<float>(total_search_entropy_ / static_cast<double>(game_length_));
+    return static_cast<float>(total_move_count_) / static_cast<float>(game_length_);
   }
   size_t awaiting_mcts_count() const noexcept { return awaiting_mcts_.size(); }
   size_t awaiting_inference_count() const noexcept {
@@ -161,6 +166,7 @@ class DLLEXPORT PlayManager {
   uint64_t game_length_ = 0;
   double total_avg_leaf_depth_ = 0;
   double total_search_entropy_ = 0;
+  uint64_t total_move_count_ = 0;
   std::atomic<uint32_t> games_completed_ = 0;
   Vector<float> resign_scores_;
 

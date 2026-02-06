@@ -280,6 +280,10 @@ class GameRunner:
             game_indices = self.pm.build_batch(
                 batch_index % self.num_players, batch, self.batch_workers
             )
+            if len(game_indices) == 0:
+                # Race condition: no games ready, return batch_index and retry
+                self.ready_queues[player].put(batch_index)
+                continue
             out = batch[: len(game_indices)]
             if not isinstance(self.players[player], RandPlayer):
                 out = out.contiguous().to(self.device, non_blocking=True)

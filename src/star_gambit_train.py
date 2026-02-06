@@ -64,6 +64,7 @@ depth = 4              # 4 residual/dense blocks
 channels = 16          # 16 channels per layer
 kernel_size = 3        # 3x3 kernels
 dense_net = True       # DenseNet tends to train faster
+star_gambit_spatial = True  # Use spatial policy head with canonicalized actions
 
 # === MCTS Configuration ===
 nn_selfplay_mcts_depth = 100       # Full search for quality games
@@ -137,6 +138,7 @@ def configure_game_runner():
     game_runner.channels = channels
     game_runner.kernel_size = kernel_size
     game_runner.dense_net = dense_net
+    game_runner.star_gambit_spatial = star_gambit_spatial
     game_runner.network_name = network_name
     game_runner.run_name = run_name
     game_runner.lr_milestone = lr_milestone

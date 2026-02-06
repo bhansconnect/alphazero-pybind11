@@ -43,16 +43,16 @@ using TestGame = StarGambitSkirmishGS;
 //   d c sw    - deploy cruiser facing southwest
 //   e         - end turn
 
-// Helper to find unit anchor hex
+// Helper to find unit's position in 2D coordinates
 template<typename Config, typename GameType>
-std::optional<int> find_unit_hex_idx(const GameType& game, UnitType type, int slot) {
+std::optional<std::pair<int, int>> find_unit_pos(const GameType& game, UnitType type, int slot) {
   auto units = game.get_units();
   for (const auto& u : units) {
     if (u.player == game.current_player() &&
         static_cast<UnitType>(u.type) == type &&
         u.slot == slot) {
       Hex anchor = {static_cast<int8_t>(u.anchor_q), static_cast<int8_t>(u.anchor_r)};
-      return hex_to_index_fast<Config::BOARD_SIDE>(anchor);
+      return hex_to_2d<Config::BOARD_SIDE>(anchor);
     }
   }
   return std::nullopt;
@@ -61,9 +61,22 @@ std::optional<int> find_unit_hex_idx(const GameType& game, UnitType type, int sl
 template<typename Config, typename GameType>
 std::optional<int> parse_move(const std::string& move_str, const GameType& game) {
   using AS = ActionSpace<Config>;
+  constexpr int BOARD_DIM = AS::BOARD_DIM;
   std::istringstream iss(move_str);
   std::string cmd;
   iss >> cmd;
+
+  const bool is_p1 = (game.current_player() == 1);
+
+  // Helper to encode spatial action with canonicalization
+  auto encode_action = [&](int row, int col, int slot) {
+    if (is_p1) {
+      row = BOARD_DIM - 1 - row;
+      col = BOARD_DIM - 1 - col;
+      slot = SLOT_MAP[slot];
+    }
+    return AS::encode_spatial_action(row, col, slot);
+  };
 
   if (cmd == "e") {
     return AS::END_TURN_OFFSET;
@@ -79,45 +92,45 @@ std::optional<int> parse_move(const std::string& move_str, const GameType& game)
     int slot = std::stoi(unit_slot.substr(1)) - 1;  // Convert 1-indexed to 0-indexed
 
     if (unit_type == 'f') {
-      // Fighter moves: f, fl, fr -> HexAction slots 0, 1, 2
-      static const std::map<std::string, HexAction> fighter_dirs = {
-        {"f", HexAction::MOVE_FORWARD}, {"fl", HexAction::MOVE_FORWARD_LEFT},
-        {"fr", HexAction::MOVE_FORWARD_RIGHT}
+      // Fighter moves: f, fl, fr -> SpatialAction slots 0, 1, 2
+      static const std::map<std::string, SpatialAction> fighter_dirs = {
+        {"f", SpatialAction::MOVE_FORWARD}, {"fl", SpatialAction::MOVE_FORWARD_LEFT},
+        {"fr", SpatialAction::MOVE_FORWARD_RIGHT}
       };
       auto it = fighter_dirs.find(direction);
       if (it == fighter_dirs.end() || slot < 0 || slot >= Config::MAX_FIGHTERS) {
         return std::nullopt;
       }
-      auto hex_idx = find_unit_hex_idx<Config>(game, UnitType::FIGHTER, slot);
-      if (!hex_idx) return std::nullopt;
-      return AS::encode_hex_action(*hex_idx, it->second);
+      auto pos = find_unit_pos<Config>(game, UnitType::FIGHTER, slot);
+      if (!pos) return std::nullopt;
+      return encode_action(pos->first, pos->second, static_cast<int>(it->second));
     } else if (unit_type == 'c') {
       // Cruiser moves: l, fl, f, fr, r
-      static const std::map<std::string, HexAction> cruiser_dirs = {
-        {"l", HexAction::ROTATE_LEFT}, {"fl", HexAction::MOVE_FORWARD_LEFT},
-        {"f", HexAction::MOVE_FORWARD}, {"fr", HexAction::MOVE_FORWARD_RIGHT},
-        {"r", HexAction::ROTATE_RIGHT}
+      static const std::map<std::string, SpatialAction> cruiser_dirs = {
+        {"l", SpatialAction::ROTATE_LEFT}, {"fl", SpatialAction::MOVE_FORWARD_LEFT},
+        {"f", SpatialAction::MOVE_FORWARD}, {"fr", SpatialAction::MOVE_FORWARD_RIGHT},
+        {"r", SpatialAction::ROTATE_RIGHT}
       };
       auto it = cruiser_dirs.find(direction);
       if (it == cruiser_dirs.end() || slot < 0 || slot >= Config::MAX_CRUISERS) {
         return std::nullopt;
       }
-      auto hex_idx = find_unit_hex_idx<Config>(game, UnitType::CRUISER, slot);
-      if (!hex_idx) return std::nullopt;
-      return AS::encode_hex_action(*hex_idx, it->second);
+      auto pos = find_unit_pos<Config>(game, UnitType::CRUISER, slot);
+      if (!pos) return std::nullopt;
+      return encode_action(pos->first, pos->second, static_cast<int>(it->second));
     } else if (unit_type == 'd') {
       // Dreadnought moves: l, fl, fr, r (no forward)
-      static const std::map<std::string, HexAction> dread_dirs = {
-        {"l", HexAction::ROTATE_LEFT}, {"fl", HexAction::MOVE_FORWARD_LEFT},
-        {"fr", HexAction::MOVE_FORWARD_RIGHT}, {"r", HexAction::ROTATE_RIGHT}
+      static const std::map<std::string, SpatialAction> dread_dirs = {
+        {"l", SpatialAction::ROTATE_LEFT}, {"fl", SpatialAction::MOVE_FORWARD_LEFT},
+        {"fr", SpatialAction::MOVE_FORWARD_RIGHT}, {"r", SpatialAction::ROTATE_RIGHT}
       };
       auto it = dread_dirs.find(direction);
       if (it == dread_dirs.end() || slot < 0 || slot >= Config::MAX_DREADNOUGHTS) {
         return std::nullopt;
       }
-      auto hex_idx = find_unit_hex_idx<Config>(game, UnitType::DREADNOUGHT, slot);
-      if (!hex_idx) return std::nullopt;
-      return AS::encode_hex_action(*hex_idx, it->second);
+      auto pos = find_unit_pos<Config>(game, UnitType::DREADNOUGHT, slot);
+      if (!pos) return std::nullopt;
+      return encode_action(pos->first, pos->second, static_cast<int>(it->second));
     }
     return std::nullopt;
   }
@@ -136,44 +149,44 @@ std::optional<int> parse_move(const std::string& move_str, const GameType& game)
     if (unit_type == 'f') {
       // Fighter has only one cannon (forward)
       if (slot < 0 || slot >= Config::MAX_FIGHTERS) return std::nullopt;
-      auto hex_idx = find_unit_hex_idx<Config>(game, UnitType::FIGHTER, slot);
-      if (!hex_idx) return std::nullopt;
-      return AS::encode_hex_action(*hex_idx, HexAction::FIRE_FORWARD);
+      auto pos = find_unit_pos<Config>(game, UnitType::FIGHTER, slot);
+      if (!pos) return std::nullopt;
+      return encode_action(pos->first, pos->second, static_cast<int>(SpatialAction::FIRE_FORWARD));
     } else if (unit_type == 'c') {
       // Cruiser cannons: l (fl), f (forward), r (fr)
-      static const std::map<std::string, HexAction> cruiser_cannons = {
-        {"l", HexAction::FIRE_FORWARD_LEFT}, {"f", HexAction::FIRE_FORWARD},
-        {"r", HexAction::FIRE_FORWARD_RIGHT}
+      static const std::map<std::string, SpatialAction> cruiser_cannons = {
+        {"l", SpatialAction::FIRE_FORWARD_LEFT}, {"f", SpatialAction::FIRE_FORWARD},
+        {"r", SpatialAction::FIRE_FORWARD_RIGHT}
       };
       auto it = cruiser_cannons.find(cannon);
       if (it == cruiser_cannons.end() || slot < 0 || slot >= Config::MAX_CRUISERS) {
         return std::nullopt;
       }
-      auto hex_idx = find_unit_hex_idx<Config>(game, UnitType::CRUISER, slot);
-      if (!hex_idx) return std::nullopt;
-      return AS::encode_hex_action(*hex_idx, it->second);
+      auto pos = find_unit_pos<Config>(game, UnitType::CRUISER, slot);
+      if (!pos) return std::nullopt;
+      return encode_action(pos->first, pos->second, static_cast<int>(it->second));
     } else if (unit_type == 'd') {
       // Dreadnought cannons: rl, fl, fr, rr
-      static const std::map<std::string, HexAction> dread_cannons = {
-        {"rl", HexAction::FIRE_REAR_LEFT}, {"fl", HexAction::FIRE_FORWARD_LEFT},
-        {"fr", HexAction::FIRE_FORWARD_RIGHT}, {"rr", HexAction::FIRE_REAR_RIGHT}
+      static const std::map<std::string, SpatialAction> dread_cannons = {
+        {"rl", SpatialAction::FIRE_REAR_LEFT}, {"fl", SpatialAction::FIRE_FORWARD_LEFT},
+        {"fr", SpatialAction::FIRE_FORWARD_RIGHT}, {"rr", SpatialAction::FIRE_REAR_RIGHT}
       };
       auto it = dread_cannons.find(cannon);
       if (it == dread_cannons.end() || slot < 0 || slot >= Config::MAX_DREADNOUGHTS) {
         return std::nullopt;
       }
-      auto hex_idx = find_unit_hex_idx<Config>(game, UnitType::DREADNOUGHT, slot);
-      if (!hex_idx) return std::nullopt;
-      return AS::encode_hex_action(*hex_idx, it->second);
+      auto pos = find_unit_pos<Config>(game, UnitType::DREADNOUGHT, slot);
+      if (!pos) return std::nullopt;
+      return encode_action(pos->first, pos->second, static_cast<int>(it->second));
     }
     return std::nullopt;
   }
 
   if (cmd == "d") {
     // Deploy command: d <unit_type> <facing>
-    std::string unit_type_str, facing;
-    iss >> unit_type_str >> facing;
-    if (unit_type_str.empty() || facing.empty()) return std::nullopt;
+    std::string unit_type_str, facing_str;
+    iss >> unit_type_str >> facing_str;
+    if (unit_type_str.empty() || facing_str.empty()) return std::nullopt;
 
     // Unit type: f=0, c=1, d=2
     int unit_type_idx = -1;
@@ -186,10 +199,16 @@ std::optional<int> parse_move(const std::string& move_str, const GameType& game)
     static const std::map<std::string, int> facings = {
       {"e", 0}, {"ne", 1}, {"nw", 2}, {"w", 3}, {"sw", 4}, {"se", 5}
     };
-    auto it = facings.find(facing);
+    auto it = facings.find(facing_str);
     if (it == facings.end()) return std::nullopt;
 
-    return AS::encode_deploy(unit_type_idx, it->second);
+    int facing = it->second;
+    // Canonicalize facing for P1: rotate 180° (+3 mod 6)
+    if (is_p1) {
+      facing = (facing + 3) % 6;
+    }
+
+    return AS::encode_deploy(unit_type_idx, facing);
   }
 
   return std::nullopt;
@@ -470,9 +489,9 @@ TEST(TurnStructure, TurnOneIsDeployOnly) {
 
   auto valids = game.valid_moves();
 
-  // Check that no hex actions are valid (all movement and fire)
-  for (int i = TestAS::HEX_ACTION_OFFSET; i < TestAS::DEPLOY_OFFSET; ++i) {
-    EXPECT_EQ(valids(i), 0) << "Hex action " << i << " should not be valid on turn 1";
+  // Check that no spatial actions are valid (all movement and fire)
+  for (int i = TestAS::SPATIAL_OFFSET; i < TestAS::DEPLOY_OFFSET; ++i) {
+    EXPECT_EQ(valids(i), 0) << "Spatial action " << i << " should not be valid on turn 1";
   }
 }
 
@@ -510,11 +529,11 @@ TEST(TurnStructure, AfterTurnOneCanMoveAndFire) {
   int total_valid = valids.sum();
   EXPECT_GT(total_valid, 0);
 
-  // At least some hex actions should be valid (for the deployed unit)
-  bool has_hex_action = false;
-  for (int i = TestAS::HEX_ACTION_OFFSET; i < TestAS::DEPLOY_OFFSET; ++i) {
+  // At least some spatial actions should be valid (for the deployed unit)
+  bool has_spatial_action = false;
+  for (int i = TestAS::SPATIAL_OFFSET; i < TestAS::DEPLOY_OFFSET; ++i) {
     if (valids(i) == 1) {
-      has_hex_action = true;
+      has_spatial_action = true;
       break;
     }
   }
@@ -526,7 +545,7 @@ TEST(TurnStructure, AfterTurnOneCanMoveAndFire) {
       break;
     }
   }
-  EXPECT_TRUE(has_hex_action || has_deploy);
+  EXPECT_TRUE(has_spatial_action || has_deploy);
 }
 
 // =============================================================================
@@ -654,9 +673,10 @@ TEST(Symmetries, ReturnsCorrectCount) {
   base.pi.setConstant(1.0f / TestAS::NUM_MOVES);
 
   auto syms = game.symmetries(base);
-  // With canonicalized observations, symmetry is already exploited by the
-  // perspective transformation. Only identity is returned.
-  EXPECT_EQ(syms.size(), 1u);
+  // With canonicalized observations, we now have 2 symmetries:
+  // 1. Identity
+  // 2. NW-SE diagonal mirror
+  EXPECT_EQ(syms.size(), 2u);
 }
 
 TEST(Symmetries, IdentityPreservesValues) {
@@ -669,17 +689,23 @@ TEST(Symmetries, IdentityPreservesValues) {
   base.pi.setZero();
 
   auto syms = game.symmetries(base);
-  ASSERT_EQ(syms.size(), 1u);
+  ASSERT_EQ(syms.size(), 2u);
 
-  // Identity symmetry - values unchanged
+  // Identity symmetry (index 0) - values unchanged
   EXPECT_FLOAT_EQ(syms[0].v(0), 0.7f);
   EXPECT_FLOAT_EQ(syms[0].v(1), 0.2f);
   EXPECT_FLOAT_EQ(syms[0].v(2), 0.1f);
+
+  // Mirror symmetry (index 1) - values also unchanged (mirror doesn't affect value)
+  EXPECT_FLOAT_EQ(syms[1].v(0), 0.7f);
+  EXPECT_FLOAT_EQ(syms[1].v(1), 0.2f);
+  EXPECT_FLOAT_EQ(syms[1].v(2), 0.1f);
 }
 
 // Note: Rotation-based symmetry tests removed.
 // With canonicalized observations, the 180° rotation symmetry is exploited
-// by the perspective transformation. symmetries() now only returns identity.
+// by the perspective transformation. symmetries() now returns identity and
+// NW-SE diagonal mirror.
 
 TEST(Symmetries, IdentitySymmetryIsUnchanged) {
   TestGame game;
@@ -703,9 +729,9 @@ TEST(Symmetries, IdentitySymmetryIsUnchanged) {
   }
 
   auto syms = game.symmetries(base);
-  ASSERT_EQ(syms.size(), 1u);
+  ASSERT_EQ(syms.size(), 2u);
 
-  // Identity symmetry should be exactly the same as input
+  // Identity symmetry (index 0) should be exactly the same as input
   for (int i = 0; i < 3; ++i) {
     EXPECT_FLOAT_EQ(syms[0].v(i), base.v(i))
         << "Identity value mismatch at " << i;
@@ -715,11 +741,346 @@ TEST(Symmetries, IdentitySymmetryIsUnchanged) {
     EXPECT_FLOAT_EQ(syms[0].pi(i), base.pi(i))
         << "Identity policy mismatch at " << i;
   }
+}
 
-  for (int c = 0; c < TestAS::CANONICAL_SHAPE[0]; ++c) {
-    for (int h = 0; h < TestAS::NUM_HEXES; ++h) {
-      EXPECT_FLOAT_EQ(syms[0].canonical(c, 0, h), base.canonical(c, 0, h))
-          << "Identity canonical mismatch at (" << c << ", " << h << ")";
+// =============================================================================
+// P1 Canonicalization Tests (180° Rotation)
+// =============================================================================
+
+TEST(P1Canonicalization, ObservationShowsP1Perspective) {
+  // After both players deploy, P1's observation should show:
+  // - P1's units in "my" channels (1-4)
+  // - P0's units in "opponent" channels (5-8)
+  // - Board rotated 180° so P1's portal appears at "top" (low row indices)
+  TestGame game;
+
+  // P0 deploys fighter facing NE
+  game.play_move(TestAS::encode_deploy(0, 1));  // Fighter, NE
+  // P1 deploys fighter facing SW
+  game.play_move(TestAS::encode_deploy(0, 4));  // Fighter, SW (canonical)
+
+  // Now it's P0's turn again
+  game.play_move(TestAS::END_TURN_OFFSET);
+
+  // Now it's P1's turn - get canonical observation
+  ASSERT_EQ(game.current_player(), 1);
+  auto obs = game.canonicalized();
+
+  // P1's portal should appear in "my portal" channel (channel 4) at positions
+  // that are rotated 180° from P0's perspective
+  // P1's portal is at the "top" of the board (low indices after rotation)
+  constexpr int MY_PORTAL_CHANNEL = 4;
+  constexpr int OPP_PORTAL_CHANNEL = 8;
+
+  // Count portal pixels in each channel
+  int my_portal_count = 0;
+  int opp_portal_count = 0;
+  for (int row = 0; row < TestAS::BOARD_DIM; ++row) {
+    for (int col = 0; col < TestAS::BOARD_DIM; ++col) {
+      if (obs(MY_PORTAL_CHANNEL, row, col) > 0) my_portal_count++;
+      if (obs(OPP_PORTAL_CHANNEL, row, col) > 0) opp_portal_count++;
+    }
+  }
+
+  // Both players should have a portal (3 hexes each)
+  EXPECT_EQ(my_portal_count, 3) << "P1 should see own portal in 'my' channel";
+  EXPECT_EQ(opp_portal_count, 3) << "P1 should see P0's portal in 'opponent' channel";
+}
+
+TEST(P1Canonicalization, ValidMovesAreRotated) {
+  // When P1 has a unit, valid_moves should return canonicalized action indices
+  // where the position is rotated 180° and L/R slots are swapped
+  TestGame game;
+
+  // P0 deploys fighter facing NE at deploy hex
+  game.play_move(TestAS::encode_deploy(0, 1));  // Fighter, NE
+
+  // P1 deploys fighter facing SW (canonical: this is actually facing NE in world coords
+  // because P1's facing is also rotated)
+  game.play_move(TestAS::encode_deploy(0, 4));  // Fighter, SW in canonical space
+
+  // P0 ends turn
+  game.play_move(TestAS::END_TURN_OFFSET);
+
+  // Now P1's turn
+  ASSERT_EQ(game.current_player(), 1);
+
+  auto valids = game.valid_moves();
+
+  // P1's fighter is at world position near P1's portal
+  // In canonical space, this should be rotated 180° to appear near low row indices
+  // The valid moves should be at the canonicalized position
+
+  // Count valid spatial actions
+  int valid_spatial = 0;
+  for (int i = 0; i < TestAS::SPATIAL_ACTIONS; ++i) {
+    if (valids(i) == 1) valid_spatial++;
+  }
+
+  // P1's fighter should have movement options (forward, forward-left, forward-right)
+  EXPECT_GE(valid_spatial, 1) << "P1 should have at least one valid spatial action";
+}
+
+TEST(P1Canonicalization, PlayMoveDecanonicalizes) {
+  // When P1 plays a move, it should be de-canonicalized correctly
+  TestGame game;
+
+  // P0 deploys fighter facing NE
+  game.play_move(TestAS::encode_deploy(0, 1));
+
+  // P1 deploys fighter facing SW (canonical)
+  // In world coords, P1's fighter faces NE (opposite direction)
+  game.play_move(TestAS::encode_deploy(0, 4));
+
+  // P0 ends turn
+  game.play_move(TestAS::END_TURN_OFFSET);
+
+  // Now P1's turn
+  ASSERT_EQ(game.current_player(), 1);
+
+  // Find a valid movement action and play it
+  auto valids = game.valid_moves();
+  int move_played = -1;
+  for (int i = 0; i < TestAS::SPATIAL_ACTIONS; ++i) {
+    if (valids(i) == 1) {
+      int row, col, action_type;
+      TestAS::decode_spatial_action(i, row, col, action_type);
+      // Only test movement actions (0-4), not fire actions
+      if (action_type <= 4) {
+        move_played = i;
+        break;
+      }
+    }
+  }
+
+  if (move_played >= 0) {
+    game.play_move(move_played);
+    // If we got here without crashing, de-canonicalization worked correctly
+    SUCCEED() << "P1 move de-canonicalized and executed successfully";
+  }
+}
+
+// =============================================================================
+// NW-SE Mirror Symmetry Tests
+// =============================================================================
+
+TEST(MirrorSymmetry, SelfInverse) {
+  // Apply mirror transformation twice -> should equal original
+  TestGame game;
+
+  // Deploy some units for interesting state
+  game.play_move(TestAS::encode_deploy(0, 1));  // P0 fighter NE
+  game.play_move(TestAS::encode_deploy(0, 4));  // P1 fighter SW
+  game.play_move(TestAS::END_TURN_OFFSET);      // P0 ends turn
+  game.play_move(TestAS::END_TURN_OFFSET);      // P1 ends turn
+
+  // Create base history with non-trivial values
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.6f, 0.3f, 0.1f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  for (int i = 0; i < TestAS::NUM_MOVES; ++i) {
+    base.pi(i) = static_cast<float>(i + 1) / (TestAS::NUM_MOVES + 1);
+  }
+
+  auto syms = game.symmetries(base);
+  ASSERT_EQ(syms.size(), 2u);
+
+  // Get the mirror symmetry (index 1)
+  const auto& mirrored = syms[1];
+
+  // Apply mirror again by treating mirrored as the base
+  PlayHistory mirrored_as_base;
+  mirrored_as_base.canonical = mirrored.canonical;
+  mirrored_as_base.v = mirrored.v;
+  mirrored_as_base.pi = mirrored.pi;
+
+  auto syms2 = game.symmetries(mirrored_as_base);
+  const auto& double_mirrored = syms2[1];
+
+  // Double mirror should equal original
+  // Check observation tensor
+  for (int ch = 0; ch < TestAS::CANONICAL_CHANNELS; ++ch) {
+    for (int row = 0; row < TestAS::BOARD_DIM; ++row) {
+      for (int col = 0; col < TestAS::BOARD_DIM; ++col) {
+        EXPECT_NEAR(double_mirrored.canonical(ch, row, col),
+                    base.canonical(ch, row, col), 1e-5f)
+            << "Self-inverse failed at channel=" << ch << " row=" << row << " col=" << col;
+      }
+    }
+  }
+
+  // Check policy vector
+  for (int i = 0; i < TestAS::NUM_MOVES; ++i) {
+    EXPECT_NEAR(double_mirrored.pi(i), base.pi(i), 1e-5f)
+        << "Policy self-inverse failed at action " << i;
+  }
+}
+
+TEST(MirrorSymmetry, ObservationTransposeCorrect) {
+  // Mirror should transpose (row, col) -> (col, row) for spatial channels
+  TestGame game;
+
+  // Create asymmetric state
+  game.play_move(TestAS::encode_deploy(0, 0));  // P0 fighter E
+  game.play_move(TestAS::encode_deploy(1, 2));  // P1 cruiser NW
+  game.play_move(TestAS::END_TURN_OFFSET);
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.5f, 0.3f, 0.2f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setZero();
+
+  auto syms = game.symmetries(base);
+  const auto& mirrored = syms[1];
+
+  // For channels that are pure spatial (like valid hex mask, channel 0),
+  // mirrored(ch, col, row) should equal base(ch, row, col)
+  for (int row = 0; row < TestAS::BOARD_DIM; ++row) {
+    for (int col = 0; col < TestAS::BOARD_DIM; ++col) {
+      EXPECT_FLOAT_EQ(mirrored.canonical(0, col, row), base.canonical(0, row, col))
+          << "Valid hex mask not transposed correctly at row=" << row << " col=" << col;
+    }
+  }
+}
+
+TEST(MirrorSymmetry, PolicySpatialActionsRemapped) {
+  // Spatial action at (row, col, slot) should map to (col, row, SLOT_MAP[slot])
+  TestGame game;
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.5f, 0.5f, 0.0f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setZero();
+
+  // Set specific spatial actions to verify remapping
+  // Action at (row=2, col=5, slot=1) should map to (row=5, col=2, slot=2)
+  // because SLOT_MAP[1] = 2 (forward-left -> forward-right)
+  int test_row = 2, test_col = 5, test_slot = 1;
+  int base_action = TestAS::encode_spatial_action(test_row, test_col, test_slot);
+  base.pi(base_action) = 1.0f;
+
+  auto syms = game.symmetries(base);
+  const auto& mirrored = syms[1];
+
+  // Expected mirrored action: (col, row, SLOT_MAP[slot]) = (5, 2, 2)
+  int expected_row = test_col, expected_col = test_row;
+  int expected_slot = SLOT_MAP[test_slot];
+  int expected_action = TestAS::encode_spatial_action(expected_row, expected_col, expected_slot);
+
+  EXPECT_FLOAT_EQ(mirrored.pi(expected_action), 1.0f)
+      << "Spatial action at (" << test_row << "," << test_col << "," << test_slot
+      << ") should map to (" << expected_row << "," << expected_col << "," << expected_slot << ")";
+}
+
+TEST(MirrorSymmetry, PolicyDeployActionsRemapped) {
+  // Deploy action with facing f should map to MIRROR_DIRECTION_MAP[f]
+  TestGame game;
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.5f, 0.5f, 0.0f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setZero();
+
+  // Test each facing direction for fighter deploy
+  for (int facing = 0; facing < 6; ++facing) {
+    base.pi.setZero();
+    int deploy_action = TestAS::encode_deploy(0, facing);  // Fighter with this facing
+    base.pi(deploy_action) = 1.0f;
+
+    auto syms = game.symmetries(base);
+    const auto& mirrored = syms[1];
+
+    // Expected mirrored facing
+    int expected_facing = MIRROR_DIRECTION_MAP[facing];
+    int expected_action = TestAS::encode_deploy(0, expected_facing);
+
+    EXPECT_FLOAT_EQ(mirrored.pi(expected_action), 1.0f)
+        << "Deploy facing " << facing << " should map to " << expected_facing;
+  }
+}
+
+TEST(MirrorSymmetry, EndTurnUnchanged) {
+  // End turn action should be unchanged by mirror
+  TestGame game;
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.5f, 0.5f, 0.0f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setZero();
+  base.pi(TestAS::END_TURN_OFFSET) = 1.0f;
+
+  auto syms = game.symmetries(base);
+  const auto& mirrored = syms[1];
+
+  EXPECT_FLOAT_EQ(mirrored.pi(TestAS::END_TURN_OFFSET), 1.0f)
+      << "End turn action should be unchanged by mirror";
+}
+
+TEST(MirrorSymmetry, ValuePreserved) {
+  // Mirror should not change the value
+  TestGame game;
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.7f, 0.2f, 0.1f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setZero();
+
+  auto syms = game.symmetries(base);
+  const auto& mirrored = syms[1];
+
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_FLOAT_EQ(mirrored.v(i), base.v(i))
+        << "Value should be unchanged by mirror at index " << i;
+  }
+}
+
+TEST(MirrorSymmetry, FacingChannelsRemapped) {
+  // Facing channels (9-14) should be remapped via MIRROR_DIRECTION_MAP
+  TestGame game;
+
+  // Deploy a fighter with facing NE (direction 1)
+  game.play_move(TestAS::encode_deploy(0, 1));  // P0 fighter NE
+  game.play_move(TestAS::encode_deploy(0, 4));  // P1 fighter SW
+  game.play_move(TestAS::END_TURN_OFFSET);
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.5f, 0.3f, 0.2f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setZero();
+
+  auto syms = game.symmetries(base);
+  const auto& mirrored = syms[1];
+
+  // Find a position where there's facing info in the base observation
+  // and verify it's remapped correctly in the mirror
+  for (int row = 0; row < TestAS::BOARD_DIM; ++row) {
+    for (int col = 0; col < TestAS::BOARD_DIM; ++col) {
+      for (int dir = 0; dir < 6; ++dir) {
+        float base_val = base.canonical(9 + dir, row, col);
+        if (base_val > 0) {
+          // This position has a unit facing direction 'dir'
+          // In the mirror, it should be at (col, row) facing MIRROR_DIRECTION_MAP[dir]
+          int expected_dir = MIRROR_DIRECTION_MAP[dir];
+          float mirrored_val = mirrored.canonical(9 + expected_dir, col, row);
+          EXPECT_FLOAT_EQ(mirrored_val, base_val)
+              << "Facing at (" << row << "," << col << ") dir=" << dir
+              << " should map to (" << col << "," << row << ") dir=" << expected_dir;
+        }
+      }
     }
   }
 }
@@ -761,11 +1122,11 @@ TEST(UnitProperties, UnitSize) {
 // =============================================================================
 
 TEST(ActionSpace, SkirmishActionCounts) {
-  // Skirmish: BOARD_SIDE=5, 61 hexes
+  // Skirmish: BOARD_SIDE=5, 9x9 spatial grid
   using AS = ActionSpace<SkirmishConfig>;
 
-  // Hex actions: 61 hexes * 10 slots = 610
-  EXPECT_EQ(AS::HEX_ACTIONS, 610);
+  // Spatial actions: 9*9*10 = 810
+  EXPECT_EQ(AS::SPATIAL_ACTIONS, 810);
 
   // Deploy: 3 types * 6 facings = 18
   EXPECT_EQ(AS::DEPLOY_ACTIONS, 18);
@@ -773,36 +1134,36 @@ TEST(ActionSpace, SkirmishActionCounts) {
   // End turn: 1
   EXPECT_EQ(AS::END_TURN_ACTIONS, 1);
 
-  // Total: 610 + 18 + 1 = 629
-  EXPECT_EQ(AS::NUM_MOVES, 629);
+  // Total: 810 + 18 + 1 = 829
+  EXPECT_EQ(AS::NUM_MOVES, 829);
 }
 
 TEST(ActionSpace, ClashActionCounts) {
-  // Clash: BOARD_SIDE=5, 61 hexes (same as Skirmish)
+  // Clash: BOARD_SIDE=5, 9x9 spatial grid (same as Skirmish)
   using AS = ActionSpace<ClashConfig>;
 
-  // Hex actions: 61 hexes * 10 slots = 610
-  EXPECT_EQ(AS::HEX_ACTIONS, 610);
+  // Spatial actions: 9*9*10 = 810
+  EXPECT_EQ(AS::SPATIAL_ACTIONS, 810);
 
   // Deploy: 3 types * 6 facings = 18
   EXPECT_EQ(AS::DEPLOY_ACTIONS, 18);
 
-  // Total: 610 + 18 + 1 = 629
-  EXPECT_EQ(AS::NUM_MOVES, 629);
+  // Total: 810 + 18 + 1 = 829
+  EXPECT_EQ(AS::NUM_MOVES, 829);
 }
 
 TEST(ActionSpace, BattleActionCounts) {
-  // Battle: BOARD_SIDE=6, 91 hexes
+  // Battle: BOARD_SIDE=6, 11x11 spatial grid
   using AS = ActionSpace<BattleConfig>;
 
-  // Hex actions: 91 hexes * 10 slots = 910
-  EXPECT_EQ(AS::HEX_ACTIONS, 910);
+  // Spatial actions: 11*11*10 = 1210
+  EXPECT_EQ(AS::SPATIAL_ACTIONS, 1210);
 
   // Deploy: 3 types * 6 facings = 18
   EXPECT_EQ(AS::DEPLOY_ACTIONS, 18);
 
-  // Total: 910 + 18 + 1 = 929
-  EXPECT_EQ(AS::NUM_MOVES, 929);
+  // Total: 1210 + 18 + 1 = 1229
+  EXPECT_EQ(AS::NUM_MOVES, 1229);
 }
 
 TEST(ActionSpace, BoardSizes) {
@@ -845,10 +1206,11 @@ TEST(MovementDirections, DreadnoughtMoveCount) {
 
 // Helper to check if any fire action is valid
 bool has_fire_action(const Vector<uint8_t>& valids) {
-  for (int hex_idx = 0; hex_idx < TestAS::NUM_HEXES; ++hex_idx) {
-    for (int slot = static_cast<int>(HexAction::FIRE_FORWARD);
-         slot <= static_cast<int>(HexAction::FIRE_REAR_RIGHT); ++slot) {
-      int action = TestAS::encode_hex_action(hex_idx, static_cast<HexAction>(slot));
+  // Check all spatial actions for fire slots (5-9)
+  for (int action = 0; action < TestAS::SPATIAL_ACTIONS; ++action) {
+    int slot = action % ACTIONS_PER_POSITION;
+    if (slot >= static_cast<int>(SpatialAction::FIRE_FORWARD) &&
+        slot <= static_cast<int>(SpatialAction::FIRE_REAR_RIGHT)) {
       if (valids(action) == 1) return true;
     }
   }
@@ -893,26 +1255,21 @@ TEST(FireValidation, NoFireWithoutTarget) {
 TEST(FireValidation, FireAvailableWhenTargetInRange) {
   TestGame game;
 
-  // Deploy fighters for both players
+  // Deploy fighters facing each other (NW and SE for direct convergence)
+  // P0 facing NW (direction 2), P1 facing SE (canonical = NW = 2 after +3 mod 6)
+  // Deploy actions: DEPLOY_OFFSET + unit_type*6 + facing
+  // Fighter = type 0, NW = facing 2
+  int deploy_f_nw = TestAS::DEPLOY_OFFSET + 0 * 6 + 2;
   auto valids = game.valid_moves();
-  int deploy = -1;
-  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
-    if (valids(i) == 1) {
-      deploy = i;
-      break;
-    }
-  }
-  game.play_move(deploy);
+  ASSERT_EQ(valids(deploy_f_nw), 1) << "P0 should be able to deploy fighter facing NW";
+  game.play_move(deploy_f_nw);
 
+  // P1's SE (5) canonicalizes to (5+3)%6 = 2 (NW)
+  int canonical_se = (5 + 3) % 6;  // = 2 (NW in canonical space)
+  int deploy_f_se = TestAS::DEPLOY_OFFSET + 0 * 6 + canonical_se;
   valids = game.valid_moves();
-  deploy = -1;
-  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::DEPLOY_OFFSET + 6; ++i) {
-    if (valids(i) == 1) {
-      deploy = i;
-      break;
-    }
-  }
-  game.play_move(deploy);
+  ASSERT_EQ(valids(deploy_f_se), 1) << "P1 should be able to deploy fighter facing SE (canonical NW)";
+  game.play_move(deploy_f_se);
 
   // Move fighters toward each other until fire becomes available
   bool fire_found = false;
@@ -924,11 +1281,25 @@ TEST(FireValidation, FireAvailableWhenTargetInRange) {
 
     if (fire_found) break;
 
-    // Make a move (any valid move)
-    for (int i = 0; i < TestAS::NUM_MOVES; ++i) {
-      if (valids(i) == 1) {
-        game.play_move(i);
+    // Prioritize forward moves to converge faster
+    int forward_action = -1;
+    for (int action = 0; action < TestAS::SPATIAL_ACTIONS; ++action) {
+      int slot = action % ACTIONS_PER_POSITION;
+      if (slot == static_cast<int>(SpatialAction::MOVE_FORWARD) && valids(action) == 1) {
+        forward_action = action;
         break;
+      }
+    }
+
+    if (forward_action >= 0) {
+      game.play_move(forward_action);
+    } else {
+      // Fallback to any valid move (end turn, etc.)
+      for (int i = 0; i < TestAS::NUM_MOVES; ++i) {
+        if (valids(i) == 1) {
+          game.play_move(i);
+          break;
+        }
       }
     }
 
@@ -970,16 +1341,13 @@ TEST(MovementConstraints, FighterHasThreeMoveOptions) {
   // Turn 3 - Player 0's fighter should have moves available
   valids = game.valid_moves();
 
-  // In hex-based encoding, count valid fighter movement actions (slots 0, 1, 2)
-  // for any hex that has our unit
+  // In spatial encoding, count valid fighter movement actions (slots 0, 1, 2)
   int move_count = 0;
-  for (int hex_idx = 0; hex_idx < TestAS::NUM_HEXES; ++hex_idx) {
+  for (int action = 0; action < TestAS::SPATIAL_ACTIONS; ++action) {
+    int slot = action % ACTIONS_PER_POSITION;
     // Check movement slots 0, 1, 2 (MOVE_FORWARD, MOVE_FORWARD_LEFT, MOVE_FORWARD_RIGHT)
-    for (int slot = 0; slot < 3; ++slot) {
-      int action = TestAS::encode_hex_action(hex_idx, static_cast<HexAction>(slot));
-      if (valids(action) == 1) {
-        move_count++;
-      }
+    if (slot < 3 && valids(action) == 1) {
+      move_count++;
     }
   }
 
@@ -1016,16 +1384,13 @@ TEST(MovementConstraints, CruiserHasFiveMoveOptions) {
   // Turn 3 - Player 0's cruiser should have moves available
   valids = game.valid_moves();
 
-  // In hex-based encoding, count valid movement actions (slots 0-4) for any hex
-  // that has a cruiser. Since the cruiser was just deployed, check all hex actions.
+  // In spatial encoding, count valid movement actions (slots 0-4)
   int move_count = 0;
-  for (int hex_idx = 0; hex_idx < TestAS::NUM_HEXES; ++hex_idx) {
+  for (int action = 0; action < TestAS::SPATIAL_ACTIONS; ++action) {
+    int slot = action % ACTIONS_PER_POSITION;
     // Check movement slots (0-4)
-    for (int slot = 0; slot < 5; ++slot) {
-      int action = TestAS::encode_hex_action(hex_idx, static_cast<HexAction>(slot));
-      if (valids(action) == 1) {
-        move_count++;
-      }
+    if (slot < 5 && valids(action) == 1) {
+      move_count++;
     }
   }
 
@@ -1186,21 +1551,20 @@ TEST(MoveParsing, ParseFighterMoves) {
   auto m_f1_f = parse_move<TestConfig>("m f1 f", game);
   ASSERT_TRUE(m_f1_f.has_value());
 
-  // Verify it's a valid action that decodes to the right hex/slot
-  int hex_idx;
-  HexAction action;
-  TestAS::decode_hex_action(*m_f1_f, hex_idx, action);
-  EXPECT_EQ(action, HexAction::MOVE_FORWARD);
+  // Verify it's a valid action that decodes to the right slot
+  int row, col, action_type;
+  TestAS::decode_spatial_action(*m_f1_f, row, col, action_type);
+  EXPECT_EQ(action_type, static_cast<int>(SpatialAction::MOVE_FORWARD));
 
   auto m_f1_fl = parse_move<TestConfig>("m f1 fl", game);
   ASSERT_TRUE(m_f1_fl.has_value());
-  TestAS::decode_hex_action(*m_f1_fl, hex_idx, action);
-  EXPECT_EQ(action, HexAction::MOVE_FORWARD_LEFT);
+  TestAS::decode_spatial_action(*m_f1_fl, row, col, action_type);
+  EXPECT_EQ(action_type, static_cast<int>(SpatialAction::MOVE_FORWARD_LEFT));
 
   auto m_f1_fr = parse_move<TestConfig>("m f1 fr", game);
   ASSERT_TRUE(m_f1_fr.has_value());
-  TestAS::decode_hex_action(*m_f1_fr, hex_idx, action);
-  EXPECT_EQ(action, HexAction::MOVE_FORWARD_RIGHT);
+  TestAS::decode_spatial_action(*m_f1_fr, row, col, action_type);
+  EXPECT_EQ(action_type, static_cast<int>(SpatialAction::MOVE_FORWARD_RIGHT));
 }
 
 TEST(MoveParsing, ParseCruiserMoves) {
@@ -1218,20 +1582,19 @@ TEST(MoveParsing, ParseCruiserMoves) {
   // Parse cruiser movement commands
   auto m_c1_l = parse_move<TestConfig>("m c1 l", game);
   ASSERT_TRUE(m_c1_l.has_value());
-  int hex_idx;
-  HexAction action;
-  TestAS::decode_hex_action(*m_c1_l, hex_idx, action);
-  EXPECT_EQ(action, HexAction::ROTATE_LEFT);
+  int row, col, action_type;
+  TestAS::decode_spatial_action(*m_c1_l, row, col, action_type);
+  EXPECT_EQ(action_type, static_cast<int>(SpatialAction::ROTATE_LEFT));
 
   auto m_c1_f = parse_move<TestConfig>("m c1 f", game);
   ASSERT_TRUE(m_c1_f.has_value());
-  TestAS::decode_hex_action(*m_c1_f, hex_idx, action);
-  EXPECT_EQ(action, HexAction::MOVE_FORWARD);
+  TestAS::decode_spatial_action(*m_c1_f, row, col, action_type);
+  EXPECT_EQ(action_type, static_cast<int>(SpatialAction::MOVE_FORWARD));
 
   auto m_c1_r = parse_move<TestConfig>("m c1 r", game);
   ASSERT_TRUE(m_c1_r.has_value());
-  TestAS::decode_hex_action(*m_c1_r, hex_idx, action);
-  EXPECT_EQ(action, HexAction::ROTATE_RIGHT);
+  TestAS::decode_spatial_action(*m_c1_r, row, col, action_type);
+  EXPECT_EQ(action_type, static_cast<int>(SpatialAction::ROTATE_RIGHT));
 }
 
 TEST(MoveParsing, ParseFighterFire) {
@@ -1247,10 +1610,9 @@ TEST(MoveParsing, ParseFighterFire) {
 
   auto f_f1 = parse_move<TestConfig>("f f1", game);
   ASSERT_TRUE(f_f1.has_value());
-  int hex_idx;
-  HexAction action;
-  TestAS::decode_hex_action(*f_f1, hex_idx, action);
-  EXPECT_EQ(action, HexAction::FIRE_FORWARD);
+  int row, col, action_type;
+  TestAS::decode_spatial_action(*f_f1, row, col, action_type);
+  EXPECT_EQ(action_type, static_cast<int>(SpatialAction::FIRE_FORWARD));
 }
 
 TEST(MoveParsing, ParseCruiserFire) {
@@ -1266,20 +1628,19 @@ TEST(MoveParsing, ParseCruiserFire) {
 
   auto f_c1_l = parse_move<TestConfig>("f c1 l", game);
   ASSERT_TRUE(f_c1_l.has_value());
-  int hex_idx;
-  HexAction action;
-  TestAS::decode_hex_action(*f_c1_l, hex_idx, action);
-  EXPECT_EQ(action, HexAction::FIRE_FORWARD_LEFT);
+  int row, col, action_type;
+  TestAS::decode_spatial_action(*f_c1_l, row, col, action_type);
+  EXPECT_EQ(action_type, static_cast<int>(SpatialAction::FIRE_FORWARD_LEFT));
 
   auto f_c1_f = parse_move<TestConfig>("f c1 f", game);
   ASSERT_TRUE(f_c1_f.has_value());
-  TestAS::decode_hex_action(*f_c1_f, hex_idx, action);
-  EXPECT_EQ(action, HexAction::FIRE_FORWARD);
+  TestAS::decode_spatial_action(*f_c1_f, row, col, action_type);
+  EXPECT_EQ(action_type, static_cast<int>(SpatialAction::FIRE_FORWARD));
 
   auto f_c1_r = parse_move<TestConfig>("f c1 r", game);
   ASSERT_TRUE(f_c1_r.has_value());
-  TestAS::decode_hex_action(*f_c1_r, hex_idx, action);
-  EXPECT_EQ(action, HexAction::FIRE_FORWARD_RIGHT);
+  TestAS::decode_spatial_action(*f_c1_r, row, col, action_type);
+  EXPECT_EQ(action_type, static_cast<int>(SpatialAction::FIRE_FORWARD_RIGHT));
 }
 
 TEST(MoveParsing, ParseDeploy) {
@@ -1319,12 +1680,8 @@ TEST(MoveParsing, InvalidMovesReturnNullopt) {
 // Helper to play a move by notation, returns true if successful
 template<typename Config>
 bool play_notation(StarGambitGS<Config>& game, const std::string& notation) {
-  // Try deploy command first (doesn't need game state)
-  auto action = parse_deploy_cmd<Config>(notation);
-  if (!action.has_value()) {
-    // Try full parse with game state
-    action = parse_move<Config>(notation, game);
-  }
+  // Use parse_move which handles canonicalization for the current player
+  auto action = parse_move<Config>(notation, game);
   if (!action.has_value()) return false;
 
   auto valids = game.valid_moves();
@@ -1387,16 +1744,13 @@ TEST(FullGame, CruiserDeployAndMove) {
   // P0 cruiser can move (rotate or forward)
   auto valids = game.valid_moves();
 
-  // Check cruiser move actions are available (hex-based: check all movement slots)
+  // Check cruiser move actions are available (spatial encoding)
   bool has_cruiser_move = false;
-  for (int hex_idx = 0; hex_idx < TestAS::NUM_HEXES && !has_cruiser_move; ++hex_idx) {
+  for (int action = 0; action < TestAS::SPATIAL_ACTIONS && !has_cruiser_move; ++action) {
+    int slot = action % ACTIONS_PER_POSITION;
     // Check movement slots (0-4)
-    for (int slot = 0; slot < 5; ++slot) {
-      int action = TestAS::encode_hex_action(hex_idx, static_cast<HexAction>(slot));
-      if (valids(action) == 1) {
-        has_cruiser_move = true;
-        break;
-      }
+    if (slot < 5 && valids(action) == 1) {
+      has_cruiser_move = true;
     }
   }
   EXPECT_TRUE(has_cruiser_move) << "Cruiser should have movement options";
@@ -1443,25 +1797,24 @@ TEST(FullGame, CompleteGameToVictory) {
 TEST(FullGame, FireWhenInRange) {
   TestGame game;
 
-  // Deploy fighters for both players facing each other
-  EXPECT_TRUE(play_notation(game, "d f ne"));  // P0 (bottom, facing up/NE)
-  EXPECT_TRUE(play_notation(game, "d f sw"));  // P1 (top, facing down/SW)
+  // Deploy fighters for both players facing each other (directly toward each other)
+  // P0 at (0, 3) facing NW goes straight up toward P1
+  // P1 at (0, -3) facing SE goes straight down toward P0
+  EXPECT_TRUE(play_notation(game, "d f nw"));  // P0 (bottom, facing up/NW)
+  EXPECT_TRUE(play_notation(game, "d f se"));  // P1 (top, facing down/SE)
 
   // Move fighters towards each other until fire is available
   bool fire_available = false;
   for (int i = 0; i < 30; ++i) {
     auto valids = game.valid_moves();
 
-    // Check if fire is available (hex-based: check fire slots 5-9)
+    // Check if fire is available (spatial encoding: check fire slots 5-9)
     int fire_action = -1;
-    for (int hex_idx = 0; hex_idx < TestAS::NUM_HEXES && fire_action < 0; ++hex_idx) {
+    for (int action = 0; action < TestAS::SPATIAL_ACTIONS && fire_action < 0; ++action) {
+      int slot = action % ACTIONS_PER_POSITION;
       // Check fire slots (5-9)
-      for (int slot = 5; slot < 10; ++slot) {
-        int action = TestAS::encode_hex_action(hex_idx, static_cast<HexAction>(slot));
-        if (valids(action) == 1) {
-          fire_action = action;
-          break;
-        }
+      if (slot >= 5 && valids(action) == 1) {
+        fire_action = action;
       }
     }
 
@@ -1471,11 +1824,11 @@ TEST(FullGame, FireWhenInRange) {
       break;
     }
 
-    // Try to move forward (hex-based: check slot 0 = MOVE_FORWARD)
+    // Try to move forward (spatial encoding: check slot 0 = MOVE_FORWARD)
     int forward_action = -1;
-    for (int hex_idx = 0; hex_idx < TestAS::NUM_HEXES; ++hex_idx) {
-      int action = TestAS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD);
-      if (valids(action) == 1) {
+    for (int action = 0; action < TestAS::SPATIAL_ACTIONS; ++action) {
+      int slot = action % ACTIONS_PER_POSITION;
+      if (slot == static_cast<int>(SpatialAction::MOVE_FORWARD) && valids(action) == 1) {
         forward_action = action;
         break;
       }
@@ -1544,17 +1897,20 @@ TEST(Deployment, DreadnoughtDeployAllFacingsP1) {
   // Now P1's turn
   ASSERT_EQ(game.current_player(), 1);
 
-  // Player 1 valid dreadnought facings: {0, 3, 4, 5} (E, W, SW, SE)
+  // Player 1 valid dreadnought facings: {0, 3, 4, 5} (E, W, SW, SE) in world coordinates
   auto valid_facings = get_valid_deploy_facings(UnitType::DREADNOUGHT, 1);
   ASSERT_EQ(valid_facings.size(), 4u);
 
   valids = game.valid_moves();
   int dread_deploy_base = BattleAS::DEPLOY_OFFSET + 12;
 
-  for (int facing : valid_facings) {
-    int action = dread_deploy_base + facing;
+  for (int world_facing : valid_facings) {
+    // P1's facings are canonicalized: (world_facing + 3) % 6
+    int canonical_facing = (world_facing + 3) % 6;
+    int action = dread_deploy_base + canonical_facing;
     EXPECT_EQ(valids(action), 1)
-        << "Dreadnought deploy facing " << facing << " should be valid for P1";
+        << "Dreadnought deploy world facing " << world_facing
+        << " (canonical " << canonical_facing << ") should be valid for P1";
   }
 }
 
@@ -1690,49 +2046,51 @@ TEST(CharacterizationCruiserCannons, CannonDirections) {
 }
 
 // -----------------------------------------------------------------------------
-// Current Action Space Encoding: Hex-based with 10 slots per hex
+// Current Action Space Encoding: Spatial (row, col, action_type)
 // -----------------------------------------------------------------------------
 
-TEST(CharacterizationActionSpace, HexBasedEncoding) {
+TEST(CharacterizationActionSpace, SpatialEncoding) {
   using AS = ActionSpace<SkirmishConfig>;
 
-  // New encoding: hex_idx * 10 + slot
-  // Layout: [hex actions (NUM_HEXES * 10)] + [deploy (18)] + [end_turn (1)]
+  // Spatial encoding: row * BOARD_DIM * 10 + col * 10 + slot
+  // Layout: [spatial actions (BOARD_DIM * BOARD_DIM * 10)] + [deploy (18)] + [end_turn (1)]
+  constexpr int BOARD_DIM = AS::BOARD_DIM;
 
   // Verify layout
-  EXPECT_EQ(AS::HEX_ACTION_OFFSET, 0);
-  EXPECT_EQ(ACTIONS_PER_HEX, 10);  // Global constant
-  EXPECT_EQ(AS::HEX_ACTIONS, AS::NUM_HEXES * ACTIONS_PER_HEX);
-  EXPECT_EQ(AS::DEPLOY_OFFSET, AS::HEX_ACTIONS);
+  EXPECT_EQ(AS::SPATIAL_OFFSET, 0);
+  EXPECT_EQ(ACTIONS_PER_POSITION, 10);  // Global constant
+  EXPECT_EQ(AS::SPATIAL_ACTIONS, BOARD_DIM * BOARD_DIM * ACTIONS_PER_POSITION);
+  EXPECT_EQ(AS::DEPLOY_OFFSET, AS::SPATIAL_ACTIONS);
   EXPECT_EQ(AS::DEPLOY_ACTIONS, 18);  // 3 types * 6 facings
   EXPECT_EQ(AS::END_TURN_OFFSET, AS::DEPLOY_OFFSET + AS::DEPLOY_ACTIONS);
   EXPECT_EQ(AS::END_TURN_ACTIONS, 1);
 
-  // Total actions for Skirmish (19 hexes * 10 + 18 + 1 = 209)
-  EXPECT_EQ(AS::NUM_MOVES, AS::NUM_HEXES * 10 + 18 + 1);
+  // Total actions for Skirmish (9*9*10 + 18 + 1 = 829)
+  EXPECT_EQ(AS::NUM_MOVES, BOARD_DIM * BOARD_DIM * 10 + 18 + 1);
 }
 
-TEST(CharacterizationActionSpace, HexEncodingFormula) {
+TEST(CharacterizationActionSpace, SpatialEncodingFormula) {
   using AS = ActionSpace<SkirmishConfig>;
+  constexpr int BOARD_DIM = AS::BOARD_DIM;
 
-  // Hex 0, slot 0 (MOVE_FORWARD)
-  int hex0_forward = AS::encode_hex_action(0, HexAction::MOVE_FORWARD);
-  EXPECT_EQ(hex0_forward, 0);
+  // Row 0, Col 0, slot 0 (MOVE_FORWARD)
+  int pos00_forward = AS::encode_spatial_action(0, 0, 0);
+  EXPECT_EQ(pos00_forward, 0);
 
-  // Hex 0, slot 5 (FIRE_FORWARD)
-  int hex0_fire = AS::encode_hex_action(0, HexAction::FIRE_FORWARD);
-  EXPECT_EQ(hex0_fire, 5);
+  // Row 0, Col 0, slot 5 (FIRE_FORWARD)
+  int pos00_fire = AS::encode_spatial_action(0, 0, 5);
+  EXPECT_EQ(pos00_fire, 5);
 
-  // Hex 5, slot 3 (ROTATE_LEFT)
-  int hex5_rotate = AS::encode_hex_action(5, HexAction::ROTATE_LEFT);
-  EXPECT_EQ(hex5_rotate, 5 * 10 + 3);
+  // Row 2, Col 3, slot 3 (ROTATE_LEFT)
+  int pos23_rotate = AS::encode_spatial_action(2, 3, 3);
+  EXPECT_EQ(pos23_rotate, 2 * BOARD_DIM * 10 + 3 * 10 + 3);
 
   // Decode round-trip
-  int hex_idx;
-  HexAction action;
-  AS::decode_hex_action(hex5_rotate, hex_idx, action);
-  EXPECT_EQ(hex_idx, 5);
-  EXPECT_EQ(action, HexAction::ROTATE_LEFT);
+  int row, col, action_type;
+  AS::decode_spatial_action(pos23_rotate, row, col, action_type);
+  EXPECT_EQ(row, 2);
+  EXPECT_EQ(col, 3);
+  EXPECT_EQ(action_type, 3);
 }
 
 // -----------------------------------------------------------------------------

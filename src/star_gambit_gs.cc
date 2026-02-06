@@ -788,17 +788,32 @@ Vector<uint8_t> StarGambitGS<Config>::valid_moves() const noexcept {
     return valids;
   }
 
-  // Hex-based actions for movement and firing
+  // Spatial actions for movement and firing with canonicalization
+  // P1's positions are rotated 180° in canonical form
+  const bool is_p1 = (current_player_ == 1);
+  constexpr int BOARD_DIM = AS::BOARD_DIM;
+
+  // Helper to encode action with canonicalization
+  auto encode_action = [&](int row, int col, int slot) {
+    if (is_p1) {
+      // 180° rotation: (row, col) → (BOARD_DIM-1-row, BOARD_DIM-1-col)
+      row = BOARD_DIM - 1 - row;
+      col = BOARD_DIM - 1 - col;
+      // Swap left/right slots
+      slot = SLOT_MAP[slot];
+    }
+    return AS::encode_spatial_action(row, col, slot);
+  };
+
   if (!is_turn_one()) {
     // Iterate through all units of current player
     for (const auto& unit : units_) {
       if (unit.player != current_player_ || !unit.is_alive()) continue;
       if (unit.type == UnitType::PORTAL) continue;
 
-      // Get anchor hex index
+      // Get anchor hex and convert to 2D position
       Hex anchor = {unit.anchor_q, unit.anchor_r};
-      int hex_idx = hex_to_index_fast<Config::BOARD_SIDE>(anchor);
-      if (hex_idx < 0) continue;  // Invalid hex
+      auto [row, col] = hex_to_2d<Config::BOARD_SIDE>(anchor);
 
       // Set valid movement actions based on unit type
       if (unit.moves_left > 0) {
@@ -806,37 +821,37 @@ Vector<uint8_t> StarGambitGS<Config>::valid_moves() const noexcept {
           case UnitType::FIGHTER:
             // Fighter: forward, forward-left, forward-right (slots 0, 1, 2)
             if (is_fighter_move_valid(unit, static_cast<int>(FighterMove::FORWARD)))
-              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD)) = 1;
+              valids(encode_action(row, col, static_cast<int>(SpatialAction::MOVE_FORWARD))) = 1;
             if (is_fighter_move_valid(unit, static_cast<int>(FighterMove::FORWARD_LEFT)))
-              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD_LEFT)) = 1;
+              valids(encode_action(row, col, static_cast<int>(SpatialAction::MOVE_FORWARD_LEFT))) = 1;
             if (is_fighter_move_valid(unit, static_cast<int>(FighterMove::FORWARD_RIGHT)))
-              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD_RIGHT)) = 1;
+              valids(encode_action(row, col, static_cast<int>(SpatialAction::MOVE_FORWARD_RIGHT))) = 1;
             break;
 
           case UnitType::CRUISER:
             // Cruiser: forward, forward-left, forward-right, rotate-left, rotate-right
             if (is_cruiser_move_valid(unit, static_cast<int>(CruiserMove::FORWARD)))
-              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD)) = 1;
+              valids(encode_action(row, col, static_cast<int>(SpatialAction::MOVE_FORWARD))) = 1;
             if (is_cruiser_move_valid(unit, static_cast<int>(CruiserMove::FORWARD_LEFT)))
-              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD_LEFT)) = 1;
+              valids(encode_action(row, col, static_cast<int>(SpatialAction::MOVE_FORWARD_LEFT))) = 1;
             if (is_cruiser_move_valid(unit, static_cast<int>(CruiserMove::FORWARD_RIGHT)))
-              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD_RIGHT)) = 1;
+              valids(encode_action(row, col, static_cast<int>(SpatialAction::MOVE_FORWARD_RIGHT))) = 1;
             if (is_cruiser_move_valid(unit, static_cast<int>(CruiserMove::ROTATE_LEFT)))
-              valids(AS::encode_hex_action(hex_idx, HexAction::ROTATE_LEFT)) = 1;
+              valids(encode_action(row, col, static_cast<int>(SpatialAction::ROTATE_LEFT))) = 1;
             if (is_cruiser_move_valid(unit, static_cast<int>(CruiserMove::ROTATE_RIGHT)))
-              valids(AS::encode_hex_action(hex_idx, HexAction::ROTATE_RIGHT)) = 1;
+              valids(encode_action(row, col, static_cast<int>(SpatialAction::ROTATE_RIGHT))) = 1;
             break;
 
           case UnitType::DREADNOUGHT:
             // Dreadnought: forward-left, forward-right, rotate-left, rotate-right (no forward)
             if (is_dreadnought_move_valid(unit, static_cast<int>(DreadnoughtMove::FORWARD_LEFT)))
-              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD_LEFT)) = 1;
+              valids(encode_action(row, col, static_cast<int>(SpatialAction::MOVE_FORWARD_LEFT))) = 1;
             if (is_dreadnought_move_valid(unit, static_cast<int>(DreadnoughtMove::FORWARD_RIGHT)))
-              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD_RIGHT)) = 1;
+              valids(encode_action(row, col, static_cast<int>(SpatialAction::MOVE_FORWARD_RIGHT))) = 1;
             if (is_dreadnought_move_valid(unit, static_cast<int>(DreadnoughtMove::ROTATE_LEFT)))
-              valids(AS::encode_hex_action(hex_idx, HexAction::ROTATE_LEFT)) = 1;
+              valids(encode_action(row, col, static_cast<int>(SpatialAction::ROTATE_LEFT))) = 1;
             if (is_dreadnought_move_valid(unit, static_cast<int>(DreadnoughtMove::ROTATE_RIGHT)))
-              valids(AS::encode_hex_action(hex_idx, HexAction::ROTATE_RIGHT)) = 1;
+              valids(encode_action(row, col, static_cast<int>(SpatialAction::ROTATE_RIGHT))) = 1;
             break;
 
           default:
@@ -849,31 +864,31 @@ Vector<uint8_t> StarGambitGS<Config>::valid_moves() const noexcept {
         case UnitType::FIGHTER:
           // Fighter: fire forward (slot 5)
           if (is_fire_valid(unit, 0))  // Cannon 0 = forward
-            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_FORWARD)) = 1;
+            valids(encode_action(row, col, static_cast<int>(SpatialAction::FIRE_FORWARD))) = 1;
           break;
 
         case UnitType::CRUISER:
           // Cruiser: fire forward, forward-left, forward-right (slots 5, 6, 7)
           // Cruiser cannons: 0=left(fl), 1=forward(f), 2=right(fr)
           if (is_fire_valid(unit, 1))  // Cannon 1 = forward
-            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_FORWARD)) = 1;
+            valids(encode_action(row, col, static_cast<int>(SpatialAction::FIRE_FORWARD))) = 1;
           if (is_fire_valid(unit, 0))  // Cannon 0 = left (forward-left)
-            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_FORWARD_LEFT)) = 1;
+            valids(encode_action(row, col, static_cast<int>(SpatialAction::FIRE_FORWARD_LEFT))) = 1;
           if (is_fire_valid(unit, 2))  // Cannon 2 = right (forward-right)
-            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_FORWARD_RIGHT)) = 1;
+            valids(encode_action(row, col, static_cast<int>(SpatialAction::FIRE_FORWARD_RIGHT))) = 1;
           break;
 
         case UnitType::DREADNOUGHT:
           // Dreadnought: fire forward-left, forward-right, rear-left, rear-right (slots 6-9)
           // Dread cannons: 0=rr, 1=fr, 2=fl, 3=rl
           if (is_fire_valid(unit, 2))  // Cannon 2 = fl (forward-left)
-            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_FORWARD_LEFT)) = 1;
+            valids(encode_action(row, col, static_cast<int>(SpatialAction::FIRE_FORWARD_LEFT))) = 1;
           if (is_fire_valid(unit, 1))  // Cannon 1 = fr (forward-right)
-            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_FORWARD_RIGHT)) = 1;
+            valids(encode_action(row, col, static_cast<int>(SpatialAction::FIRE_FORWARD_RIGHT))) = 1;
           if (is_fire_valid(unit, 3))  // Cannon 3 = rl (rear-left)
-            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_REAR_LEFT)) = 1;
+            valids(encode_action(row, col, static_cast<int>(SpatialAction::FIRE_REAR_LEFT))) = 1;
           if (is_fire_valid(unit, 0))  // Cannon 0 = rr (rear-right)
-            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_REAR_RIGHT)) = 1;
+            valids(encode_action(row, col, static_cast<int>(SpatialAction::FIRE_REAR_RIGHT))) = 1;
           break;
 
         default:
@@ -882,12 +897,14 @@ Vector<uint8_t> StarGambitGS<Config>::valid_moves() const noexcept {
     }
   }
 
-  // Deploy actions (unchanged encoding)
+  // Deploy actions: canonicalize facing for P1
   for (int type_idx = 0; type_idx < 3; ++type_idx) {
     UnitType type = static_cast<UnitType>(type_idx);
     for (int facing = 0; facing < 6; ++facing) {
       if (is_deploy_valid(type, facing)) {
-        valids(AS::encode_deploy(type_idx, facing)) = 1;
+        // Canonicalize facing for P1: rotate 180° (+3 mod 6)
+        int canonical_facing = is_p1 ? ((facing + 3) % 6) : facing;
+        valids(AS::encode_deploy(type_idx, canonical_facing)) = 1;
       }
     }
   }
@@ -1071,13 +1088,27 @@ void StarGambitGS<Config>::execute_deploy(UnitType type, int facing) {
 template<typename Config>
 void StarGambitGS<Config>::play_move(uint32_t move) {
   if (move < static_cast<uint32_t>(AS::DEPLOY_OFFSET)) {
-    // Hex-based action: decode hex index and action slot
-    int hex_idx;
-    HexAction action;
-    AS::decode_hex_action(static_cast<int>(move), hex_idx, action);
+    // Spatial action: decode (row, col, action_type) with de-canonicalization
+    int row, col, action_type;
+    AS::decode_spatial_action(static_cast<int>(move), row, col, action_type);
+
+    // De-canonicalize for P1
+    const bool is_p1 = (current_player_ == 1);
+    constexpr int BOARD_DIM = AS::BOARD_DIM;
+    if (is_p1) {
+      // Reverse 180° rotation
+      row = BOARD_DIM - 1 - row;
+      col = BOARD_DIM - 1 - col;
+      // Reverse slot swap (SLOT_MAP is self-inverse)
+      action_type = SLOT_MAP[action_type];
+    }
+
+    // Convert (row, col) to hex coordinates
+    int q = row - (Config::BOARD_SIDE - 1);
+    int r = col - (Config::BOARD_SIDE - 1);
+    Hex anchor = {static_cast<int8_t>(q), static_cast<int8_t>(r)};
 
     // Find unit at this anchor hex
-    Hex anchor = index_to_hex_fast<Config::BOARD_SIDE>(hex_idx);
     Unit* unit = nullptr;
     for (auto& u : units_) {
       if (u.player == current_player_ && u.is_alive() &&
@@ -1090,8 +1121,9 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
     if (!unit) return;  // No unit at this hex
 
     // Execute action based on action slot and unit type
+    SpatialAction action = static_cast<SpatialAction>(action_type);
     switch (action) {
-      case HexAction::MOVE_FORWARD:
+      case SpatialAction::MOVE_FORWARD:
         if (unit->type == UnitType::FIGHTER) {
           execute_fighter_move(unit->slot, static_cast<int>(FighterMove::FORWARD));
         } else if (unit->type == UnitType::CRUISER) {
@@ -1100,7 +1132,7 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
         // Dreadnought cannot move forward
         break;
 
-      case HexAction::MOVE_FORWARD_LEFT:
+      case SpatialAction::MOVE_FORWARD_LEFT:
         if (unit->type == UnitType::FIGHTER) {
           execute_fighter_move(unit->slot, static_cast<int>(FighterMove::FORWARD_LEFT));
         } else if (unit->type == UnitType::CRUISER) {
@@ -1110,7 +1142,7 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
         }
         break;
 
-      case HexAction::MOVE_FORWARD_RIGHT:
+      case SpatialAction::MOVE_FORWARD_RIGHT:
         if (unit->type == UnitType::FIGHTER) {
           execute_fighter_move(unit->slot, static_cast<int>(FighterMove::FORWARD_RIGHT));
         } else if (unit->type == UnitType::CRUISER) {
@@ -1120,7 +1152,7 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
         }
         break;
 
-      case HexAction::ROTATE_LEFT:
+      case SpatialAction::ROTATE_LEFT:
         if (unit->type == UnitType::CRUISER) {
           execute_cruiser_move(unit->slot, static_cast<int>(CruiserMove::ROTATE_LEFT));
         } else if (unit->type == UnitType::DREADNOUGHT) {
@@ -1129,7 +1161,7 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
         // Fighter cannot rotate
         break;
 
-      case HexAction::ROTATE_RIGHT:
+      case SpatialAction::ROTATE_RIGHT:
         if (unit->type == UnitType::CRUISER) {
           execute_cruiser_move(unit->slot, static_cast<int>(CruiserMove::ROTATE_RIGHT));
         } else if (unit->type == UnitType::DREADNOUGHT) {
@@ -1138,7 +1170,7 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
         // Fighter cannot rotate
         break;
 
-      case HexAction::FIRE_FORWARD:
+      case SpatialAction::FIRE_FORWARD:
         if (unit->type == UnitType::FIGHTER) {
           execute_fire(*unit, 0);  // Cannon 0 = forward
         } else if (unit->type == UnitType::CRUISER) {
@@ -1147,7 +1179,7 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
         // Dreadnought cannot fire forward
         break;
 
-      case HexAction::FIRE_FORWARD_LEFT:
+      case SpatialAction::FIRE_FORWARD_LEFT:
         if (unit->type == UnitType::CRUISER) {
           execute_fire(*unit, 0);  // Cannon 0 = left (forward-left)
         } else if (unit->type == UnitType::DREADNOUGHT) {
@@ -1156,7 +1188,7 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
         // Fighter cannot fire forward-left
         break;
 
-      case HexAction::FIRE_FORWARD_RIGHT:
+      case SpatialAction::FIRE_FORWARD_RIGHT:
         if (unit->type == UnitType::CRUISER) {
           execute_fire(*unit, 2);  // Cannon 2 = right (forward-right)
         } else if (unit->type == UnitType::DREADNOUGHT) {
@@ -1165,14 +1197,14 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
         // Fighter cannot fire forward-right
         break;
 
-      case HexAction::FIRE_REAR_LEFT:
+      case SpatialAction::FIRE_REAR_LEFT:
         if (unit->type == UnitType::DREADNOUGHT) {
           execute_fire(*unit, 3);  // Cannon 3 = rl (rear-left)
         }
         // Only dreadnought has rear cannons
         break;
 
-      case HexAction::FIRE_REAR_RIGHT:
+      case SpatialAction::FIRE_REAR_RIGHT:
         if (unit->type == UnitType::DREADNOUGHT) {
           execute_fire(*unit, 0);  // Cannon 0 = rr (rear-right)
         }
@@ -1180,14 +1212,19 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
         break;
     }
 
-    // After any hex action (move or fire), check for mid-turn threefold repetition
+    // After any spatial action (move or fire), check for mid-turn threefold repetition
     if (check_repetition()) {
       return;  // Game ended due to repetition
     }
   } else if (move < static_cast<uint32_t>(AS::END_TURN_OFFSET)) {
-    // Deploy action
+    // Deploy action: de-canonicalize facing for P1
     int type_idx, facing;
     AS::decode_deploy(static_cast<int>(move), type_idx, facing);
+    // De-canonicalize facing for P1: rotate 180° (+3 mod 6)
+    const bool is_p1 = (current_player_ == 1);
+    if (is_p1) {
+      facing = (facing + 3) % 6;
+    }
     execute_deploy(static_cast<UnitType>(type_idx), facing);
   } else {
     // End turn
@@ -1615,13 +1652,119 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
 template<typename Config>
 std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
     const PlayHistory& base) const noexcept {
-  // With canonicalized observations, the 180° rotation symmetry is already
-  // exploited by the perspective transformation. When P1 is to move, we rotate
-  // the board 180° and swap "my"/"opponent" channels, which is equivalent to
-  // the symmetry transformation. No additional augmentation is possible without
-  // creating invalid positions (units on wrong side of board).
+  // Two symmetries: identity and NW-SE diagonal mirror
+  // The 180° rotation is already exploited by the perspective canonicalization.
+  // The diagonal mirror (q, r) → (r, q) is still valid and doubles training data.
   std::vector<PlayHistory> syms;
-  syms.push_back(base);
+  syms.push_back(base);  // Identity
+
+  constexpr int BOARD_DIM = AS::BOARD_DIM;
+  constexpr int NUM_CHANNELS = AS::CANONICAL_CHANNELS;
+
+  // Create mirrored version
+  PlayHistory mirrored;
+  mirrored.v = base.v;  // Value unchanged
+
+  // ========================================
+  // Mirror observation tensor
+  // NW-SE mirror in 2D space is simply transpose: (row, col) → (col, row)
+  // ========================================
+  mirrored.canonical.resize(NUM_CHANNELS, BOARD_DIM, BOARD_DIM);
+
+  // First pass: transpose all spatial dimensions
+  for (int ch = 0; ch < NUM_CHANNELS; ++ch) {
+    for (int row = 0; row < BOARD_DIM; ++row) {
+      for (int col = 0; col < BOARD_DIM; ++col) {
+        mirrored.canonical(ch, col, row) = base.canonical(ch, row, col);
+      }
+    }
+  }
+
+  // Second pass: permute facing channels 9-14 using MIRROR_DIRECTION_MAP
+  // The transposed tensor has facing at the wrong direction indices
+  // Original direction d at position (r,c) becomes direction MIRROR_DIRECTION_MAP[d] at (c,r)
+  // We need to swap channel contents: channel 9+d should get content from channel 9+MIRROR_DIR_MAP[d]
+  // after accounting for the spatial transpose already done
+  {
+    // Temporary storage for the 6 facing channels
+    Tensor<float, 3> facing_copy(6, BOARD_DIM, BOARD_DIM);
+    for (int d = 0; d < 6; ++d) {
+      for (int row = 0; row < BOARD_DIM; ++row) {
+        for (int col = 0; col < BOARD_DIM; ++col) {
+          facing_copy(d, row, col) = mirrored.canonical(9 + d, row, col);
+        }
+      }
+    }
+    // Now remap: direction d becomes direction MIRROR_DIRECTION_MAP[d]
+    // So channel 9+new_d gets content from channel 9+d where new_d = MIRROR_DIR_MAP[d]
+    // Equivalently: channel 9+d gets content from channel 9+MIRROR_DIR_MAP[d] (since map is self-inverse)
+    for (int d = 0; d < 6; ++d) {
+      int src_d = MIRROR_DIRECTION_MAP[d];
+      for (int row = 0; row < BOARD_DIM; ++row) {
+        for (int col = 0; col < BOARD_DIM; ++col) {
+          mirrored.canonical(9 + d, row, col) = facing_copy(src_d, row, col);
+        }
+      }
+    }
+  }
+
+  // Third pass: permute cannon channels 17-21 (swap L/R pairs)
+  // Cannon slots: 0=forward, 1=forward-left, 2=forward-right, 3=rear-left, 4=rear-right
+  // Mirror swaps L/R: [0, 2, 1, 4, 3]
+  {
+    constexpr int CANNON_MAP[5] = {0, 2, 1, 4, 3};
+    Tensor<float, 3> cannon_copy(5, BOARD_DIM, BOARD_DIM);
+    for (int c = 0; c < 5; ++c) {
+      for (int row = 0; row < BOARD_DIM; ++row) {
+        for (int col = 0; col < BOARD_DIM; ++col) {
+          cannon_copy(c, row, col) = mirrored.canonical(17 + c, row, col);
+        }
+      }
+    }
+    for (int c = 0; c < 5; ++c) {
+      int src_c = CANNON_MAP[c];
+      for (int row = 0; row < BOARD_DIM; ++row) {
+        for (int col = 0; col < BOARD_DIM; ++col) {
+          mirrored.canonical(17 + c, row, col) = cannon_copy(src_c, row, col);
+        }
+      }
+    }
+  }
+
+  // ========================================
+  // Mirror policy vector
+  // ========================================
+  mirrored.pi.resize(1, AS::NUM_MOVES);  // Vector is 1xN matrix
+  mirrored.pi.setZero();
+
+  // Spatial actions: transpose (row, col), swap L/R slots
+  for (int action = 0; action < AS::SPATIAL_ACTIONS; ++action) {
+    int row, col, slot;
+    AS::decode_spatial_action(action, row, col, slot);
+
+    // Transpose position
+    int new_row = col;
+    int new_col = row;
+    // Swap L/R slots
+    int new_slot = SLOT_MAP[slot];
+
+    int new_action = AS::encode_spatial_action(new_row, new_col, new_slot);
+    mirrored.pi(new_action) = base.pi(action);
+  }
+
+  // Deploy actions: remap facing using MIRROR_DIRECTION_MAP
+  for (int d = 0; d < AS::DEPLOY_ACTIONS; ++d) {
+    int type_idx = d / 6;
+    int facing = d % 6;
+    int new_facing = MIRROR_DIRECTION_MAP[facing];
+    int new_d = type_idx * 6 + new_facing;
+    mirrored.pi(AS::DEPLOY_OFFSET + new_d) = base.pi(AS::DEPLOY_OFFSET + d);
+  }
+
+  // End turn: unchanged
+  mirrored.pi(AS::END_TURN_OFFSET) = base.pi(AS::END_TURN_OFFSET);
+
+  syms.push_back(mirrored);
   return syms;
 }
 
@@ -1951,23 +2094,37 @@ FireInfo StarGambitGS<Config>::get_fire_info(uint32_t move) const {
   using AS = ActionSpace<Config>;
   FireInfo result = {false, -1, -1, -1, 0};
 
-  // Check if this is a hex action (not deploy or end turn)
+  // Check if this is a spatial action (not deploy or end turn)
   if (move >= static_cast<uint32_t>(AS::DEPLOY_OFFSET)) {
     return result;  // Not a fire action
   }
 
-  // Decode hex action
-  int hex_idx;
-  HexAction action;
-  AS::decode_hex_action(static_cast<int>(move), hex_idx, action);
+  // Decode spatial action with de-canonicalization
+  int row, col, action_type;
+  AS::decode_spatial_action(static_cast<int>(move), row, col, action_type);
+
+  // De-canonicalize for P1
+  const bool is_p1 = (current_player_ == 1);
+  constexpr int BOARD_DIM = AS::BOARD_DIM;
+  if (is_p1) {
+    row = BOARD_DIM - 1 - row;
+    col = BOARD_DIM - 1 - col;
+    action_type = SLOT_MAP[action_type];
+  }
+
+  SpatialAction action = static_cast<SpatialAction>(action_type);
 
   // Check if this is a fire action
-  if (action < HexAction::FIRE_FORWARD || action > HexAction::FIRE_REAR_RIGHT) {
+  if (action < SpatialAction::FIRE_FORWARD || action > SpatialAction::FIRE_REAR_RIGHT) {
     return result;  // Not a fire action
   }
 
+  // Convert (row, col) to hex
+  int q = row - (Config::BOARD_SIDE - 1);
+  int r = col - (Config::BOARD_SIDE - 1);
+  Hex anchor = {static_cast<int8_t>(q), static_cast<int8_t>(r)};
+
   // Find unit at this anchor hex
-  Hex anchor = index_to_hex_fast<Config::BOARD_SIDE>(hex_idx);
   const Unit* unit = nullptr;
   for (const auto& u : units_) {
     if (u.player == current_player_ && u.is_alive() &&
@@ -1985,22 +2142,22 @@ FireInfo StarGambitGS<Config>::get_fire_info(uint32_t move) const {
   // Map action slot to cannon index based on unit type
   int cannon_idx = -1;
   switch (action) {
-    case HexAction::FIRE_FORWARD:
+    case SpatialAction::FIRE_FORWARD:
       if (unit->type == UnitType::FIGHTER) cannon_idx = 0;
       else if (unit->type == UnitType::CRUISER) cannon_idx = 1;
       break;
-    case HexAction::FIRE_FORWARD_LEFT:
+    case SpatialAction::FIRE_FORWARD_LEFT:
       if (unit->type == UnitType::CRUISER) cannon_idx = 0;
       else if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 2;
       break;
-    case HexAction::FIRE_FORWARD_RIGHT:
+    case SpatialAction::FIRE_FORWARD_RIGHT:
       if (unit->type == UnitType::CRUISER) cannon_idx = 2;
       else if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 1;
       break;
-    case HexAction::FIRE_REAR_LEFT:
+    case SpatialAction::FIRE_REAR_LEFT:
       if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 3;
       break;
-    case HexAction::FIRE_REAR_RIGHT:
+    case SpatialAction::FIRE_REAR_RIGHT:
       if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 0;
       break;
     default:

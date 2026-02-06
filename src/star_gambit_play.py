@@ -227,23 +227,26 @@ BLUE = '\033[94m'
 RESET = '\033[0m'
 
 # Game size selection - using Skirmish by default
-# New hex-based action space layout:
-#   Hex actions: 0 to (NUM_HEXES * 10 - 1)
-#     Each hex has 10 slots:
+# 2D grid-based action space layout:
+#   Spatial actions: 0 to (BOARD_DIM * BOARD_DIM * 10 - 1)
+#     Each grid cell has 10 slots:
 #       0: MOVE_FORWARD, 1: MOVE_FORWARD_LEFT, 2: MOVE_FORWARD_RIGHT
 #       3: ROTATE_LEFT, 4: ROTATE_RIGHT
 #       5: FIRE_FORWARD, 6: FIRE_FORWARD_LEFT, 7: FIRE_FORWARD_RIGHT
 #       8: FIRE_REAR_LEFT, 9: FIRE_REAR_RIGHT
-#   Deploy actions: HEX_ACTIONS to HEX_ACTIONS + 17 (3 types * 6 facings)
-#   End turn: HEX_ACTIONS + 18
+#   Deploy actions: SPATIAL_ACTIONS to SPATIAL_ACTIONS + 17 (3 types * 6 facings)
+#   End turn: SPATIAL_ACTIONS + 18
 #
-# For Skirmish (BOARD_SIDE=5): NUM_HEXES=61, so NUM_MOVES = 61*10 + 18 + 1 = 629
+# For Skirmish/Clash (BOARD_SIDE=5): BOARD_DIM=9, NUM_MOVES = 9*9*10 + 18 + 1 = 829
+# For Battle (BOARD_SIDE=6): BOARD_DIM=11, NUM_MOVES = 11*11*10 + 18 + 1 = 1229
 
-# Hex action slot mapping
-ACTIONS_PER_HEX = 10
+# Slot mapping for P1 canonicalization (self-inverse: swaps left/right)
+SLOT_MAP = [0, 2, 1, 4, 3, 5, 7, 6, 9, 8]
+
+ACTIONS_PER_POSITION = 10
 
 # Slot meanings (shared across unit types, but not all units use all slots)
-HEX_SLOT_NAMES = {
+SLOT_NAMES = {
     0: 'move_forward',
     1: 'move_forward_left',
     2: 'move_forward_right',
@@ -257,7 +260,7 @@ HEX_SLOT_NAMES = {
 }
 
 # Short names for commands
-HEX_SLOT_SHORT = {
+SLOT_SHORT = {
     0: 'f', 1: 'fl', 2: 'fr', 3: 'l', 4: 'r',
     5: 'ff', 6: 'ffl', 7: 'ffr', 8: 'frl', 9: 'frr'
 }
@@ -274,43 +277,34 @@ VALID_SLOTS = {
 
 
 class GameConfig:
-    """Action space configuration for a game size (hex-based encoding)."""
+    """Action space configuration for a game size (2D grid-based encoding)."""
     def __init__(self, max_fighters, max_cruisers, max_dreads, board_side):
         self.max_fighters = max_fighters
         self.max_cruisers = max_cruisers
         self.max_dreads = max_dreads
         self.board_side = board_side
+        self.board_dim = 2 * board_side - 1
 
-        # Movement directions per unit type (kept for reference)
-        self.fighter_dirs = 3  # f, fl, fr
-        self.cruiser_dirs = 5  # l, fl, f, fr, r
-        self.dread_dirs = 4    # l, fl, fr, r
-
-        # Cannons per unit type
-        self.fighter_cannons = 1
-        self.cruiser_cannons = 3
-        self.dread_cannons = 4
-
-        # Hex-based action space
-        self.num_hexes = 3 * board_side * board_side - 3 * board_side + 1
-        self.actions_per_hex = ACTIONS_PER_HEX
-        self.hex_actions = self.num_hexes * self.actions_per_hex
+        # 2D grid-based action space
+        self.spatial_actions = self.board_dim * self.board_dim * ACTIONS_PER_POSITION
         self.deploy_actions = 18  # 3 types * 6 facings
 
         # Action offsets
-        self.hex_action_offset = 0
-        self.deploy_offset = self.hex_actions
+        self.deploy_offset = self.spatial_actions
         self.end_turn_offset = self.deploy_offset + self.deploy_actions
         self.num_moves = self.end_turn_offset + 1
 
-    def encode_hex_action(self, hex_idx, slot):
-        """Encode (hex_idx, slot) -> action"""
-        return self.hex_action_offset + hex_idx * self.actions_per_hex + slot
+    def encode_spatial(self, row, col, slot):
+        """Encode (row, col, slot) -> action"""
+        return row * self.board_dim * ACTIONS_PER_POSITION + col * ACTIONS_PER_POSITION + slot
 
-    def decode_hex_action(self, action):
-        """Decode action -> (hex_idx, slot)"""
-        rel = action - self.hex_action_offset
-        return rel // self.actions_per_hex, rel % self.actions_per_hex
+    def decode_spatial(self, action):
+        """Decode action -> (row, col, slot)"""
+        slot = action % ACTIONS_PER_POSITION
+        pos = action // ACTIONS_PER_POSITION
+        col = pos % self.board_dim
+        row = pos // self.board_dim
+        return row, col, slot
 
     def encode_deploy(self, unit_type, facing):
         """Encode deploy action"""
@@ -320,6 +314,33 @@ class GameConfig:
         """Decode deploy action -> (unit_type, facing)"""
         rel = action - self.deploy_offset
         return rel // 6, rel % 6
+
+    def hex_to_rowcol(self, q, r):
+        """Convert hex (q, r) to grid (row, col)."""
+        bs = self.board_side - 1
+        return q + bs, r + bs
+
+    def rowcol_to_hex(self, row, col):
+        """Convert grid (row, col) to hex (q, r)."""
+        bs = self.board_side - 1
+        return row - bs, col - bs
+
+    def canonicalize_spatial(self, row, col, slot):
+        """Canonicalize (row, col, slot) for P1 (180-degree rotation + slot swap)."""
+        bd = self.board_dim
+        return bd - 1 - row, bd - 1 - col, SLOT_MAP[slot]
+
+    def decanon_spatial(self, row, col, slot):
+        """De-canonicalize (row, col, slot) for P1 (same operation - self-inverse)."""
+        return self.canonicalize_spatial(row, col, slot)
+
+    def canonicalize_deploy_facing(self, facing):
+        """Canonicalize deploy facing for P1 (rotate 180 degrees)."""
+        return (facing + 3) % 6
+
+    def decanon_deploy_facing(self, facing):
+        """De-canonicalize deploy facing for P1 (same operation - self-inverse)."""
+        return (facing + 3) % 6
 
 
 SKIRMISH = GameConfig(3, 1, 0, board_side=5)
@@ -416,7 +437,8 @@ def apply_temperature(probs, temperature):
 def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None):
     """
     Run MCTS search with time or node limit.
-    Returns (visit_counts, num_simulations).
+    Returns (visit_counts, num_simulations, wld).
+    wld is [win, loss, draw] from current player's perspective.
     """
     if time_limit is None and node_limit is None:
         node_limit = DEFAULT_NODE_LIMIT
@@ -448,15 +470,18 @@ def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None):
         sims += 1
 
     counts = np.array(mcts.counts())
-    return counts, sims
+    wld = np.array(mcts.root_value())
+    return counts, sims, wld
 
 
 def get_ai_probs(ctx, player_idx, valids):
     """
     Get AI move probabilities for display.
-    Returns (probs, source_str, sims) where probs are temperature-adjusted and normalized to valid moves.
+    Returns (probs, source_str, sims, wld) where probs are temperature-adjusted and normalized to valid moves.
+    wld is [win, loss, draw] or None.
     """
     pcfg = ctx.players[player_idx]
+    wld = None
 
     # Create or reuse MCTS
     if pcfg.mcts is None:
@@ -468,7 +493,7 @@ def get_ai_probs(ctx, player_idx, valids):
 
     if should_search and (pcfg.network is not None or TORCH_AVAILABLE):
         # Run MCTS search
-        counts, sims = run_mcts_search(
+        counts, sims, wld = run_mcts_search(
             ctx.game, pcfg.network, pcfg.mcts,
             time_limit=pcfg.think_time,
             node_limit=pcfg.node_limit
@@ -507,12 +532,12 @@ def get_ai_probs(ctx, player_idx, valids):
         if valid_count > 0:
             probs[valids == 1] = 1.0 / valid_count
 
-    return probs, source, sims
+    return probs, source, sims, wld
 
 
 def get_ai_move(ctx, player_idx, valids):
-    """Get AI move for the specified player. Returns (action, probs, source, sims)."""
-    probs, source, sims = get_ai_probs(ctx, player_idx, valids)
+    """Get AI move for the specified player. Returns (action, probs, source, sims, wld)."""
+    probs, source, sims, wld = get_ai_probs(ctx, player_idx, valids)
 
     # Sample from distribution
     action = np.random.choice(len(probs), p=probs)
@@ -520,7 +545,7 @@ def get_ai_move(ctx, player_idx, valids):
     # Reset MCTS for next move (don't reuse tree)
     ctx.players[player_idx].mcts = None
 
-    return action, probs, source, sims
+    return action, probs, source, sims, wld
 
 
 def color_unit(name, player):
@@ -534,61 +559,41 @@ def get_unit_name(unit_type, slot):
     return f"{TYPE_CHARS[unit_type]}{slot + 1}"
 
 
-def hex_to_index(q, r, board_side):
-    """Convert hex (q, r) to index. Returns -1 if invalid."""
-    s = -q - r
-    if abs(q) >= board_side or abs(r) >= board_side or abs(s) >= board_side:
-        return -1
-    idx = 0
-    for rr in range(-(board_side - 1), board_side):
-        for qq in range(-(board_side - 1), board_side):
-            ss = -qq - rr
-            if abs(qq) < board_side and abs(rr) < board_side and abs(ss) < board_side:
-                if qq == q and rr == r:
-                    return idx
-                idx += 1
-    return -1
+def find_unit_at_position(game, row, col, cfg, current_player):
+    """Find unit at grid position. De-canonicalizes for P1. Returns UnitInfo or None."""
+    # De-canonicalize the position for P1 to get true coordinates
+    if current_player == 1:
+        true_row, true_col, _ = cfg.decanon_spatial(row, col, 0)
+    else:
+        true_row, true_col = row, col
 
-
-def index_to_hex(idx, board_side):
-    """Convert index to hex (q, r)."""
-    i = 0
-    for r in range(-(board_side - 1), board_side):
-        for q in range(-(board_side - 1), board_side):
-            s = -q - r
-            if abs(q) < board_side and abs(r) < board_side and abs(s) < board_side:
-                if i == idx:
-                    return (q, r)
-                i += 1
-    return None
-
-
-def find_unit_at_hex(game, hex_idx, board_side):
-    """Find unit whose anchor is at the given hex index. Returns UnitInfo or None."""
-    q, r = index_to_hex(hex_idx, board_side)
-    if q is None:
-        return None
+    q, r = cfg.rowcol_to_hex(true_row, true_col)
     units = game.get_units()
     for u in units:
-        if u.anchor_q == q and u.anchor_r == r:
+        if u.anchor_q == q and u.anchor_r == r and u.player == current_player:
             return u
     return None
 
 
-def find_unit_by_type_slot(game, unit_type, slot):
-    """Find unit by type and slot. Returns UnitInfo or None."""
+def find_unit_by_type_slot(game, unit_type, slot, current_player):
+    """Find unit by type, slot, and player. Returns UnitInfo or None."""
     units = game.get_units()
     for u in units:
-        if u.type == unit_type and u.slot == slot:
+        if u.type == unit_type and u.slot == slot and u.player == current_player:
             return u
     return None
 
 
 def decode_action(action, cfg, game=None):
-    """Decode action ID to human-readable description (hex-based encoding)."""
+    """Decode action ID to human-readable description (2D grid-based encoding)."""
+    current_player = game.current_player() if game is not None else 0
+
     # Deploy actions
-    if action >= cfg.deploy_offset and action < cfg.end_turn_offset:
+    if cfg.deploy_offset <= action < cfg.end_turn_offset:
         unit_type, facing = cfg.decode_deploy(action)
+        # De-canonicalize facing for P1
+        if current_player == 1:
+            facing = cfg.decanon_deploy_facing(facing)
         type_chars = ['f', 'c', 'd']
         facing_names = ['e', 'ne', 'nw', 'w', 'sw', 'se']
         return f"d {type_chars[unit_type]} {facing_names[facing]}"
@@ -597,29 +602,36 @@ def decode_action(action, cfg, game=None):
     if action >= cfg.end_turn_offset:
         return "e"
 
-    # Hex-based action
-    if action < cfg.hex_actions:
-        hex_idx, slot = cfg.decode_hex_action(action)
+    # Spatial action
+    if action < cfg.spatial_actions:
+        row, col, slot = cfg.decode_spatial(action)
 
-        # Try to find unit at this hex if game is provided
+        # De-canonicalize for display
+        if current_player == 1:
+            disp_row, disp_col, disp_slot = cfg.decanon_spatial(row, col, slot)
+        else:
+            disp_row, disp_col, disp_slot = row, col, slot
+
+        # Try to find unit at this position
         unit = None
         if game is not None:
-            unit = find_unit_at_hex(game, hex_idx, cfg.board_side)
+            unit = find_unit_at_position(game, row, col, cfg, current_player)
 
         # Format unit name
         if unit is not None:
             unit_name = f"{TYPE_CHARS[unit.type].lower()}{unit.slot + 1}"
         else:
-            unit_name = f"hex{hex_idx}"
+            q, r = cfg.rowcol_to_hex(disp_row, disp_col)
+            unit_name = f"({q},{r})"
 
-        # Movement slots (0-4)
-        if slot <= 4:
+        # Movement slots (0-4) - use de-canonicalized slot for display
+        if disp_slot <= 4:
             move_names = {0: 'f', 1: 'fl', 2: 'fr', 3: 'l', 4: 'r'}
-            return f"m {unit_name} {move_names.get(slot, '?')}"
+            return f"m {unit_name} {move_names.get(disp_slot, '?')}"
         # Fire slots (5-9)
         else:
             fire_names = {5: 'f', 6: 'fl', 7: 'fr', 8: 'rl', 9: 'rr'}
-            return f"f {unit_name} {fire_names.get(slot, '?')}"
+            return f"f {unit_name} {fire_names.get(disp_slot, '?')}"
 
     return f"?{action}"
 
@@ -630,8 +642,11 @@ def format_action(action, cfg, game):
     current_player = game.current_player()
 
     # Deploy action
-    if action >= cfg.deploy_offset and action < cfg.end_turn_offset:
+    if cfg.deploy_offset <= action < cfg.end_turn_offset:
         unit_type, facing = cfg.decode_deploy(action)
+        # De-canonicalize facing for P1
+        if current_player == 1:
+            facing = cfg.decanon_deploy_facing(facing)
         type_name = TYPE_NAMES[unit_type].lower()
         facing_name = DIRECTION_NAMES[facing]
         return f"{short:<12} -  Deploy {type_name} facing {facing_name}"
@@ -640,32 +655,40 @@ def format_action(action, cfg, game):
     if action >= cfg.end_turn_offset:
         return f"{short:<12} -  End turn"
 
-    # Hex-based action
-    if action < cfg.hex_actions:
-        hex_idx, slot = cfg.decode_hex_action(action)
-        unit = find_unit_at_hex(game, hex_idx, cfg.board_side)
+    # Spatial action
+    if action < cfg.spatial_actions:
+        row, col, slot = cfg.decode_spatial(action)
+
+        # De-canonicalize for display
+        if current_player == 1:
+            disp_row, disp_col, disp_slot = cfg.decanon_spatial(row, col, slot)
+        else:
+            disp_row, disp_col, disp_slot = row, col, slot
+
+        unit = find_unit_at_position(game, row, col, cfg, current_player)
 
         if unit is None:
-            return f"{short:<12} -  (no unit at hex {hex_idx})"
+            q, r = cfg.rowcol_to_hex(disp_row, disp_col)
+            return f"{short:<12} -  (no unit at ({q},{r}))"
 
         name = color_unit(get_unit_name(unit.type, unit.slot), current_player)
 
-        # Movement slots (0-4)
-        if slot <= 4:
+        # Movement slots (0-4) - use de-canonicalized slot for display
+        if disp_slot <= 4:
             move_detail = {
                 0: 'forward', 1: 'forward-left', 2: 'forward-right',
                 3: 'rotate-left', 4: 'rotate-right'
             }
-            detail = move_detail.get(slot, f'slot{slot}')
+            detail = move_detail.get(disp_slot, f'slot{disp_slot}')
             return f"{short:<12} -  {name} {detail}"
 
-        # Fire slots (5-9)
+        # Fire slots (5-9) - pass canonical action directly to get_fire_info
         else:
             cannon_detail = {
                 5: 'forward cannon', 6: 'forward-left cannon', 7: 'forward-right cannon',
                 8: 'rear-left cannon', 9: 'rear-right cannon'
             }
-            cannon_name = cannon_detail.get(slot, f'cannon{slot}')
+            cannon_name = cannon_detail.get(disp_slot, f'cannon{disp_slot}')
 
             fire_info = game.get_fire_info(action)
             if fire_info.has_target:
@@ -886,12 +909,12 @@ def parse_command(cmd, valids, cfg, ctx=None):
         print("End turn not valid!")
         return None
 
-    # Get game from context for hex-based action encoding
+    # Get game from context for grid-based action encoding
     game = ctx.game if ctx else None
+    current_player = game.current_player() if game else 0
 
     if parts[0] == 'm' and len(parts) >= 3:
         # Move: m <unit><slot> <direction>
-        # Hex-based: find unit's anchor hex, encode hex_idx * 10 + slot
         unit_slot = parts[1]
         direction = parts[2]
 
@@ -913,21 +936,17 @@ def parse_command(cmd, valids, cfg, ctx=None):
             return None
         unit_type = type_map[unit_type_char]
 
-        # Find the unit to get its anchor hex
         if game is None:
             print("Game state not available for move parsing.")
             return None
 
-        unit = find_unit_by_type_slot(game, unit_type, slot)
+        unit = find_unit_by_type_slot(game, unit_type, slot, current_player)
         if unit is None:
             print(f"Unit {unit_slot} not found on board.")
             return None
 
-        # Get hex index from unit anchor
-        hex_idx = hex_to_index(unit.anchor_q, unit.anchor_r, cfg.board_side)
-        if hex_idx < 0:
-            print(f"Unit {unit_slot} at invalid position.")
-            return None
+        # Convert unit's true anchor to grid position
+        row, col = cfg.hex_to_rowcol(unit.anchor_q, unit.anchor_r)
 
         # Map direction to movement slot (0-4)
         if unit_type == 0:  # Fighter
@@ -941,7 +960,13 @@ def parse_command(cmd, valids, cfg, ctx=None):
             print(f"Invalid direction '{direction}' for {TYPE_NAMES[unit_type]}.")
             return None
 
-        action = cfg.encode_hex_action(hex_idx, dir_map[direction])
+        move_slot = dir_map[direction]
+
+        # Canonicalize for current player
+        if current_player == 1:
+            row, col, move_slot = cfg.canonicalize_spatial(row, col, move_slot)
+
+        action = cfg.encode_spatial(row, col, move_slot)
 
         if valids[action] == 1:
             return action
@@ -950,7 +975,6 @@ def parse_command(cmd, valids, cfg, ctx=None):
 
     if parts[0] == 'f' and len(parts) >= 2:
         # Fire: f <unit><slot> [cannon]
-        # Hex-based: find unit's anchor hex, encode hex_idx * 10 + fire_slot
         unit_slot = parts[1]
         cannon = parts[2] if len(parts) >= 3 else None
 
@@ -972,21 +996,17 @@ def parse_command(cmd, valids, cfg, ctx=None):
             return None
         unit_type = type_map[unit_type_char]
 
-        # Find the unit to get its anchor hex
         if game is None:
             print("Game state not available for fire parsing.")
             return None
 
-        unit = find_unit_by_type_slot(game, unit_type, slot)
+        unit = find_unit_by_type_slot(game, unit_type, slot, current_player)
         if unit is None:
             print(f"Unit {unit_slot} not found on board.")
             return None
 
-        # Get hex index from unit anchor
-        hex_idx = hex_to_index(unit.anchor_q, unit.anchor_r, cfg.board_side)
-        if hex_idx < 0:
-            print(f"Unit {unit_slot} at invalid position.")
-            return None
+        # Convert unit's true anchor to grid position
+        row, col = cfg.hex_to_rowcol(unit.anchor_q, unit.anchor_r)
 
         # Map cannon direction to fire slot (5-9)
         if unit_type == 0:  # Fighter - only forward fire (slot 5)
@@ -995,7 +1015,6 @@ def parse_command(cmd, valids, cfg, ctx=None):
                 return None
             fire_slot = 5
         elif unit_type == 1:  # Cruiser - forward, forward-left, forward-right (slots 5,6,7)
-            # Cruiser cannon mapping: l->6 (fl), f->5 (forward), r->7 (fr)
             cannon_map = {'l': 6, 'f': 5, 'r': 7, 'fl': 6, 'fr': 7}
             if cannon not in cannon_map:
                 print("Invalid cruiser cannon. Use l, f, r (or fl, fr).")
@@ -1008,7 +1027,11 @@ def parse_command(cmd, valids, cfg, ctx=None):
                 return None
             fire_slot = cannon_map[cannon]
 
-        action = cfg.encode_hex_action(hex_idx, fire_slot)
+        # Canonicalize for current player
+        if current_player == 1:
+            row, col, fire_slot = cfg.canonicalize_spatial(row, col, fire_slot)
+
+        action = cfg.encode_spatial(row, col, fire_slot)
 
         if valids[action] == 1:
             return action
@@ -1018,7 +1041,7 @@ def parse_command(cmd, valids, cfg, ctx=None):
     if parts[0] == 'd' and len(parts) >= 3:
         # Deploy: d <type> <facing>
         unit_type = parts[1]
-        facing = parts[2]
+        facing_str = parts[2]
 
         type_map = {'f': 0, 'c': 1, 'd': 2}
         facing_map = {'e': 0, 'ne': 1, 'nw': 2, 'w': 3, 'sw': 4, 'se': 5}
@@ -1026,11 +1049,16 @@ def parse_command(cmd, valids, cfg, ctx=None):
         if unit_type not in type_map:
             print("Invalid unit type. Use f, c, or d.")
             return None
-        if facing not in facing_map:
+        if facing_str not in facing_map:
             print("Invalid facing. Use e, ne, nw, w, sw, se.")
             return None
 
-        action = cfg.deploy_offset + type_map[unit_type] * 6 + facing_map[facing]
+        facing = facing_map[facing_str]
+        # Canonicalize facing for P1
+        if current_player == 1:
+            facing = cfg.canonicalize_deploy_facing(facing)
+
+        action = cfg.deploy_offset + type_map[unit_type] * 6 + facing
         if valids[action] == 1:
             return action
         print(f"Deploy not valid! (action {action})")
@@ -1048,12 +1076,15 @@ def parse_command(cmd, valids, cfg, ctx=None):
     return None
 
 
-def print_actions_menu(valids, cfg, game, probs=None, source=None, show_commands=True):
+def print_actions_menu(valids, cfg, game, probs=None, source=None, wld=None, show_commands=True):
     """Print a menu of available actions with detailed descriptions and optional probabilities."""
     print("\n=== Available Actions ===")
 
     if source:
         print(f"  (probabilities from {source})")
+
+    if wld is not None:
+        print(f"  Win: {wld[0]*100:.1f}%  Loss: {wld[1]*100:.1f}%  Draw: {wld[2]*100:.1f}%")
 
     def format_with_prob(action):
         base = format_action(action, cfg, game)
@@ -1064,7 +1095,7 @@ def print_actions_menu(valids, cfg, game, probs=None, source=None, show_commands
         return base
 
     # Group valid actions (keep original order within groups)
-    # Hex-based: slots 0-4 are moves, slots 5-9 are fires
+    # Spatial: slots 0-4 are moves, slots 5-9 are fires
     moves = []
     fires = []
     deploys = []
@@ -1073,9 +1104,9 @@ def print_actions_menu(valids, cfg, game, probs=None, source=None, show_commands
     for i in range(cfg.num_moves):
         if valids[i] != 1:
             continue
-        if i < cfg.hex_actions:
-            # Hex action - determine if move or fire by slot
-            _, slot = cfg.decode_hex_action(i)
+        if i < cfg.spatial_actions:
+            # Spatial action - determine if move or fire by slot
+            _, _, slot = cfg.decode_spatial(i)
             if slot <= 4:
                 moves.append(i)
             else:
@@ -1161,9 +1192,9 @@ def main():
 
     # Game size selection
     print("Select game size:")
-    print("  1. Skirmish (3F, 1C, 0D) - 39 actions")
-    print("  2. Clash (3F, 2C, 1D) - 55 actions")
-    print("  3. Battle (4F, 3C, 2D) - 75 actions")
+    print("  1. Skirmish (3F, 1C, 0D)")
+    print("  2. Clash (3F, 2C, 1D)")
+    print("  3. Battle (4F, 3C, 2D)")
 
     size_input = input("Size (1/2/3) [1]: ").strip()
     if size_input == '2':
@@ -1280,14 +1311,14 @@ def main():
         if pcfg.is_ai:
             # AI turn
             if ctx.auto_play:
-                action, probs, source, sims = get_ai_move(ctx, current, valids)
+                action, probs, source, sims, wld = get_ai_move(ctx, current, valids)
                 if action is None:
                     print("No valid moves for AI!")
                     break
 
                 # Show full action menu with probabilities
                 print(f"\nAI (P{current}) [{source}]")
-                print_actions_menu(valids, cfg, ctx.game, probs=probs, source=source, show_commands=False)
+                print_actions_menu(valids, cfg, ctx.game, probs=probs, source=source, wld=wld, show_commands=False)
 
                 # Pause in AI vs AI mode before revealing the chosen move
                 if ctx.players[0].is_ai and ctx.players[1].is_ai:
@@ -1299,9 +1330,9 @@ def main():
                 ctx.game.play_move(action)
             else:
                 # Manual mode: show AI probabilities, let user pick
-                probs, source, sims = get_ai_probs(ctx, current, valids)
+                probs, source, sims, wld = get_ai_probs(ctx, current, valids)
                 print(f"\nAI (P{current}) suggests [{source}]:")
-                print_actions_menu(valids, cfg, ctx.game, probs=probs, source=source)
+                print_actions_menu(valids, cfg, ctx.game, probs=probs, source=source, wld=wld)
 
                 while True:
                     cmd = input(f"\nPlayer {current} (AI-assisted) move: ").strip()
@@ -1353,10 +1384,11 @@ def main():
             # Human turn - show AI probabilities only if hints enabled
             probs = None
             source = None
+            wld = None
             if pcfg.show_hints and (pcfg.network is not None or (pcfg.node_limit and pcfg.node_limit > 0)):
-                probs, source, _ = get_ai_probs(ctx, current, valids)
+                probs, source, _, wld = get_ai_probs(ctx, current, valids)
 
-            print_actions_menu(valids, cfg, ctx.game, probs=probs, source=source)
+            print_actions_menu(valids, cfg, ctx.game, probs=probs, source=source, wld=wld)
 
             while True:
                 cmd = input(f"\nPlayer {current} move: ").strip()

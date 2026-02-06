@@ -353,14 +353,14 @@ FIGHTER_MOVE_NAMES = ['f', 'fl', 'fr']
 CRUISER_MOVE_NAMES = ['l', 'fl', 'f', 'fr', 'r']
 DREAD_MOVE_NAMES = ['l', 'fl', 'fr', 'r']
 CRUISER_CANNON_NAMES = ['l', 'f', 'r']
-DREAD_CANNON_NAMES = ['rr', 'fr', 'fl', 'rl']
+DREAD_CANNON_NAMES = ['rl', 'fl', 'fr', 'rr']
 
 # Detailed direction names for display
 FIGHTER_MOVE_DETAIL = ['forward', 'forward-left', 'forward-right']
 CRUISER_MOVE_DETAIL = ['rotate-left', 'forward-left', 'forward', 'forward-right', 'rotate-right']
 DREAD_MOVE_DETAIL = ['rotate-left', 'forward-left', 'forward-right', 'rotate-right']
 CRUISER_CANNON_DETAIL = ['left cannon', 'forward cannon', 'right cannon']
-DREAD_CANNON_DETAIL = ['rear-right cannon', 'front-right cannon', 'front-left cannon', 'rear-left cannon']
+DREAD_CANNON_DETAIL = ['rear-left cannon', 'front-left cannon', 'front-right cannon', 'rear-right cannon']
 
 # Type names for display
 TYPE_NAMES = ['Fighter', 'Cruiser', 'Dreadnought', 'Portal']

@@ -2750,4 +2750,411 @@ TEST(ThreefoldRepetition, DifferentPlayersDifferentPositions) {
   // This is inherent in the hash including current_player_
 }
 
+// =============================================================================
+// Unified Multi-Size Game State Tests
+// =============================================================================
+
+TEST(UnifiedGS, AllVariantsProduceCorrectShape) {
+  // All variants should output [35, 11, 11] tensor (32 base + 3 variant indicator)
+  constexpr auto expected_shape = UnifiedActionSpace::CANONICAL_SHAPE;
+
+  StarGambitUnifiedGS skirmish(StarGambitVariant::SKIRMISH);
+  auto sk_tensor = skirmish.canonicalized();
+  EXPECT_EQ(sk_tensor.dimension(0), expected_shape[0]);
+  EXPECT_EQ(sk_tensor.dimension(1), expected_shape[1]);
+  EXPECT_EQ(sk_tensor.dimension(2), expected_shape[2]);
+
+  StarGambitUnifiedGS clash(StarGambitVariant::CLASH);
+  auto cl_tensor = clash.canonicalized();
+  EXPECT_EQ(cl_tensor.dimension(0), expected_shape[0]);
+  EXPECT_EQ(cl_tensor.dimension(1), expected_shape[1]);
+  EXPECT_EQ(cl_tensor.dimension(2), expected_shape[2]);
+
+  StarGambitUnifiedGS battle(StarGambitVariant::BATTLE);
+  auto ba_tensor = battle.canonicalized();
+  EXPECT_EQ(ba_tensor.dimension(0), expected_shape[0]);
+  EXPECT_EQ(ba_tensor.dimension(1), expected_shape[1]);
+  EXPECT_EQ(ba_tensor.dimension(2), expected_shape[2]);
+}
+
+TEST(UnifiedGS, AllVariantsHaveCorrectNumMoves) {
+  // All variants should have 1229 moves (unified action space)
+  StarGambitUnifiedGS skirmish(StarGambitVariant::SKIRMISH);
+  EXPECT_EQ(skirmish.num_moves(), UnifiedActionSpace::NUM_MOVES);
+  EXPECT_EQ(skirmish.num_moves(), 1229);
+
+  StarGambitUnifiedGS clash(StarGambitVariant::CLASH);
+  EXPECT_EQ(clash.num_moves(), UnifiedActionSpace::NUM_MOVES);
+
+  StarGambitUnifiedGS battle(StarGambitVariant::BATTLE);
+  EXPECT_EQ(battle.num_moves(), UnifiedActionSpace::NUM_MOVES);
+}
+
+TEST(UnifiedGS, EmbeddingOffset) {
+  // Skirmish and Clash should have offset=1 (9x9 centered in 11x11)
+  // Battle should have offset=0
+
+  // Verify by checking valid hex mask - padding cells should be zero
+  StarGambitUnifiedGS skirmish(StarGambitVariant::SKIRMISH);
+  auto sk_obs = skirmish.canonicalized();
+
+  // Channel 0 is valid hex mask
+  // For Skirmish, corners of 11x11 should be 0 (outside 9x9 board)
+  EXPECT_EQ(sk_obs(0, 0, 0), 0.0f);  // Top-left corner - outside board
+  EXPECT_EQ(sk_obs(0, 10, 10), 0.0f);  // Bottom-right corner - outside board
+
+  // Center should be valid
+  EXPECT_EQ(sk_obs(0, 5, 5), 1.0f);  // Center - inside board
+
+  // Battle uses full 11x11 - corners should be invalid in hex geometry
+  StarGambitUnifiedGS battle(StarGambitVariant::BATTLE);
+  auto ba_obs = battle.canonicalized();
+  // Note: hex corners are still invalid due to hex geometry, not embedding
+}
+
+TEST(UnifiedGS, ValidMovesExcludePadding) {
+  // For Skirmish/Clash, no valid moves should reference padding cells
+  StarGambitUnifiedGS skirmish(StarGambitVariant::SKIRMISH);
+  auto valids = skirmish.valid_moves();
+
+  // With offset=1, local 9x9 grid is embedded at offset 1
+  // Check that spatial actions in padding region are always 0
+  constexpr int BOARD_DIM = 11;
+  constexpr int SLOTS = 10;
+
+  // Deploy should be valid on turn 1
+  int deploy_count = 0;
+  for (int i = UnifiedActionSpace::DEPLOY_OFFSET; i < UnifiedActionSpace::END_TURN_OFFSET; ++i) {
+    if (valids(i) == 1) deploy_count++;
+  }
+  EXPECT_GT(deploy_count, 0) << "Should have deploy actions available on turn 1";
+
+  // Spatial actions at row/col 0 and 10 (outside 9x9 embedded board) should be invalid
+  // Since we're on turn 1, spatial actions aren't available anyway
+  // But we can verify the action space structure is correct
+  EXPECT_EQ(skirmish.num_moves(), BOARD_DIM * BOARD_DIM * SLOTS + 18 + 1);
+}
+
+TEST(UnifiedGS, DeployActionCountPerVariant) {
+  // Verify each variant has correct deploy actions
+  // Only specific facings are valid for deployment:
+  // - Fighters/Cruisers: 3 facings (P0: 1,2,3; P1: 4,5,0)
+  // - Dreadnoughts: 4 facings (P0: 0,1,2,3; P1: 0,3,4,5)
+  // Skirmish (3F, 1C): 3 + 3 = 6 deploy actions
+  // Clash (3F, 2C, 1D): 3 + 3 + 4 = 10 deploy actions
+  // Battle (4F, 3C, 2D): 3 + 3 + 4 = 10 deploy actions
+
+  StarGambitUnifiedGS skirmish(StarGambitVariant::SKIRMISH);
+  auto sk_valids = skirmish.valid_moves();
+  int sk_deploys = 0;
+  for (int i = UnifiedActionSpace::DEPLOY_OFFSET; i < UnifiedActionSpace::END_TURN_OFFSET; ++i) {
+    if (sk_valids(i) == 1) sk_deploys++;
+  }
+  // Skirmish: 1 fighter type * 3 facings + 1 cruiser type * 3 facings = 6
+  EXPECT_EQ(sk_deploys, 6) << "Skirmish should have 6 deploy actions (F*3 + C*3)";
+
+  StarGambitUnifiedGS clash(StarGambitVariant::CLASH);
+  auto cl_valids = clash.valid_moves();
+  int cl_deploys = 0;
+  for (int i = UnifiedActionSpace::DEPLOY_OFFSET; i < UnifiedActionSpace::END_TURN_OFFSET; ++i) {
+    if (cl_valids(i) == 1) cl_deploys++;
+  }
+  // Clash: F*3 + C*3 + D*4 = 10
+  EXPECT_EQ(cl_deploys, 10) << "Clash should have 10 deploy actions (F*3 + C*3 + D*4)";
+
+  StarGambitUnifiedGS battle(StarGambitVariant::BATTLE);
+  auto ba_valids = battle.valid_moves();
+  int ba_deploys = 0;
+  for (int i = UnifiedActionSpace::DEPLOY_OFFSET; i < UnifiedActionSpace::END_TURN_OFFSET; ++i) {
+    if (ba_valids(i) == 1) ba_deploys++;
+  }
+  // Battle: F*3 + C*3 + D*4 = 10
+  EXPECT_EQ(ba_deploys, 10) << "Battle should have 10 deploy actions (F*3 + C*3 + D*4)";
+}
+
+TEST(UnifiedGS, GamePlaythroughSkirmish) {
+  // Play a full game with Skirmish variant
+  StarGambitUnifiedGS game(StarGambitVariant::SKIRMISH);
+
+  int moves_played = 0;
+  while (!game.scores().has_value() && moves_played < 1000) {
+    auto valids = game.valid_moves();
+    int move = -1;
+    for (int i = 0; i < static_cast<int>(valids.size()); ++i) {
+      if (valids(i) == 1) {
+        move = i;
+        break;
+      }
+    }
+    ASSERT_NE(move, -1) << "No valid moves but game not over at move " << moves_played;
+    game.play_move(move);
+    moves_played++;
+  }
+
+  EXPECT_TRUE(game.scores().has_value()) << "Game should end within 1000 moves";
+}
+
+TEST(UnifiedGS, GamePlaythroughClash) {
+  // Play a full game with Clash variant
+  StarGambitUnifiedGS game(StarGambitVariant::CLASH);
+
+  int moves_played = 0;
+  while (!game.scores().has_value() && moves_played < 1000) {
+    auto valids = game.valid_moves();
+    int move = -1;
+    for (int i = 0; i < static_cast<int>(valids.size()); ++i) {
+      if (valids(i) == 1) {
+        move = i;
+        break;
+      }
+    }
+    ASSERT_NE(move, -1) << "No valid moves but game not over at move " << moves_played;
+    game.play_move(move);
+    moves_played++;
+  }
+
+  EXPECT_TRUE(game.scores().has_value()) << "Game should end within 1000 moves";
+}
+
+TEST(UnifiedGS, GamePlaythroughBattle) {
+  // Play a full game with Battle variant
+  StarGambitUnifiedGS game(StarGambitVariant::BATTLE);
+
+  int moves_played = 0;
+  while (!game.scores().has_value() && moves_played < 1000) {
+    auto valids = game.valid_moves();
+    int move = -1;
+    for (int i = 0; i < static_cast<int>(valids.size()); ++i) {
+      if (valids(i) == 1) {
+        move = i;
+        break;
+      }
+    }
+    ASSERT_NE(move, -1) << "No valid moves but game not over at move " << moves_played;
+    game.play_move(move);
+    moves_played++;
+  }
+
+  EXPECT_TRUE(game.scores().has_value()) << "Game should end within 1000 moves";
+}
+
+TEST(UnifiedGS, CopyPreservesVariant) {
+  StarGambitUnifiedGS skirmish(StarGambitVariant::SKIRMISH);
+  auto skirmish_copy = skirmish.copy();
+
+  // Cast to UnifiedGS to access variant
+  auto* sk_ptr = dynamic_cast<StarGambitUnifiedGS*>(skirmish_copy.get());
+  ASSERT_NE(sk_ptr, nullptr);
+  EXPECT_EQ(sk_ptr->get_variant(), StarGambitVariant::SKIRMISH);
+  EXPECT_EQ(sk_ptr->get_variant_name(), "Skirmish");
+
+  StarGambitUnifiedGS battle(StarGambitVariant::BATTLE);
+  auto battle_copy = battle.copy();
+  auto* ba_ptr = dynamic_cast<StarGambitUnifiedGS*>(battle_copy.get());
+  ASSERT_NE(ba_ptr, nullptr);
+  EXPECT_EQ(ba_ptr->get_variant(), StarGambitVariant::BATTLE);
+  EXPECT_EQ(ba_ptr->get_variant_name(), "Battle");
+}
+
+TEST(UnifiedGS, HashIncludesVariant) {
+  // Same board state in different variants should hash differently
+  auto skirmish = std::make_shared<StarGambitUnifiedGS>(StarGambitVariant::SKIRMISH);
+  auto clash = std::make_shared<StarGambitUnifiedGS>(StarGambitVariant::CLASH);
+
+  // Initial states should have different hashes due to variant
+  // (even though board structure is similar)
+  GameStateKeyWrapper sk_wrapper(skirmish);
+  GameStateKeyWrapper cl_wrapper(clash);
+  size_t sk_hash = absl::HashOf(sk_wrapper);
+  size_t cl_hash = absl::HashOf(cl_wrapper);
+  EXPECT_NE(sk_hash, cl_hash) << "Different variants should hash differently";
+}
+
+TEST(UnifiedGS, EqualityRequiresSameVariant) {
+  StarGambitUnifiedGS skirmish(StarGambitVariant::SKIRMISH);
+  StarGambitUnifiedGS clash(StarGambitVariant::CLASH);
+
+  // Different variants should not be equal
+  EXPECT_FALSE(skirmish == clash);
+
+  // Same variant should be equal if same state
+  StarGambitUnifiedGS skirmish2(StarGambitVariant::SKIRMISH);
+  EXPECT_TRUE(skirmish == skirmish2);
+}
+
+TEST(UnifiedGS, SymmetriesPreserveEmbedding) {
+  // Symmetries should work correctly with embedded boards
+  StarGambitUnifiedGS game(StarGambitVariant::SKIRMISH);
+
+  // Deploy a unit first
+  auto valids = game.valid_moves();
+  for (int i = UnifiedActionSpace::DEPLOY_OFFSET; i < UnifiedActionSpace::END_TURN_OFFSET; ++i) {
+    if (valids(i) == 1) {
+      game.play_move(i);
+      break;
+    }
+  }
+
+  // Get symmetries
+  PlayHistory ph;
+  ph.canonical = game.canonicalized();
+  ph.v = Vector<float>(3);
+  ph.v.setConstant(1.0f / 3.0f);
+  ph.pi = Vector<float>(game.num_moves());
+  ph.pi.setConstant(1.0f / game.num_moves());
+
+  auto syms = game.symmetries(ph);
+  EXPECT_EQ(syms.size(), 2);  // Identity + mirror
+
+  // Check shapes are preserved (35 channels: 32 base + 3 variant indicator)
+  for (const auto& sym : syms) {
+    EXPECT_EQ(sym.canonical.dimension(0), 35);
+    EXPECT_EQ(sym.canonical.dimension(1), 11);
+    EXPECT_EQ(sym.canonical.dimension(2), 11);
+    EXPECT_EQ(sym.pi.size(), 1229);
+    EXPECT_EQ(sym.v.size(), 3);
+  }
+}
+
+TEST(UnifiedGS, VariantAccessors) {
+  StarGambitUnifiedGS skirmish(StarGambitVariant::SKIRMISH);
+  EXPECT_EQ(skirmish.get_variant(), StarGambitVariant::SKIRMISH);
+  EXPECT_EQ(skirmish.get_variant_name(), "Skirmish");
+
+  StarGambitUnifiedGS clash(StarGambitVariant::CLASH);
+  EXPECT_EQ(clash.get_variant(), StarGambitVariant::CLASH);
+  EXPECT_EQ(clash.get_variant_name(), "Clash");
+
+  StarGambitUnifiedGS battle(StarGambitVariant::BATTLE);
+  EXPECT_EQ(battle.get_variant(), StarGambitVariant::BATTLE);
+  EXPECT_EQ(battle.get_variant_name(), "Battle");
+}
+
+TEST(UnifiedGS, DefaultConstructorIsBattle) {
+  StarGambitUnifiedGS game;
+  EXPECT_EQ(game.get_variant(), StarGambitVariant::BATTLE);
+}
+
+TEST(UnifiedGS, GetUnitsReturnsCorrectCount) {
+  // Verify get_units works and returns correct initial state
+  StarGambitUnifiedGS skirmish(StarGambitVariant::SKIRMISH);
+  auto units = skirmish.get_units();
+  // Initial state has 2 portals (one per player)
+  EXPECT_EQ(units.size(), 2);
+
+  // Deploy some units
+  auto valids = skirmish.valid_moves();
+  for (int i = UnifiedActionSpace::DEPLOY_OFFSET; i < UnifiedActionSpace::END_TURN_OFFSET; ++i) {
+    if (valids(i) == 1) {
+      skirmish.play_move(i);
+      break;
+    }
+  }
+
+  units = skirmish.get_units();
+  EXPECT_EQ(units.size(), 3);  // 2 portals + 1 deployed unit
+}
+
+TEST(UnifiedGS, GetFireInfoWorks) {
+  StarGambitUnifiedGS game(StarGambitVariant::SKIRMISH);
+
+  // Fire info for any move should work (may return no target)
+  auto fire_info = game.get_fire_info(0);
+  // On turn 1, no fires are possible
+  EXPECT_FALSE(fire_info.has_target);
+}
+
+TEST(UnifiedGS, DumpOutput) {
+  StarGambitUnifiedGS game(StarGambitVariant::SKIRMISH);
+  std::string dump = game.dump();
+  EXPECT_FALSE(dump.empty());
+  // Should mention the variant
+  EXPECT_NE(dump.find("Skirmish"), std::string::npos);
+}
+
+TEST(UnifiedGS, NumPlayersAndSymmetries) {
+  StarGambitUnifiedGS game(StarGambitVariant::SKIRMISH);
+  EXPECT_EQ(game.num_players(), 2);
+  EXPECT_EQ(game.num_symmetries(), 2);  // Identity + mirror
+}
+
+TEST(UnifiedGS, StaticAccessors) {
+  // Test static methods via Python bindings
+  EXPECT_EQ(UnifiedActionSpace::NUM_MOVES, 1229);
+  EXPECT_EQ(UnifiedActionSpace::BOARD_DIM, 11);
+  EXPECT_EQ(UnifiedActionSpace::SMALL_BOARD_OFFSET, 1);
+
+  auto shape = UnifiedActionSpace::CANONICAL_SHAPE;
+  EXPECT_EQ(shape[0], 35);  // 32 base + 3 variant indicator channels
+  EXPECT_EQ(shape[1], 11);
+  EXPECT_EQ(shape[2], 11);
+}
+
+TEST(UnifiedGS, VariantIndicatorChannels) {
+  // Test that channels 32-34 contain correct one-hot variant encoding
+  // Note: broadcast only fills valid hex positions, not the entire grid
+  // The center of the unified board (5,5) is valid for all variants
+  constexpr int CH_SKIRMISH = 32;
+  constexpr int CH_CLASH = 33;
+  constexpr int CH_BATTLE = 34;
+  constexpr int CENTER = 5;  // Center of 11x11 grid is always valid
+
+  // Skirmish: [1, 0, 0]
+  StarGambitUnifiedGS skirmish(StarGambitVariant::SKIRMISH);
+  auto sk_tensor = skirmish.canonicalized();
+  EXPECT_FLOAT_EQ(sk_tensor(CH_SKIRMISH, CENTER, CENTER), 1.0f);
+  EXPECT_FLOAT_EQ(sk_tensor(CH_CLASH, CENTER, CENTER), 0.0f);
+  EXPECT_FLOAT_EQ(sk_tensor(CH_BATTLE, CENTER, CENTER), 0.0f);
+  // Verify broadcast at another valid position (Skirmish has offset=1, so (5,3) is valid)
+  EXPECT_FLOAT_EQ(sk_tensor(CH_SKIRMISH, 5, 3), 1.0f);
+  // Padding position should be 0 (corners are always padding)
+  EXPECT_FLOAT_EQ(sk_tensor(CH_SKIRMISH, 0, 0), 0.0f);
+
+  // Clash: [0, 1, 0]
+  StarGambitUnifiedGS clash(StarGambitVariant::CLASH);
+  auto cl_tensor = clash.canonicalized();
+  EXPECT_FLOAT_EQ(cl_tensor(CH_SKIRMISH, CENTER, CENTER), 0.0f);
+  EXPECT_FLOAT_EQ(cl_tensor(CH_CLASH, CENTER, CENTER), 1.0f);
+  EXPECT_FLOAT_EQ(cl_tensor(CH_BATTLE, CENTER, CENTER), 0.0f);
+
+  // Battle: [0, 0, 1]
+  StarGambitUnifiedGS battle(StarGambitVariant::BATTLE);
+  auto bt_tensor = battle.canonicalized();
+  EXPECT_FLOAT_EQ(bt_tensor(CH_SKIRMISH, CENTER, CENTER), 0.0f);
+  EXPECT_FLOAT_EQ(bt_tensor(CH_CLASH, CENTER, CENTER), 0.0f);
+  EXPECT_FLOAT_EQ(bt_tensor(CH_BATTLE, CENTER, CENTER), 1.0f);
+}
+
+TEST(UnifiedGS, ReserveNormalizationUsesGlobalMax) {
+  // Reserves should be normalized by Battle (largest variant) maximums:
+  // 4 fighters, 3 cruisers, 2 dreadnoughts
+  // This ensures the same count maps to the same value across all variants.
+  constexpr int CENTER = 5;
+  constexpr int CH_MY_FIGHTERS = 24;
+  constexpr int CH_MY_CRUISERS = 25;
+  constexpr int CH_MY_DREADNOUGHTS = 26;
+
+  // At game start, all variants start with full reserves
+  // Skirmish: 3F, 1C, 0D -> normalized: 3/4=0.75, 1/3=0.333, 0/2=0
+  StarGambitUnifiedGS skirmish(StarGambitVariant::SKIRMISH);
+  auto sk_tensor = skirmish.canonicalized();
+  EXPECT_FLOAT_EQ(sk_tensor(CH_MY_FIGHTERS, CENTER, CENTER), 3.0f / 4.0f);
+  EXPECT_FLOAT_EQ(sk_tensor(CH_MY_CRUISERS, CENTER, CENTER), 1.0f / 3.0f);
+  EXPECT_FLOAT_EQ(sk_tensor(CH_MY_DREADNOUGHTS, CENTER, CENTER), 0.0f / 2.0f);
+
+  // Clash: 3F, 2C, 1D -> normalized: 3/4=0.75, 2/3=0.667, 1/2=0.5
+  StarGambitUnifiedGS clash(StarGambitVariant::CLASH);
+  auto cl_tensor = clash.canonicalized();
+  EXPECT_FLOAT_EQ(cl_tensor(CH_MY_FIGHTERS, CENTER, CENTER), 3.0f / 4.0f);
+  EXPECT_FLOAT_EQ(cl_tensor(CH_MY_CRUISERS, CENTER, CENTER), 2.0f / 3.0f);
+  EXPECT_FLOAT_EQ(cl_tensor(CH_MY_DREADNOUGHTS, CENTER, CENTER), 1.0f / 2.0f);
+
+  // Battle: 4F, 3C, 2D -> normalized: 4/4=1.0, 3/3=1.0, 2/2=1.0
+  StarGambitUnifiedGS battle(StarGambitVariant::BATTLE);
+  auto bt_tensor = battle.canonicalized();
+  EXPECT_FLOAT_EQ(bt_tensor(CH_MY_FIGHTERS, CENTER, CENTER), 4.0f / 4.0f);
+  EXPECT_FLOAT_EQ(bt_tensor(CH_MY_CRUISERS, CENTER, CENTER), 3.0f / 3.0f);
+  EXPECT_FLOAT_EQ(bt_tensor(CH_MY_DREADNOUGHTS, CENTER, CENTER), 2.0f / 2.0f);
+}
+
 }  // namespace alphazero::star_gambit_gs

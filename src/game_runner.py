@@ -107,6 +107,14 @@ game_name = "connect4"
 
 
 def new_game():
+    """Create a new game instance.
+
+    In multi_size mode with a size_distribution, samples a variant.
+    Otherwise returns Game().
+    """
+    if multi_size_mode and size_distribution is not None:
+        variant = size_distribution.sample()
+        return Game(variant)
     return Game()
 
 
@@ -120,8 +128,15 @@ channels = 12
 kernel_size = 5
 dense_net = True
 star_gambit_spatial = False  # Star Gambit-specific spatial policy head
+use_fixup = False  # Use Fixup initialization instead of BatchNorm (for multi-size)
+multi_size = False  # Enable multi-size support (global pooling for value head)
 network_name = "densenet" if dense_net else "resnet"
 lr_milestone = 150
+
+# Multi-size training support (set by game-specific training scripts)
+multi_size_mode = False  # Whether we're in multi-size training mode
+size_distribution = None  # SizeDistribution instance for curriculum learning
+per_size_stats = None  # PerSizeStatistics instance for per-variant tracking
 
 # MCTS search depth must increase with complex games.
 nn_selfplay_mcts_depth = 100
@@ -1001,6 +1016,8 @@ if __name__ == "__main__":
         dense_net=dense_net,
         kernel_size=kernel_size,
         star_gambit_spatial=star_gambit_spatial,
+        use_fixup=use_fixup,
+        multi_size=multi_size,
     )
 
     if start == 0:
@@ -1062,6 +1079,32 @@ if __name__ == "__main__":
         for i in pbar:
             stage_times = {}
             iteration_start = time.time()
+
+            # Update curriculum distribution for multi-size training
+            if multi_size_mode and size_distribution is not None:
+                size_distribution.step(i)
+                if i % 10 == 0:  # Log every 10 iterations
+                    run.track(
+                        size_distribution.current_probs[0],
+                        name="curriculum_prob",
+                        epoch=i,
+                        step=total_train_steps,
+                        context={"variant": "skirmish"},
+                    )
+                    run.track(
+                        size_distribution.current_probs[1],
+                        name="curriculum_prob",
+                        epoch=i,
+                        step=total_train_steps,
+                        context={"variant": "clash"},
+                    )
+                    run.track(
+                        size_distribution.current_probs[2],
+                        name="curriculum_prob",
+                        epoch=i,
+                        step=total_train_steps,
+                        context={"variant": "battle"},
+                    )
 
             run.track(
                 current_best, name="best_network", epoch=i, step=total_train_steps

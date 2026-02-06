@@ -75,10 +75,13 @@ using photosynthesis_gs::PhotosynthesisGS;
 using star_gambit_gs::StarGambitSkirmishGS;
 using star_gambit_gs::StarGambitClashGS;
 using star_gambit_gs::StarGambitBattleGS;
+using star_gambit_gs::StarGambitUnifiedGS;
+using star_gambit_gs::StarGambitVariant;
 using star_gambit_gs::SkirmishConfig;
 using star_gambit_gs::ClashConfig;
 using star_gambit_gs::BattleConfig;
 using star_gambit_gs::ActionSpace;
+using star_gambit_gs::UnifiedActionSpace;
 using star_gambit_gs::UnitInfo;
 using star_gambit_gs::FireInfo;
 using tawlbwrdd_gs::TawlbwrddGS;
@@ -460,6 +463,27 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return ActionSpace<BattleConfig>::CANONICAL_SHAPE; });
+
+  // Star Gambit Variant enum for unified game
+  py::enum_<StarGambitVariant>(m, "StarGambitVariant")
+      .value("SKIRMISH", StarGambitVariant::SKIRMISH)
+      .value("CLASH", StarGambitVariant::CLASH)
+      .value("BATTLE", StarGambitVariant::BATTLE)
+      .export_values();
+
+  // Star Gambit - Unified (all variants, Battle-sized representation)
+  py::class_<StarGambitUnifiedGS, GameState>(m, "StarGambitUnifiedGS")
+      .def(py::init<>())
+      .def(py::init<StarGambitVariant>())
+      .def("get_units", &StarGambitUnifiedGS::get_units)
+      .def("get_fire_info", &StarGambitUnifiedGS::get_fire_info)
+      .def("get_variant", &StarGambitUnifiedGS::get_variant)
+      .def("get_variant_name", &StarGambitUnifiedGS::get_variant_name)
+      .def_static("NUM_PLAYERS", [] { return star_gambit_gs::NUM_PLAYERS; })
+      .def_static("NUM_MOVES", [] { return UnifiedActionSpace::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
+      .def_static("CANONICAL_SHAPE",
+                  [] { return UnifiedActionSpace::CANONICAL_SHAPE; });
 
   py::class_<PhotosynthesisGS<2>, GameState>(m, "PhotosynthesisGS2")
       .def(py::init<>())

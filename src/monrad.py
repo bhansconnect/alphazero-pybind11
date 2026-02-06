@@ -37,7 +37,21 @@ def calc_elo(past_elo, win_rates):
 
 
 @tracy_zone
-def pit_agents(Game, players, mcts_depths, bs, name, tree_reuse=True):
+def pit_agents(Game, players, mcts_depths, bs, name, tree_reuse=True, new_game_fn=None):
+    """Run games between agents and return win rates.
+
+    Args:
+        Game: Game class
+        players: List of players (neural networks or random players)
+        mcts_depths: List of MCTS depths for each player
+        bs: Batch size
+        name: Name for progress bar
+        tree_reuse: Whether to reuse MCTS trees between moves.
+        new_game_fn: Optional function to create new games. If None, uses Game().
+
+    Returns:
+        List of win rates for each player position.
+    """
     np = Game.NUM_PLAYERS()
     win_rates = [0] * np
     for i in tqdm.trange(np, leave=False, desc=name):
@@ -55,7 +69,8 @@ def pit_agents(Game, players, mcts_depths, bs, name, tree_reuse=True):
         params.tree_reuse = tree_reuse
         params.games_to_play = n
         params.mcts_depth = ordered_depths
-        pm = alphazero.PlayManager(Game(), params)
+        initial_game = new_game_fn() if new_game_fn else Game()
+        pm = alphazero.PlayManager(initial_game, params)
 
         grargs = GRArgs(
             title=f"{name}({i + 1}/{np})",

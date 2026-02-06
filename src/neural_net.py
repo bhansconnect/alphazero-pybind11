@@ -14,8 +14,8 @@ torch.backends.cudnn.benchmark = True
 NNArgs = namedtuple(
     "NNArgs",
     ["num_channels", "depth", "kernel_size", "lr_milestone", "dense_net", "lr", "cv",
-     "star_gambit_spatial"],
-    defaults=(40, False, 0.01, 1.5, False),
+     "star_gambit_spatial", "use_fixup", "multi_size"],
+    defaults=(40, False, 0.01, 1.5, False, False, False),
 )
 
 
@@ -101,6 +101,83 @@ class ResidualBlock(nn.Module):
         return out
 
 
+class FixupResidualBlock(nn.Module):
+    """Fixup residual block - replaces BatchNorm with learnable biases and scaling.
+
+    Based on "Fixup Initialization: Residual Learning Without Normalization"
+    (Zhang et al., 2019). This is also used by KataGo for handling variable-size
+    boards with masked inputs, where BatchNorm statistics can be corrupted.
+    """
+
+    def __init__(self, channels, depth, kernel_size=3):
+        super(FixupResidualBlock, self).__init__()
+        # Pre-activation biases
+        self.bias1a = nn.Parameter(torch.zeros(1))
+        self.bias1b = nn.Parameter(torch.zeros(1))
+        # Create conv without bias (we add our own)
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=kernel_size,
+                               padding='same', bias=False)
+        self.relu1 = nn.ReLU(inplace=True)
+
+        self.bias2a = nn.Parameter(torch.zeros(1))
+        self.bias2b = nn.Parameter(torch.zeros(1))
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=kernel_size,
+                               padding='same', bias=False)
+        # Scale factor for the residual branch
+        self.scale = nn.Parameter(torch.ones(1))
+
+        # Fixup initialization: scale down initial weights
+        # For m=2 branches (conv1 and conv2), use depth^(-1/(2*m)) = depth^(-0.5)
+        # Per Zhang et al. 2019 "Fixup Initialization" Theorem 1
+        nn.init.normal_(self.conv1.weight, mean=0, std=np.sqrt(2 / (channels * kernel_size**2)) * depth**(-0.5))
+        nn.init.zeros_(self.conv2.weight)
+
+    def forward(self, x):
+        residual = x
+        out = x + self.bias1a
+        out = self.relu1(out)
+        out = self.conv1(out + self.bias1b)
+        out = out + self.bias2a
+        out = self.relu1(out)  # Note: reusing relu1 is fine
+        out = self.conv2(out + self.bias2b)
+        out = out * self.scale
+        return out + residual
+
+
+class FixupDenseBlock(nn.Module):
+    """Fixup-style dense block without BatchNorm."""
+
+    def __init__(self, in_channels, growth_rate, depth, bn_size=4, kernel_size=3):
+        super(FixupDenseBlock, self).__init__()
+        self.bias1 = nn.Parameter(torch.zeros(1))
+        self.relu1 = nn.ReLU(inplace=True)
+        self.conv1 = nn.Conv2d(in_channels, growth_rate * bn_size, kernel_size=1,
+                               padding='same', bias=False)
+        self.bias2 = nn.Parameter(torch.zeros(1))
+        self.relu2 = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(growth_rate * bn_size, growth_rate, kernel_size=kernel_size,
+                               padding='same', bias=False)
+        # Scale factor for output branch (learnable, initialized to 1)
+        self.scale = nn.Parameter(torch.ones(1))
+
+        # Fixup initialization
+        # For m=2 branches (conv1 and conv2), use depth^(-1/(2*m)) = depth^(-0.5)
+        # Per Zhang et al. 2019 "Fixup Initialization" Theorem 1
+        nn.init.normal_(self.conv1.weight, mean=0, std=np.sqrt(2 / in_channels) * depth**(-0.5))
+        nn.init.normal_(self.conv2.weight, mean=0, std=np.sqrt(2 / (growth_rate * bn_size * kernel_size**2)) * depth**(-0.5))
+
+    def forward(self, x):
+        out = x + self.bias1
+        out = self.relu1(out)
+        out = self.conv1(out)
+        out = out + self.bias2
+        out = self.relu2(out)
+        out = self.conv2(out)
+        out = out * self.scale  # Apply learnable scale
+        out = torch.cat([x, out], 1)
+        return out
+
+
 class NNArch(nn.Module):
     def __init__(self, game, args):
         super(NNArch, self).__init__()
@@ -108,31 +185,58 @@ class NNArch(nn.Module):
         in_channels, in_x, in_y = game.CANONICAL_SHAPE()
         self.dense_net = args.dense_net
         self.star_gambit_spatial = args.star_gambit_spatial
+        self.use_fixup = getattr(args, 'use_fixup', False)
+        self.multi_size = getattr(args, 'multi_size', False)
 
         if not self.dense_net:
             self.conv1 = conv(
                 in_channels, args.num_channels, kernel_size=args.kernel_size
             )
-            self.bn1 = nn.BatchNorm2d(args.num_channels)
+            if self.use_fixup:
+                # Fixup: use bias instead of BatchNorm for first conv
+                self.bn1 = None
+                self.bias1 = nn.Parameter(torch.zeros(1))
+            else:
+                self.bn1 = nn.BatchNorm2d(args.num_channels)
+                self.bias1 = None
 
         self.layers = []
         for i in range(args.depth):
             if self.dense_net:
-                self.layers.append(
-                    DenseBlock(
-                        in_channels + args.num_channels * i,
-                        args.num_channels,
-                        kernel_size=args.kernel_size,
+                if self.use_fixup:
+                    self.layers.append(
+                        FixupDenseBlock(
+                            in_channels + args.num_channels * i,
+                            args.num_channels,
+                            depth=args.depth,
+                            kernel_size=args.kernel_size,
+                        )
                     )
-                )
+                else:
+                    self.layers.append(
+                        DenseBlock(
+                            in_channels + args.num_channels * i,
+                            args.num_channels,
+                            kernel_size=args.kernel_size,
+                        )
+                    )
             else:
-                self.layers.append(
-                    ResidualBlock(
-                        args.num_channels,
-                        args.num_channels,
-                        kernel_size=args.kernel_size,
+                if self.use_fixup:
+                    self.layers.append(
+                        FixupResidualBlock(
+                            args.num_channels,
+                            depth=args.depth,
+                            kernel_size=args.kernel_size,
+                        )
                     )
-                )
+                else:
+                    self.layers.append(
+                        ResidualBlock(
+                            args.num_channels,
+                            args.num_channels,
+                            kernel_size=args.kernel_size,
+                        )
+                    )
         self.conv_layers = nn.Sequential(*self.layers)
 
         if self.dense_net:
@@ -143,15 +247,34 @@ class NNArch(nn.Module):
             self.v_conv = conv1x1(args.num_channels, 32)
             self.pi_conv = conv1x1(args.num_channels, 32)
 
-        self.v_bn = nn.BatchNorm2d(32)
+        # Value head - with optional global pooling for multi-size support
+        if self.use_fixup:
+            self.v_bn = None
+            self.v_bias = nn.Parameter(torch.zeros(1))
+        else:
+            self.v_bn = nn.BatchNorm2d(32)
+            self.v_bias = None
         self.v_relu = nn.ReLU(inplace=True)
-        self.v_flatten = nn.Flatten()
-        self.v_fc1 = nn.Linear(32 * in_x * in_y, 256)
+
+        if self.multi_size:
+            # Multi-size value head uses global average pooling (works on any board size)
+            self.v_global_pool = nn.AdaptiveAvgPool2d(1)  # Output: (B, 32, 1, 1)
+            self.v_fc1 = nn.Linear(32, 256)
+        else:
+            self.v_flatten = nn.Flatten()
+            self.v_fc1 = nn.Linear(32 * in_x * in_y, 256)
+
         self.v_fc1_relu = nn.ReLU(inplace=True)
         self.v_fc2 = nn.Linear(256, game.NUM_PLAYERS() + 1)
         self.v_softmax = nn.LogSoftmax(1)
 
-        self.pi_bn = nn.BatchNorm2d(32)
+        # Policy head with optional Fixup
+        if self.use_fixup:
+            self.pi_bn = None
+            self.pi_bias = nn.Parameter(torch.zeros(1))
+        else:
+            self.pi_bn = nn.BatchNorm2d(32)
+            self.pi_bias = None
         self.pi_relu = nn.ReLU(inplace=True)
 
         if self.star_gambit_spatial:
@@ -164,16 +287,31 @@ class NNArch(nn.Module):
 
             # Spatial policy: conv output (B, 10, H, W) -> (B, H*W*10)
             self.pi_conv2 = conv1x1(32, 10)
-            self.pi_bn2 = nn.BatchNorm2d(10)
+            if self.use_fixup:
+                self.pi_bn2 = None
+                self.pi_bias2 = nn.Parameter(torch.zeros(1))
+            else:
+                self.pi_bn2 = nn.BatchNorm2d(10)
+                self.pi_bias2 = None
 
             # Global policy: for deploy and end_turn actions
+            # For multi-size, use global pooling before the global policy head
             self.pi_flatten = nn.Flatten()
-            self.pi_global = nn.Sequential(
-                nn.Linear(32 * in_x * in_y, 64),
-                nn.ReLU(inplace=True),
-                nn.Linear(64, self.sg_global_actions),
-                nn.LayerNorm(self.sg_global_actions)
-            )
+            if self.multi_size:
+                self.pi_global_pool = nn.AdaptiveAvgPool2d(1)
+                self.pi_global = nn.Sequential(
+                    nn.Linear(32, 64),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(64, self.sg_global_actions),
+                    nn.LayerNorm(self.sg_global_actions)
+                )
+            else:
+                self.pi_global = nn.Sequential(
+                    nn.Linear(32 * in_x * in_y, 64),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(64, self.sg_global_actions),
+                    nn.LayerNorm(self.sg_global_actions)
+                )
             self.pi_softmax = nn.LogSoftmax(1)
         else:
             # Standard fully-connected policy head
@@ -184,17 +322,33 @@ class NNArch(nn.Module):
     @tracy_zone
     def forward(self, s):
         # s: batch_size x num_channels x board_x x board_y
+        # Save original input for extracting valid hex mask (channel 0) in multi_size mode
+        s_original = s
+
         with profiler.record_function("conv-layers"):
             if not self.dense_net:
                 s = self.conv1(s)
-                s = self.bn1(s)
+                if self.use_fixup:
+                    s = s + self.bias1
+                else:
+                    s = self.bn1(s)
             s = self.conv_layers(s)
 
         with profiler.record_function("v-head"):
             v = self.v_conv(s)
-            v = self.v_bn(v)
+            if self.use_fixup:
+                v = v + self.v_bias
+            else:
+                v = self.v_bn(v)
             v = self.v_relu(v)
-            v = self.v_flatten(v)
+
+            if self.multi_size:
+                # Global pooling for variable board sizes
+                v = self.v_global_pool(v)  # (B, 32, 1, 1)
+                v = v.view(v.size(0), -1)  # (B, 32)
+            else:
+                v = self.v_flatten(v)
+
             v = self.v_fc1(v)
             v = self.v_fc1_relu(v)
             v = self.v_fc2(v)
@@ -202,23 +356,43 @@ class NNArch(nn.Module):
 
         with profiler.record_function("pi-head"):
             pi = self.pi_conv(s)
-            pi = self.pi_bn(pi)
+            if self.use_fixup:
+                pi = pi + self.pi_bias
+            else:
+                pi = self.pi_bn(pi)
             pi = self.pi_relu(pi)
 
             if self.star_gambit_spatial:
                 # Spatial policy head for Star Gambit
-                # s_flat for global actions, pi for spatial
-                s_flat = self.pi_flatten(pi)
+                # For global actions, either use flattened conv or global pooling
+                if self.multi_size:
+                    s_global = self.pi_global_pool(pi)  # (B, 32, 1, 1)
+                    s_global = s_global.view(s_global.size(0), -1)  # (B, 32)
+                else:
+                    s_global = self.pi_flatten(pi)
 
                 # Spatial actions: (B, 32, H, W) -> (B, 10, H, W) -> (B, H, W, 10) -> (B, H*W*10)
                 pi_spatial = self.pi_conv2(pi)
-                pi_spatial = self.pi_bn2(pi_spatial)
+                if self.use_fixup:
+                    pi_spatial = pi_spatial + self.pi_bias2
+                else:
+                    pi_spatial = self.pi_bn2(pi_spatial)
                 pi_spatial = pi_spatial.permute(0, 2, 3, 1)  # (B, H, W, 10)
                 batch_size = pi_spatial.shape[0]
+
+                # Apply policy masking for multi_size mode (padding positions get -inf)
+                if self.multi_size:
+                    # Channel 0 of input is valid hex mask (1.0 for valid, 0.0 for padding)
+                    valid_hex_mask = s_original[:, 0, :, :]  # (B, H, W)
+                    # Expand to (B, H, W, 10) for all action types per position
+                    spatial_mask = valid_hex_mask.unsqueeze(-1).expand(-1, -1, -1, 10)
+                    # Mask invalid positions with -inf (becomes 0 after log_softmax)
+                    pi_spatial = pi_spatial.masked_fill(spatial_mask < 0.5, float('-inf'))
+
                 pi_spatial = pi_spatial.reshape(batch_size, -1)  # (B, H*W*10)
 
                 # Global actions: deploy + end_turn
-                pi_global = self.pi_global(s_flat)  # (B, 19)
+                pi_global = self.pi_global(s_global)  # (B, 19)
 
                 # Concatenate: spatial + global
                 pi = torch.cat([pi_spatial, pi_global], dim=1)  # (B, H*W*10 + 19)
@@ -476,7 +650,7 @@ def bench_network():
     channels = 12
     dense_net = True
     batch_size = 1024
-    nnargs = NNArgs(num_channels=channels, depth=depth, dense_net=dense_net)
+    nnargs = NNArgs(num_channels=channels, depth=depth, kernel_size=3, dense_net=dense_net)
 
     nn = NNWrapper(Game, nnargs)
 

@@ -3,6 +3,7 @@
 
 This script runs a Swiss-style (Monrad) tournament between trained networks
 to establish ELO rankings. Supports all three variants: Skirmish, Clash, and Battle.
+Also supports unified (multi-size) networks with flexible variant selection.
 
 Usage:
     python src/star_gambit_monrad.py
@@ -36,6 +37,14 @@ VARIANTS = {
     '1': ('skirmish', alphazero.StarGambitSkirmishGS, '3F, 1C, 0D'),
     '2': ('clash', alphazero.StarGambitClashGS, '3F, 2C, 1D'),
     '3': ('battle', alphazero.StarGambitBattleGS, '4F, 3C, 2D'),
+    '4': ('unified', alphazero.StarGambitUnifiedGS, 'Multi-size network'),
+}
+
+# Variant enum mappings for unified mode
+VARIANT_ENUMS = {
+    'skirmish': alphazero.StarGambitVariant.SKIRMISH,
+    'clash': alphazero.StarGambitVariant.CLASH,
+    'battle': alphazero.StarGambitVariant.BATTLE,
 }
 
 # === Star Gambit Configuration ===
@@ -44,25 +53,97 @@ NN_MCTS_DEPTH = 200
 
 
 def select_variant():
-    """Prompt user to select a game variant. Returns (variant_name, Game class)."""
+    """Prompt user to select a game variant.
+
+    Returns:
+        (variant_name, Game class, selected_variants)
+        where selected_variants is a list of variant names for unified mode,
+        or None for single-size mode.
+    """
     print("Select Star Gambit variant:")
     for key, (name, _, desc) in VARIANTS.items():
         print(f"  {key}. {name.capitalize()} ({desc})")
 
-    variant_input = input("Variant (1/2/3) [1]: ").strip() or '1'
+    variant_input = input("Variant (1/2/3/4) [1]: ").strip() or '1'
     if variant_input not in VARIANTS:
         print(f"Invalid selection '{variant_input}', defaulting to Skirmish")
         variant_input = '1'
 
     variant_name, Game, _ = VARIANTS[variant_input]
+
+    # For unified mode, allow selecting which variants to include
+    if variant_name == 'unified':
+        print("\nSelect game sizes for tournament:")
+        print("  1. Skirmish only")
+        print("  2. Clash only")
+        print("  3. Battle only")
+        print("  4. Skirmish + Clash")
+        print("  5. Skirmish + Battle")
+        print("  6. Clash + Battle")
+        print("  7. All sizes (Recommended)")
+
+        size_input = input("Selection (1-7) [7]: ").strip() or '7'
+
+        size_selections = {
+            '1': ['skirmish'],
+            '2': ['clash'],
+            '3': ['battle'],
+            '4': ['skirmish', 'clash'],
+            '5': ['skirmish', 'battle'],
+            '6': ['clash', 'battle'],
+            '7': ['skirmish', 'clash', 'battle'],
+        }
+
+        selected_variants = size_selections.get(size_input, ['skirmish', 'clash', 'battle'])
+        print(f"Selected: Unified ({', '.join(v.capitalize() for v in selected_variants)})\n")
+        return variant_name, Game, selected_variants
+
     print(f"Selected: {variant_name.capitalize()}\n")
-    return variant_name, Game
+    return variant_name, Game, None
+
+
+def create_unified_game(variant_name):
+    """Create a unified game for the specified variant."""
+    variant_enum = VARIANT_ENUMS[variant_name]
+    return alphazero.StarGambitUnifiedGS(variant_enum)
+
+
+def pit_agents_unified(players, depths, batch_size, selected_variants, desc=""):
+    """Pit agents across multiple variants for unified networks.
+
+    Plays equal number of games for each variant and returns combined win rates.
+    """
+    Game = alphazero.StarGambitUnifiedGS
+    total_wins = np.zeros(2)
+    total_draws = 0
+    total_games = 0
+
+    for variant_name in selected_variants:
+        # Create game factory for this variant
+        variant_enum = VARIANT_ENUMS[variant_name]
+
+        def new_game():
+            return alphazero.StarGambitUnifiedGS(variant_enum)
+
+        # Run games for this variant
+        variant_desc = f"{desc} ({variant_name})" if desc else variant_name
+        win_rates = pit_agents(
+            Game, players, depths, batch_size, variant_desc,
+            new_game_fn=new_game
+        )
+
+        total_wins += win_rates[:2] * batch_size
+        total_draws += win_rates[2] * batch_size if len(win_rates) > 2 else 0
+        total_games += batch_size
+
+    # Return averaged win rates
+    return total_wins / total_games
 
 
 def main():
     """Run Monrad tournament for Star Gambit networks."""
     # Select game variant
-    variant_name, Game = select_variant()
+    variant_name, Game, selected_variants = select_variant()
 
     # Determine model path (variant-specific subdirectories)
     model_path = os.path.join("data", "checkpoint", variant_name)
@@ -89,6 +170,8 @@ def main():
     count = len(agents)
     print(f"=== Star Gambit Monrad Tournament ===")
     print(f"Game: {variant_name.capitalize()} ({Game.__name__})")
+    if selected_variants:
+        print(f"Variants: {', '.join(v.capitalize() for v in selected_variants)}")
     print(f"MCTS depth: {NN_MCTS_DEPTH}")
     print(f"Batch size: {BATCH_SIZE}")
     print(f"Model path: {model_path}")
@@ -100,6 +183,10 @@ def main():
     rankings = list(range(count))
     rounds = int(np.ceil(np.log2(count)))
     dist = count
+
+    # Track per-variant stats for unified mode
+    if selected_variants:
+        per_variant_wins = {v: np.full((count, count), np.nan) for v in selected_variants}
 
     for r in range(rounds):
         print(f"Round {r + 1}/{rounds}")
@@ -185,9 +272,17 @@ def main():
                 players[0] = p1
                 depths[0] = d1
 
-                win_rates = pit_agents(
-                    Game, players, depths, BATCH_SIZE, f"{agents[i]}-{agents[j]}"
-                )
+                if selected_variants:
+                    # Unified mode: play across all selected variants
+                    win_rates = pit_agents_unified(
+                        players, depths, BATCH_SIZE, selected_variants,
+                        f"{agents[i]}-{agents[j]}"
+                    )
+                else:
+                    # Single-size mode
+                    win_rates = pit_agents(
+                        Game, players, depths, BATCH_SIZE, f"{agents[i]}-{agents[j]}"
+                    )
 
                 win_matrix[i, j] = win_rates[0]
                 win_matrix[j, i] = win_rates[1]

@@ -45,6 +45,98 @@ struct BattleConfig {
 };
 
 // ============================================================================
+// Unified Multi-Size Support
+// ============================================================================
+
+// Variant enum for runtime selection (used by StarGambitUnifiedGS)
+enum class StarGambitVariant : uint8_t {
+  SKIRMISH = 0,  // 5-side board, 3F/1C/0D
+  CLASH = 1,     // 5-side board, 3F/2C/1D
+  BATTLE = 2     // 6-side board, 4F/3C/2D
+};
+
+// Runtime configuration (populated from variant at construction)
+struct VariantConfig {
+  int board_side;
+  int max_fighters;
+  int max_cruisers;
+  int max_dreadnoughts;
+  int starting_fighters;
+  int starting_cruisers;
+  int starting_dreadnoughts;
+};
+
+// Get configuration for a variant
+inline VariantConfig get_variant_config(StarGambitVariant variant) {
+  switch (variant) {
+    case StarGambitVariant::SKIRMISH:
+      return {5, 3, 1, 0, 3, 1, 0};
+    case StarGambitVariant::CLASH:
+      return {5, 3, 2, 1, 3, 2, 1};
+    case StarGambitVariant::BATTLE:
+      return {6, 4, 3, 2, 4, 3, 2};
+  }
+  return {5, 3, 1, 0, 3, 1, 0};  // Default to Skirmish
+}
+
+// Unified action space constants (always Battle-sized for embedding)
+struct UnifiedActionSpace {
+  // Always use Battle dimensions (largest board)
+  static constexpr int BOARD_SIDE = 6;
+  static constexpr int BOARD_DIM = 11;  // 2 * 6 - 1
+  static constexpr int NUM_HEXES = 91;  // 3*6*6 - 3*6 + 1
+
+  // Embedding offset for smaller (5-side) boards: (11-9)/2 = 1
+  static constexpr int SMALL_BOARD_OFFSET = 1;
+
+  // Spatial actions: 11x11 grid × 10 action types
+  static constexpr int SPATIAL_ACTIONS = BOARD_DIM * BOARD_DIM * 10;  // 1210
+
+  // Deploy actions: 3 unit types × 6 facings
+  static constexpr int DEPLOY_ACTIONS = 18;
+
+  // End turn
+  static constexpr int END_TURN_ACTIONS = 1;
+
+  // Action layout offsets
+  static constexpr int SPATIAL_OFFSET = 0;
+  static constexpr int DEPLOY_OFFSET = SPATIAL_OFFSET + SPATIAL_ACTIONS;  // 1210
+  static constexpr int END_TURN_OFFSET = DEPLOY_OFFSET + DEPLOY_ACTIONS;  // 1228
+
+  // Total actions
+  static constexpr int NUM_MOVES = END_TURN_OFFSET + END_TURN_ACTIONS;  // 1229
+
+  // Observation channels (32 base + 3 variant indicator)
+  static constexpr int CANONICAL_CHANNELS = 35;
+  static constexpr std::array<int, 3> CANONICAL_SHAPE = {CANONICAL_CHANNELS, BOARD_DIM, BOARD_DIM};
+
+  // Helper: encode spatial action with unified coordinates
+  static constexpr int encode_spatial(int row, int col, int slot) {
+    return row * BOARD_DIM * 10 + col * 10 + slot;
+  }
+
+  // Helper: decode spatial action to unified coordinates
+  static constexpr void decode_spatial(int action_idx, int& row, int& col, int& slot) {
+    slot = action_idx % 10;
+    int pos = action_idx / 10;
+    col = pos % BOARD_DIM;
+    row = pos / BOARD_DIM;
+  }
+
+  // Helper: encode deploy action
+  static constexpr int encode_deploy(int type_idx, int facing) {
+    return DEPLOY_OFFSET + type_idx * 6 + facing;
+  }
+
+  // Helper: decode deploy action
+  static constexpr void decode_deploy(int action_idx, int& type_idx, int& facing) {
+    int rel = action_idx - DEPLOY_OFFSET;
+    type_idx = rel / 6;
+    facing = rel % 6;
+  }
+};
+
+// ============================================================================
 // Constants (shared across all game sizes)
 // ============================================================================
 
@@ -662,6 +754,196 @@ class StarGambitGS : public GameState {
   bool has_taken_action_{false};
   bool game_over_{false};
   int8_t winner_{-1};  // -1 = no winner, 0 or 1 = player won, 2 = draw
+
+  // Position history for threefold repetition
+  std::vector<uint64_t> position_history_;
+};
+
+// ============================================================================
+// Unified Multi-Size Game State Class
+// ============================================================================
+
+// StarGambitUnifiedGS: A single class that can play any variant (Skirmish,
+// Clash, Battle) but always outputs Battle-sized representations (11x11 grid,
+// 1229 actions). Smaller boards are embedded in the center of the larger grid.
+// This enables training a single network on multiple board sizes.
+class StarGambitUnifiedGS : public GameState {
+ public:
+  using UAS = UnifiedActionSpace;
+
+  // Constructor with variant selection (defaults to Battle)
+  explicit StarGambitUnifiedGS(StarGambitVariant variant = StarGambitVariant::BATTLE);
+
+  // Copy constructor
+  StarGambitUnifiedGS(const StarGambitUnifiedGS& other) = default;
+
+  [[nodiscard]] std::unique_ptr<GameState> copy() const noexcept override;
+
+  [[nodiscard]] bool operator==(const GameState& other) const noexcept override;
+
+  void hash(absl::HashState h) const override;
+
+  [[nodiscard]] uint8_t current_player() const noexcept override {
+    return current_player_;
+  }
+
+  [[nodiscard]] uint32_t current_turn() const noexcept override {
+    return turn_;
+  }
+
+  // Always returns unified action space size (1229)
+  [[nodiscard]] uint32_t num_moves() const noexcept override {
+    return UAS::NUM_MOVES;
+  }
+
+  [[nodiscard]] uint8_t num_players() const noexcept override {
+    return NUM_PLAYERS;
+  }
+
+  [[nodiscard]] Vector<uint8_t> valid_moves() const noexcept override;
+
+  void play_move(uint32_t move) override;
+
+  [[nodiscard]] std::optional<Vector<float>> scores() const noexcept override;
+
+  // Always returns [32, 11, 11] tensor
+  [[nodiscard]] Tensor<float, 3> canonicalized() const noexcept override;
+
+  [[nodiscard]] uint8_t num_symmetries() const noexcept override {
+    return NUM_SYMMETRIES;
+  }
+
+  [[nodiscard]] std::vector<PlayHistory> symmetries(
+      const PlayHistory& base) const noexcept override;
+
+  [[nodiscard]] std::string dump() const noexcept override;
+
+  void minimize_storage() override;
+
+  // Unified-specific accessors
+  [[nodiscard]] StarGambitVariant variant() const { return variant_; }
+  [[nodiscard]] int board_side() const { return config_.board_side; }
+  [[nodiscard]] int embedding_offset() const { return embedding_offset_; }
+
+  // Helper methods
+  [[nodiscard]] bool is_turn_one() const { return turn_ == 1 || turn_ == 2; }
+  [[nodiscard]] bool has_taken_action() const { return has_taken_action_; }
+
+  // Find unit by player, type, and slot (returns nullptr if not found/dead)
+  [[nodiscard]] Unit* find_unit_by_slot(uint8_t player, UnitType type, uint8_t slot);
+  [[nodiscard]] const Unit* find_unit_by_slot(uint8_t player, UnitType type, uint8_t slot) const;
+
+  // Get next available slot for a unit type
+  [[nodiscard]] int get_next_slot(uint8_t player, UnitType type) const;
+
+  // Python binding support methods
+  [[nodiscard]] std::vector<UnitInfo> get_units() const;
+  [[nodiscard]] FireInfo get_fire_info(uint32_t move) const;
+
+  // Variant accessors for Python
+  [[nodiscard]] StarGambitVariant get_variant() const noexcept { return variant_; }
+  [[nodiscard]] std::string get_variant_name() const noexcept {
+    switch (variant_) {
+      case StarGambitVariant::SKIRMISH: return "Skirmish";
+      case StarGambitVariant::CLASH: return "Clash";
+      case StarGambitVariant::BATTLE: return "Battle";
+    }
+    return "Unknown";
+  }
+
+ private:
+  // Runtime variant and configuration
+  StarGambitVariant variant_;
+  VariantConfig config_;
+  int embedding_offset_;  // 0 for Battle, 1 for Skirmish/Clash
+
+  // Non-templated hex lookup helpers
+  [[nodiscard]] int hex_to_index_rt(const Hex& h) const;
+  [[nodiscard]] Hex index_to_hex_rt(int index) const;
+  [[nodiscard]] bool hex_in_bounds_rt(const Hex& h) const;
+
+  // Convert hex to unified 2D position (with embedding offset and optional rotation)
+  [[nodiscard]] std::pair<int, int> hex_to_unified_2d(const Hex& h, bool apply_p1_rotation) const;
+
+  // Encode/decode spatial actions with embedding
+  [[nodiscard]] int encode_spatial_action(int row, int col, int slot, bool is_p1) const;
+  void decode_spatial_action(int action_idx, int& row, int& col, int& slot, bool is_p1) const;
+
+  // Movement computation
+  MoveResult compute_fighter_move(const Unit& unit, int direction) const;
+  MoveResult compute_cruiser_move(const Unit& unit, int direction) const;
+  MoveResult compute_dreadnought_move(const Unit& unit, int direction) const;
+
+  // Get all hexes currently occupied by any unit
+  std::vector<Hex> get_all_occupied_hexes() const;
+
+  // Check if a hex is occupied (optionally excluding a specific unit)
+  bool is_hex_occupied(const Hex& h, int exclude_unit_idx = -1) const;
+
+  // Find unit at hex (returns -1 if none)
+  int find_unit_at_hex(const Hex& h) const;
+
+  // Check if new position would collide
+  bool would_collide(const std::vector<Hex>& new_hexes, int exclude_unit_idx) const;
+
+  // Movement validation
+  bool is_fighter_move_valid(const Unit& unit, int direction) const;
+  bool is_cruiser_move_valid(const Unit& unit, int direction) const;
+  bool is_dreadnought_move_valid(const Unit& unit, int direction) const;
+
+  // Fire validation
+  bool is_fire_valid(const Unit& unit, int cannon_idx) const;
+  bool has_target_in_range(const Unit& unit, int cannon_idx) const;
+
+  // Deploy validation
+  bool is_deploy_valid(UnitType type, int facing) const;
+
+  // End turn validation
+  bool is_end_turn_valid() const;
+
+  // Execute movement
+  void execute_fighter_move(int slot, int direction);
+  void execute_cruiser_move(int slot, int direction);
+  void execute_dreadnought_move(int slot, int direction);
+
+  // Execute fire
+  struct FireResult {
+    bool hit;
+    int target_unit_idx;
+    int damage;
+    int range;
+  };
+  FireResult execute_fire(const Unit& unit, int cannon_idx);
+
+  // Execute deploy
+  void execute_deploy(UnitType type, int facing);
+
+  // Execute end turn
+  void execute_end_turn();
+
+  // Apply damage to a unit
+  bool apply_damage(int unit_idx, int damage);
+
+  // Reset per-turn state
+  void reset_turn_state();
+
+  // Check for game end conditions
+  void check_game_end();
+
+  // Check for threefold repetition
+  bool check_repetition();
+
+  // Compute position hash for repetition
+  uint64_t compute_position_hash() const;
+
+  // Game state
+  std::vector<Unit> units_;
+  std::array<std::array<uint8_t, NUM_UNIT_TYPES>, NUM_PLAYERS> reserves_;
+  uint8_t current_player_{0};
+  uint32_t turn_{1};
+  bool has_taken_action_{false};
+  bool game_over_{false};
+  int8_t winner_{-1};
 
   // Position history for threefold repetition
   std::vector<uint64_t> position_history_;

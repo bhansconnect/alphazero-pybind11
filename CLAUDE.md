@@ -12,7 +12,7 @@ This project uses a conda environment called `torch`:
 conda activate torch
 ```
 
-The `.claude/settings.local.json` is configured to use this environment's Python.
+A SessionStart hook (`.claude/hooks/activate-conda.sh`) automatically activates this environment in Claude Code sessions via `CLAUDE_ENV_FILE`.
 
 ## Build Commands
 

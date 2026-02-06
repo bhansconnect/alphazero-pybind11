@@ -347,6 +347,16 @@ SKIRMISH = GameConfig(3, 1, 0, board_side=5)
 CLASH = GameConfig(3, 2, 1, board_side=5)
 BATTLE = GameConfig(4, 3, 2, board_side=6)
 
+# Unified uses 11x11 grid-based encoding (not hex-based)
+# Override with correct values matching UnifiedActionSpace in C++
+UNIFIED = GameConfig(4, 3, 2, board_side=6)  # Base config
+UNIFIED.board_dim = 11  # Grid dimension for unified
+UNIFIED.num_hexes = 121  # 11 * 11 grid cells
+UNIFIED.hex_actions = 11 * 11 * 10  # 1210 spatial actions
+UNIFIED.deploy_offset = 1210
+UNIFIED.end_turn_offset = 1228
+UNIFIED.num_moves = 1229
+
 # Direction names
 DIRECTION_NAMES = ['E', 'NE', 'NW', 'W', 'SW', 'SE']
 FIGHTER_MOVE_NAMES = ['f', 'fl', 'fr']
@@ -1187,16 +1197,32 @@ def print_help():
     print("  status                 - Show current configuration")
 
 
+def select_unified_variant():
+    """Select a variant when playing with unified (multi-size) network."""
+    print("\nSelect variant for unified network:")
+    print("  1. Skirmish (3F, 1C, 0D)")
+    print("  2. Clash (3F, 2C, 1D)")
+    print("  3. Battle (4F, 3C, 2D)")
+
+    variant_input = input("Variant (1/2/3) [1]: ").strip()
+    if variant_input == '2':
+        return alphazero.StarGambitVariant.CLASH
+    elif variant_input == '3':
+        return alphazero.StarGambitVariant.BATTLE
+    return alphazero.StarGambitVariant.SKIRMISH
+
+
 def main():
     print("=== Star Gambit Interactive Player ===\n")
 
     # Game size selection
     print("Select game size:")
-    print("  1. Skirmish (3F, 1C, 0D)")
-    print("  2. Clash (3F, 2C, 1D)")
-    print("  3. Battle (4F, 3C, 2D)")
+    print("  1. Skirmish (3F, 1C, 0D) - single size")
+    print("  2. Clash (3F, 2C, 1D) - single size")
+    print("  3. Battle (4F, 3C, 2D) - single size")
+    print("  4. Unified (multi-size network) - plays any variant")
 
-    size_input = input("Size (1/2/3) [1]: ").strip()
+    size_input = input("Size (1/2/3/4) [1]: ").strip()
     if size_input == '2':
         game = alphazero.StarGambitClashGS()
         game_class = alphazero.StarGambitClashGS
@@ -1205,6 +1231,13 @@ def main():
         game = alphazero.StarGambitBattleGS()
         game_class = alphazero.StarGambitBattleGS
         cfg = BATTLE
+    elif size_input == '4':
+        # Unified mode - select variant then create unified game
+        variant = select_unified_variant()
+        game = alphazero.StarGambitUnifiedGS(variant)
+        game_class = alphazero.StarGambitUnifiedGS
+        cfg = UNIFIED
+        print(f"Playing {game.get_variant_name()} variant with unified network")
     else:
         game = alphazero.StarGambitSkirmishGS()
         game_class = alphazero.StarGambitSkirmishGS

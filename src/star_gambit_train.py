@@ -3,6 +3,7 @@
 
 This script configures game_runner.py for Star Gambit training.
 Supports all three variants: Skirmish, Clash, and Battle.
+Also supports Multi-size mode that trains a single network for all sizes.
 Run with: python src/star_gambit_train.py
 """
 
@@ -14,12 +15,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import alphazero
 import game_runner
+from size_distribution import SizeDistribution, DEFAULT_CURRICULUM, new_game_multi
+from per_size_stats import PerSizeStatistics
 
 # === Game Variants ===
 VARIANTS = {
-    '1': ('skirmish', alphazero.StarGambitSkirmishGS, '3F, 1C, 0D - 39 actions, 5-side board'),
-    '2': ('clash', alphazero.StarGambitClashGS, '3F, 2C, 1D - 55 actions, 5-side board'),
-    '3': ('battle', alphazero.StarGambitBattleGS, '4F, 3C, 2D - 75 actions, 6-side board'),
+    '1': ('skirmish', alphazero.StarGambitSkirmishGS, '3F, 1C, 0D - single size, 5-side board'),
+    '2': ('clash', alphazero.StarGambitClashGS, '3F, 2C, 1D - single size, 5-side board'),
+    '3': ('battle', alphazero.StarGambitBattleGS, '4F, 3C, 2D - single size, 6-side board'),
+    '4': ('unified', alphazero.StarGambitUnifiedGS, 'Multi-size unified (curriculum learning)'),
 }
 
 # Variant-specific opening lengths (half-life of temperature decay)
@@ -27,33 +31,54 @@ OPENING_LENGTHS = {
     'skirmish': 8,
     'clash': 10,
     'battle': 12,
+    'unified': 10,  # Weighted average
 }
 
 # === Game Configuration (set by select_variant) ===
 Game = None
 game_name = None
 variant_name = None
+multi_size_mode = False
+size_distribution = None  # SizeDistribution for multi-size mode
+per_size_stats = None  # PerSizeStatistics for multi-size mode
 
 
 def select_variant():
     """Prompt user to select a game variant."""
-    global Game, game_name, variant_name
+    global Game, game_name, variant_name, multi_size_mode, size_distribution, per_size_stats
 
     print("Select Star Gambit variant:")
     for key, (name, _, desc) in VARIANTS.items():
         print(f"  {key}. {name.capitalize()} ({desc})")
 
-    variant_input = input("Variant (1/2/3) [1]: ").strip() or '1'
+    variant_input = input("Variant (1/2/3/4) [1]: ").strip() or '1'
     if variant_input not in VARIANTS:
         print(f"Invalid selection '{variant_input}', defaulting to Skirmish")
         variant_input = '1'
 
     variant_name, Game, _ = VARIANTS[variant_input]
     game_name = f"star_gambit_{variant_name}"
-    print(f"Selected: {variant_name.capitalize()}\n")
+
+    # Check if multi-size mode
+    if variant_name == 'unified':
+        multi_size_mode = True
+        size_distribution = SizeDistribution(DEFAULT_CURRICULUM)
+        per_size_stats = PerSizeStatistics()
+        print(f"Selected: Multi-size Unified (Fixup + curriculum learning)")
+        print(f"  Initial distribution: {size_distribution.summary()}")
+    else:
+        multi_size_mode = False
+        size_distribution = None
+        per_size_stats = None
+        print(f"Selected: {variant_name.capitalize()}")
+
+    print()
 
 
 def new_game():
+    """Create a new game instance, with variant sampling for multi-size mode."""
+    if multi_size_mode and size_distribution is not None:
+        return new_game_multi(size_distribution)
     return Game()
 
 
@@ -65,6 +90,10 @@ channels = 16          # 16 channels per layer
 kernel_size = 3        # 3x3 kernels
 dense_net = True       # DenseNet tends to train faster
 star_gambit_spatial = True  # Use spatial policy head with canonicalized actions
+
+# Multi-size specific options (only used when unified variant is selected)
+use_fixup = False      # Use Fixup initialization (set by configure_game_runner)
+multi_size = False     # Enable multi-size support (set by configure_game_runner)
 
 # === MCTS Configuration ===
 nn_selfplay_mcts_depth = 300       # Full search for quality games
@@ -124,6 +153,8 @@ experiment_name = None
 
 def configure_game_runner():
     """Override game_runner module globals with Star Gambit settings."""
+    global use_fixup, multi_size
+
     game_runner.Game = Game
     game_runner.game_name = game_name
     game_runner.new_game = new_game
@@ -133,15 +164,32 @@ def configure_game_runner():
     game_runner.HIST_LOCATION = os.path.join("data", "history", variant_name)
     game_runner.TMP_HIST_LOCATION = os.path.join("data", "tmp_history", variant_name)
 
+    # Enable Fixup and multi-size for unified mode
+    if multi_size_mode:
+        use_fixup = True
+        multi_size = True
+
     # Network
     game_runner.depth = depth
     game_runner.channels = channels
     game_runner.kernel_size = kernel_size
     game_runner.dense_net = dense_net
     game_runner.star_gambit_spatial = star_gambit_spatial
+    game_runner.use_fixup = use_fixup
+    game_runner.multi_size = multi_size
     game_runner.network_name = network_name
     game_runner.experiment_name = experiment_name
     game_runner.lr_milestone = lr_milestone
+
+    # Multi-size specific: pass distribution and stats for curriculum updates
+    if multi_size_mode:
+        game_runner.size_distribution = size_distribution
+        game_runner.per_size_stats = per_size_stats
+        game_runner.multi_size_mode = True
+    else:
+        game_runner.size_distribution = None
+        game_runner.per_size_stats = None
+        game_runner.multi_size_mode = False
 
     # MCTS
     game_runner.nn_selfplay_mcts_depth = nn_selfplay_mcts_depth

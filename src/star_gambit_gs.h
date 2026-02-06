@@ -49,7 +49,7 @@ struct BattleConfig {
 // ============================================================================
 
 constexpr int NUM_PLAYERS = 2;
-constexpr int NUM_SYMMETRIES = 1;  // No augmentation - canonicalization exploits symmetry
+constexpr int NUM_SYMMETRIES = 2;  // Identity + NW-SE diagonal mirror
 
 // Unit type constants
 constexpr int NUM_UNIT_TYPES = 4;
@@ -381,13 +381,13 @@ bool has_line_of_sight(const Hex& from, int direction, int distance,
                        const std::vector<Hex>& occupied_hexes);
 
 // ============================================================================
-// Hex-Based Action Space Encoding
+// Spatial Action Space Encoding
 // ============================================================================
 
-// Per-hex action slots (10 total)
+// Per-position action slots (10 total)
 // Movement slots: 0-4 (relative to unit's facing)
 // Fire slots: 5-9 (relative to unit's facing)
-enum class HexAction : uint8_t {
+enum class SpatialAction : uint8_t {
   MOVE_FORWARD = 0,       // All units except dreadnought
   MOVE_FORWARD_LEFT = 1,  // All units
   MOVE_FORWARD_RIGHT = 2, // All units
@@ -400,16 +400,29 @@ enum class HexAction : uint8_t {
   FIRE_REAR_RIGHT = 9     // Dreadnought (rr cannon)
 };
 
-constexpr int ACTIONS_PER_HEX = 10;
+constexpr int ACTIONS_PER_POSITION = 10;
+
+// Slot map for canonicalization: swaps left/right directions
+// Used for both 180° rotation (P1 canonicalization) and NW-SE mirror symmetry
+// Self-inverse: SLOT_MAP[SLOT_MAP[x]] == x
+constexpr int SLOT_MAP[10] = {0, 2, 1, 4, 3, 5, 7, 6, 9, 8};
+
+// Direction map for NW-SE mirror symmetry: [5, 4, 3, 2, 1, 0]
+// E→SE, NE→SW, NW→W, W→NW, SW→NE, SE→E
+constexpr int MIRROR_DIRECTION_MAP[6] = {5, 4, 3, 2, 1, 0};
 
 template<typename Config>
 struct ActionSpace {
-  // Hex count for this board size
+  // Board dimensions for 2D spatial representation
+  static constexpr int BOARD_DIM = 2 * Config::BOARD_SIDE - 1;
+
+  // Hex count for this board size (for reference)
   static constexpr int NUM_HEXES = 3 * Config::BOARD_SIDE * Config::BOARD_SIDE
                                    - 3 * Config::BOARD_SIDE + 1;
 
-  // Hex-based actions: select anchor hex, then action slot
-  static constexpr int HEX_ACTIONS = NUM_HEXES * ACTIONS_PER_HEX;
+  // Spatial actions: full BOARD_DIM x BOARD_DIM x 10 grid
+  // Invalid positions (non-hex cells) are simply never marked valid
+  static constexpr int SPATIAL_ACTIONS = BOARD_DIM * BOARD_DIM * ACTIONS_PER_POSITION;
 
   // Deploy actions: 3 unit types * 6 facings (mask invalid facings at runtime)
   static constexpr int DEPLOY_ACTIONS = 3 * 6;
@@ -417,24 +430,35 @@ struct ActionSpace {
   // End turn
   static constexpr int END_TURN_ACTIONS = 1;
 
-  // Action layout: [hex_actions | deploy_actions | end_turn]
-  static constexpr int HEX_ACTION_OFFSET = 0;
-  static constexpr int DEPLOY_OFFSET = HEX_ACTION_OFFSET + HEX_ACTIONS;
+  // Action layout: [spatial_actions | deploy_actions | end_turn]
+  static constexpr int SPATIAL_OFFSET = 0;
+  static constexpr int DEPLOY_OFFSET = SPATIAL_OFFSET + SPATIAL_ACTIONS;
   static constexpr int END_TURN_OFFSET = DEPLOY_OFFSET + DEPLOY_ACTIONS;
 
   // Total actions
   static constexpr int NUM_MOVES = END_TURN_OFFSET + END_TURN_ACTIONS;
 
-  // Helper: encode hex action
-  static constexpr int encode_hex_action(int hex_idx, HexAction action) {
-    return HEX_ACTION_OFFSET + hex_idx * ACTIONS_PER_HEX + static_cast<int>(action);
+  // Helper: encode spatial action from (row, col, action_type)
+  static constexpr int encode_spatial_action(int row, int col, int action_type) {
+    return row * BOARD_DIM * ACTIONS_PER_POSITION + col * ACTIONS_PER_POSITION + action_type;
   }
 
-  // Helper: decode hex action
-  static constexpr void decode_hex_action(int action_idx, int& hex_idx, HexAction& action) {
-    int rel = action_idx - HEX_ACTION_OFFSET;
-    hex_idx = rel / ACTIONS_PER_HEX;
-    action = static_cast<HexAction>(rel % ACTIONS_PER_HEX);
+  // Helper: decode spatial action to (row, col, action_type)
+  static constexpr void decode_spatial_action(int action_idx, int& row, int& col, int& action_type) {
+    action_type = action_idx % ACTIONS_PER_POSITION;
+    int pos = action_idx / ACTIONS_PER_POSITION;
+    col = pos % BOARD_DIM;
+    row = pos / BOARD_DIM;
+  }
+
+  // Helper: check if (row, col) corresponds to a valid hex position
+  static bool is_valid_hex_pos(int row, int col) {
+    int q = row - (Config::BOARD_SIDE - 1);
+    int r = col - (Config::BOARD_SIDE - 1);
+    int s = -q - r;
+    return std::abs(q) < Config::BOARD_SIDE &&
+           std::abs(r) < Config::BOARD_SIDE &&
+           std::abs(s) < Config::BOARD_SIDE;
   }
 
   // Helper: encode deploy action
@@ -451,7 +475,6 @@ struct ActionSpace {
 
   // Canonical representation shape
   // Observations are canonicalized to current player's perspective
-  static constexpr int BOARD_DIM = 2 * Config::BOARD_SIDE - 1;
 
   // Type-based presence: 4 types × 2 (my/opponent) = 8
   static constexpr int TYPE_PRESENCE_CHANNELS = 8;

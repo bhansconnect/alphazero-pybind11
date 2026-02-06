@@ -119,6 +119,7 @@ depth = 4
 channels = 12
 kernel_size = 5
 dense_net = True
+star_gambit_spatial = False  # Star Gambit-specific spatial policy head
 network_name = "densenet" if dense_net else "resnet"
 lr_milestone = 150
 
@@ -965,6 +966,7 @@ if __name__ == "__main__":
         lr_milestone=lr_milestone,
         dense_net=dense_net,
         kernel_size=kernel_size,
+        star_gambit_spatial=star_gambit_spatial,
     )
 
     if start == 0:

@@ -13,8 +13,9 @@ torch.backends.cudnn.benchmark = True
 
 NNArgs = namedtuple(
     "NNArgs",
-    ["num_channels", "depth", "kernel_size", "lr_milestone", "dense_net", "lr", "cv"],
-    defaults=(40, False, 0.01, 1.5),
+    ["num_channels", "depth", "kernel_size", "lr_milestone", "dense_net", "lr", "cv",
+     "star_gambit_spatial"],
+    defaults=(40, False, 0.01, 1.5, False),
 )
 
 
@@ -106,6 +107,7 @@ class NNArch(nn.Module):
         # game params
         in_channels, in_x, in_y = game.CANONICAL_SHAPE()
         self.dense_net = args.dense_net
+        self.star_gambit_spatial = args.star_gambit_spatial
 
         if not self.dense_net:
             self.conv1 = conv(
@@ -151,9 +153,33 @@ class NNArch(nn.Module):
 
         self.pi_bn = nn.BatchNorm2d(32)
         self.pi_relu = nn.ReLU(inplace=True)
-        self.pi_flatten = nn.Flatten()
-        self.pi_fc1 = nn.Linear(in_x * in_y * 32, game.NUM_MOVES())
-        self.pi_softmax = nn.LogSoftmax(1)
+
+        if self.star_gambit_spatial:
+            # Star Gambit spatial policy head:
+            # - Spatial actions: BOARD_DIM x BOARD_DIM x 10 action types per position
+            # - Global actions: 18 deploy + 1 end_turn = 19
+            self.sg_board_dim = in_x  # 9 for Skirmish/Clash, 11 for Battle
+            self.sg_spatial_actions = in_x * in_y * 10
+            self.sg_global_actions = 19  # deploy (18) + end_turn (1)
+
+            # Spatial policy: conv output (B, 10, H, W) -> (B, H*W*10)
+            self.pi_conv2 = conv1x1(32, 10)
+            self.pi_bn2 = nn.BatchNorm2d(10)
+
+            # Global policy: for deploy and end_turn actions
+            self.pi_flatten = nn.Flatten()
+            self.pi_global = nn.Sequential(
+                nn.Linear(32 * in_x * in_y, 64),
+                nn.ReLU(inplace=True),
+                nn.Linear(64, self.sg_global_actions),
+                nn.LayerNorm(self.sg_global_actions)
+            )
+            self.pi_softmax = nn.LogSoftmax(1)
+        else:
+            # Standard fully-connected policy head
+            self.pi_flatten = nn.Flatten()
+            self.pi_fc1 = nn.Linear(in_x * in_y * 32, game.NUM_MOVES())
+            self.pi_softmax = nn.LogSoftmax(1)
 
     @tracy_zone
     def forward(self, s):
@@ -178,9 +204,29 @@ class NNArch(nn.Module):
             pi = self.pi_conv(s)
             pi = self.pi_bn(pi)
             pi = self.pi_relu(pi)
-            pi = self.pi_flatten(pi)
-            pi = self.pi_fc1(pi)
-            pi = self.pi_softmax(pi)
+
+            if self.star_gambit_spatial:
+                # Spatial policy head for Star Gambit
+                # s_flat for global actions, pi for spatial
+                s_flat = self.pi_flatten(pi)
+
+                # Spatial actions: (B, 32, H, W) -> (B, 10, H, W) -> (B, H, W, 10) -> (B, H*W*10)
+                pi_spatial = self.pi_conv2(pi)
+                pi_spatial = self.pi_bn2(pi_spatial)
+                pi_spatial = pi_spatial.permute(0, 2, 3, 1)  # (B, H, W, 10)
+                batch_size = pi_spatial.shape[0]
+                pi_spatial = pi_spatial.reshape(batch_size, -1)  # (B, H*W*10)
+
+                # Global actions: deploy + end_turn
+                pi_global = self.pi_global(s_flat)  # (B, 19)
+
+                # Concatenate: spatial + global
+                pi = torch.cat([pi_spatial, pi_global], dim=1)  # (B, H*W*10 + 19)
+                pi = self.pi_softmax(pi)
+            else:
+                pi = self.pi_flatten(pi)
+                pi = self.pi_fc1(pi)
+                pi = self.pi_softmax(pi)
 
         return v, pi
 

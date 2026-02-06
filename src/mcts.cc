@@ -1,6 +1,7 @@
 #include "mcts.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <random>
 
@@ -56,6 +57,7 @@ Node* Node::best_child(float cpuct, float fpu_reduction) noexcept {
 
 void MCTS::update_root(const GameState& gs, uint32_t move) {
   depth_ = 0;
+  total_leaf_depth_ = 0;
   if (root_.children.empty()) {
     root_.add_children(gs.valid_moves());
   }
@@ -92,6 +94,7 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
     current_ = current_->best_child(cpuct_, fpu_reduction_);
     leaf->play_move(current_->move);
   }
+  total_leaf_depth_ += path_.size();
   if (current_->n == 0) {
     current_->player = leaf->current_player();
     current_->scores = leaf->scores();
@@ -205,6 +208,21 @@ uint32_t MCTS::pick_move(const Vector<float>& p) {
     }
   }
   throw std::runtime_error{"this shouldn't be possible."};
+}
+
+float MCTS::normalized_root_entropy() const noexcept {
+  auto k = static_cast<float>(root_.children.size());
+  if (k <= 1 || root_.n <= 1) return 0.0f;
+  auto log_k = std::log(k);
+  auto entropy = 0.0f;
+  auto total_n = static_cast<float>(root_.n);
+  for (const auto& c : root_.children) {
+    if (c.n > 0) {
+      auto p = static_cast<float>(c.n) / total_n;
+      entropy -= p * std::log(p);
+    }
+  }
+  return entropy / log_k;
 }
 
 }  // namespace alphazero

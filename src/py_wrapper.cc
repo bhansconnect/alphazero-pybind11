@@ -243,6 +243,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def("cache_hits", &PlayManager::cache_hits)
       .def("cache_misses", &PlayManager::cache_misses)
       .def("avg_game_length", &PlayManager::avg_game_length)
+      .def("avg_leaf_depth", &PlayManager::avg_leaf_depth)
+      .def("avg_search_entropy", &PlayManager::avg_search_entropy)
       .def("play", &PlayManager::play, py::call_guard<py::gil_scoped_release>())
       .def("pop_game", &PlayManager::pop_game,
            py::call_guard<py::gil_scoped_release>())

@@ -212,13 +212,13 @@ std::vector<CannonInfo> get_cannon_info(UnitType type) {
       break;
 
     case UnitType::DREADNOUGHT:
-      // Cannon order: 0=rr, 1=fr, 2=fl, 3=rl (see Python DREAD_CANNON_NAMES)
+      // Cannon order: 0=rl, 1=fl, 2=fr, 3=rr (left-to-right, see header comment)
       // hexes[1] = SW (rear-right from pilot view), hexes[2] = W (rear-left from pilot view)
-      // Right cannons fire forward (facing), left cannons fire forward-left (facing+1)
-      cannons.push_back({0, 1});   // Cannon 0 (rr): from SW hex, fires forward (facing)
-      cannons.push_back({0, 0});   // Cannon 1 (fr): from anchor, fires forward (facing)
-      cannons.push_back({1, 0});   // Cannon 2 (fl): from anchor, fires forward-left (facing+1)
-      cannons.push_back({1, 2});   // Cannon 3 (rl): from W hex, fires forward-left (facing+1)
+      // Left cannons fire forward-left (facing+1), right cannons fire forward (facing)
+      cannons.push_back({1, 2});   // Cannon 0 (rl): from W hex, fires forward-left (facing+1)
+      cannons.push_back({1, 0});   // Cannon 1 (fl): from anchor, fires forward-left (facing+1)
+      cannons.push_back({0, 0});   // Cannon 2 (fr): from anchor, fires forward (facing)
+      cannons.push_back({0, 1});   // Cannon 3 (rr): from SW hex, fires forward (facing)
       break;
 
     case UnitType::PORTAL:
@@ -880,14 +880,14 @@ Vector<uint8_t> StarGambitGS<Config>::valid_moves() const noexcept {
 
         case UnitType::DREADNOUGHT:
           // Dreadnought: fire forward-left, forward-right, rear-left, rear-right (slots 6-9)
-          // Dread cannons: 0=rr, 1=fr, 2=fl, 3=rl
-          if (is_fire_valid(unit, 2))  // Cannon 2 = fl (forward-left)
+          // Dread cannons: 0=rl, 1=fl, 2=fr, 3=rr
+          if (is_fire_valid(unit, 1))  // Cannon 1 = fl (forward-left)
             valids(encode_action(row, col, static_cast<int>(SpatialAction::FIRE_FORWARD_LEFT))) = 1;
-          if (is_fire_valid(unit, 1))  // Cannon 1 = fr (forward-right)
+          if (is_fire_valid(unit, 2))  // Cannon 2 = fr (forward-right)
             valids(encode_action(row, col, static_cast<int>(SpatialAction::FIRE_FORWARD_RIGHT))) = 1;
-          if (is_fire_valid(unit, 3))  // Cannon 3 = rl (rear-left)
+          if (is_fire_valid(unit, 0))  // Cannon 0 = rl (rear-left)
             valids(encode_action(row, col, static_cast<int>(SpatialAction::FIRE_REAR_LEFT))) = 1;
-          if (is_fire_valid(unit, 0))  // Cannon 0 = rr (rear-right)
+          if (is_fire_valid(unit, 3))  // Cannon 3 = rr (rear-right)
             valids(encode_action(row, col, static_cast<int>(SpatialAction::FIRE_REAR_RIGHT))) = 1;
           break;
 
@@ -1183,7 +1183,7 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
         if (unit->type == UnitType::CRUISER) {
           execute_fire(*unit, 0);  // Cannon 0 = left (forward-left)
         } else if (unit->type == UnitType::DREADNOUGHT) {
-          execute_fire(*unit, 2);  // Cannon 2 = fl (forward-left)
+          execute_fire(*unit, 1);  // Cannon 1 = fl (forward-left)
         }
         // Fighter cannot fire forward-left
         break;
@@ -1192,21 +1192,21 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
         if (unit->type == UnitType::CRUISER) {
           execute_fire(*unit, 2);  // Cannon 2 = right (forward-right)
         } else if (unit->type == UnitType::DREADNOUGHT) {
-          execute_fire(*unit, 1);  // Cannon 1 = fr (forward-right)
+          execute_fire(*unit, 2);  // Cannon 2 = fr (forward-right)
         }
         // Fighter cannot fire forward-right
         break;
 
       case SpatialAction::FIRE_REAR_LEFT:
         if (unit->type == UnitType::DREADNOUGHT) {
-          execute_fire(*unit, 3);  // Cannon 3 = rl (rear-left)
+          execute_fire(*unit, 0);  // Cannon 0 = rl (rear-left)
         }
         // Only dreadnought has rear cannons
         break;
 
       case SpatialAction::FIRE_REAR_RIGHT:
         if (unit->type == UnitType::DREADNOUGHT) {
-          execute_fire(*unit, 0);  // Cannon 0 = rr (rear-right)
+          execute_fire(*unit, 3);  // Cannon 3 = rr (rear-right)
         }
         // Only dreadnought has rear cannons
         break;
@@ -1536,23 +1536,38 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
     auto cannons = get_cannon_info(unit.type);
 
     for (size_t cannon_idx = 0; cannon_idx < cannons.size(); ++cannon_idx) {
+      // Map each (unit_type, cannon_idx) to its named observation slot:
+      // Slots: 0=forward, 1=forward-left, 2=forward-right, 3=rear-left, 4=rear-right
       int slot;
-      switch (cannons[cannon_idx].direction_offset) {
-        case 0: slot = 0; break;   // forward
-        case 1: slot = 1; break;   // forward-left
-        case -1: slot = 2; break;  // forward-right
-        case 2: slot = 3; break;   // rear-left
-        case -2: slot = 4; break;  // rear-right
+      switch (unit.type) {
+        case UnitType::FIGHTER:
+          slot = 0;  // idx 0 → forward
+          break;
+        case UnitType::CRUISER:
+          switch (cannon_idx) {
+            case 0: slot = 1; break;  // fl (forward-left)
+            case 1: slot = 0; break;  // fwd (forward)
+            case 2: slot = 2; break;  // fr (forward-right)
+            default: continue;
+          }
+          break;
+        case UnitType::DREADNOUGHT:
+          switch (cannon_idx) {
+            case 0: slot = 3; break;  // rl (rear-left)
+            case 1: slot = 1; break;  // fl (forward-left)
+            case 2: slot = 2; break;  // fr (forward-right)
+            case 3: slot = 4; break;  // rr (rear-right)
+            default: continue;
+          }
+          break;
         default: continue;
       }
 
       int cannon_ch = ch + slot;
       bool fired = (unit.cannons_fired >> cannon_idx) & 1;
       if (!fired) {
-        // Broadcast cannon availability to all unit hexes
-        for (const auto& h : unit_hexes) {
-          set_hex(cannon_ch, h, 1.0f);
-        }
+        // Write all cannon observations to anchor hex
+        set_hex(cannon_ch, unit_hexes[0], 1.0f);
       }
     }
   }
@@ -2165,17 +2180,17 @@ FireInfo StarGambitGS<Config>::get_fire_info(uint32_t move) const {
       break;
     case SpatialAction::FIRE_FORWARD_LEFT:
       if (unit->type == UnitType::CRUISER) cannon_idx = 0;
-      else if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 2;
+      else if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 1;
       break;
     case SpatialAction::FIRE_FORWARD_RIGHT:
       if (unit->type == UnitType::CRUISER) cannon_idx = 2;
-      else if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 1;
+      else if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 2;
       break;
     case SpatialAction::FIRE_REAR_LEFT:
-      if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 3;
+      if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 0;
       break;
     case SpatialAction::FIRE_REAR_RIGHT:
-      if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 0;
+      if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 3;
       break;
     default:
       return result;

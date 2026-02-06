@@ -2369,16 +2369,20 @@ TEST(CharacterizationDreadnought, CannonSourceHexes) {
   auto cannons = get_cannon_info(UnitType::DREADNOUGHT);
   ASSERT_EQ(cannons.size(), 4u);
 
-  // Dread cannons (order: rr, fr, fl, rl):
-  // Cannon 0 (rr): from hexes[1] (rear-right hex), fires forward
-  // Cannon 1 (fr): from hexes[0] (anchor), fires forward
-  // Cannon 2 (fl): from hexes[0] (anchor), fires forward-left
-  // Cannon 3 (rl): from hexes[2] (rear-left hex), fires forward-left
+  // Dread cannons (order: rl, fl, fr, rr — left-to-right):
+  // Cannon 0 (rl): from hexes[2] (rear-left hex), fires forward-left
+  // Cannon 1 (fl): from hexes[0] (anchor), fires forward-left
+  // Cannon 2 (fr): from hexes[0] (anchor), fires forward
+  // Cannon 3 (rr): from hexes[1] (rear-right hex), fires forward
 
-  EXPECT_EQ(cannons[0].source_hex_idx, 1) << "rr fires from hexes[1]";  // rear-right hex
-  EXPECT_EQ(cannons[1].source_hex_idx, 0) << "fr fires from hexes[0]";  // anchor
-  EXPECT_EQ(cannons[2].source_hex_idx, 0) << "fl fires from hexes[0]";  // anchor
-  EXPECT_EQ(cannons[3].source_hex_idx, 2) << "rl fires from hexes[2]";  // rear-left hex
+  EXPECT_EQ(cannons[0].source_hex_idx, 2) << "rl fires from hexes[2]";  // rear-left hex
+  EXPECT_EQ(cannons[0].direction_offset, 1) << "rl fires forward-left";
+  EXPECT_EQ(cannons[1].source_hex_idx, 0) << "fl fires from hexes[0]";  // anchor
+  EXPECT_EQ(cannons[1].direction_offset, 1) << "fl fires forward-left";
+  EXPECT_EQ(cannons[2].source_hex_idx, 0) << "fr fires from hexes[0]";  // anchor
+  EXPECT_EQ(cannons[2].direction_offset, 0) << "fr fires forward";
+  EXPECT_EQ(cannons[3].source_hex_idx, 1) << "rr fires from hexes[1]";  // rear-right hex
+  EXPECT_EQ(cannons[3].direction_offset, 0) << "rr fires forward";
 }
 
 // -----------------------------------------------------------------------------

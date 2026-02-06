@@ -1028,6 +1028,9 @@ typename StarGambitGS<Config>::FireResult StarGambitGS<Config>::execute_fire(
 
 template<typename Config>
 void StarGambitGS<Config>::execute_deploy(UnitType type, int facing) {
+  // Clear position history - reserves changed, old positions can't repeat
+  position_history_.clear();
+
   Hex deploy_hex = get_deploy_hex(current_player_, Config::BOARD_SIDE);
 
   Hex anchor;
@@ -1217,11 +1220,7 @@ bool StarGambitGS<Config>::check_repetition() {
 
 template<typename Config>
 void StarGambitGS<Config>::execute_end_turn() {
-  // Check for threefold repetition (also adds position to history)
-  if (check_repetition()) {
-    return;
-  }
-
+  // Switch player first - repetition check happens at start of new player's turn
   current_player_ = 1 - current_player_;
   turn_++;
   has_taken_action_ = false;
@@ -1229,6 +1228,11 @@ void StarGambitGS<Config>::execute_end_turn() {
   if (turn_ > MAX_TURNS) {
     game_over_ = true;
     winner_ = 2;
+    return;
+  }
+
+  // Check for threefold repetition at start of new player's turn
+  if (check_repetition()) {
     return;
   }
 

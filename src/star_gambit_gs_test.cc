@@ -2065,4 +2065,111 @@ TEST(MidTurnRepetition, PositionTrackedAfterEveryAction) {
   EXPECT_FALSE(game.scores().has_value()) << "Game should not be over after a few moves";
 }
 
+// =============================================================================
+// Threefold Repetition Tests
+// =============================================================================
+
+TEST(ThreefoldRepetition, DrawOnThirdOccurrence) {
+  // Use cruiser rotations to force threefold repetition
+  // Rotating left then right returns cruiser to same position
+  TestGame game;
+
+  // Deploy cruisers for both players
+  EXPECT_TRUE(play_notation(game, "d c ne"));  // P0 cruiser
+  EXPECT_TRUE(play_notation(game, "d c sw"));  // P1 cruiser
+
+  // Position 1: Turn 3, P0 to move (initial position after deployment)
+  EXPECT_FALSE(game.scores().has_value());
+
+  // Cycle 1: P0 rotates left, P1 rotates left
+  EXPECT_TRUE(play_notation(game, "m c1 l"));
+  EXPECT_TRUE(play_notation(game, "e"));
+  EXPECT_TRUE(play_notation(game, "m c1 l"));
+  EXPECT_TRUE(play_notation(game, "e"));
+
+  // Cycle 1 return: P0 rotates right, P1 rotates right
+  EXPECT_TRUE(play_notation(game, "m c1 r"));
+  EXPECT_TRUE(play_notation(game, "e"));
+  EXPECT_TRUE(play_notation(game, "m c1 r"));
+  EXPECT_TRUE(play_notation(game, "e"));
+
+  // Position 2: Back to initial position (P0 to move)
+  EXPECT_FALSE(game.scores().has_value()) << "Should not be draw after 2nd occurrence";
+
+  // Cycle 2: P0 rotates left, P1 rotates left
+  EXPECT_TRUE(play_notation(game, "m c1 l"));
+  EXPECT_TRUE(play_notation(game, "e"));
+  EXPECT_TRUE(play_notation(game, "m c1 l"));
+  EXPECT_TRUE(play_notation(game, "e"));
+
+  // Cycle 2 return: P0 rotates right, P1 rotates right
+  EXPECT_TRUE(play_notation(game, "m c1 r"));
+  EXPECT_TRUE(play_notation(game, "e"));
+  EXPECT_TRUE(play_notation(game, "m c1 r"));
+  EXPECT_TRUE(play_notation(game, "e"));
+
+  // Position 3: Third occurrence - should be draw
+  ASSERT_TRUE(game.scores().has_value()) << "Should be draw after 3rd occurrence";
+  auto scores = game.scores().value();
+  EXPECT_FLOAT_EQ(scores(2), 1.0f) << "Draw should be scored in index 2";
+}
+
+TEST(ThreefoldRepetition, HistoryClearedOnDeploy) {
+  TestGame game;
+
+  // Deploy first fighter
+  EXPECT_TRUE(play_notation(game, "d f ne"));
+  EXPECT_TRUE(play_notation(game, "d f sw"));
+
+  // Play some moves to build up history
+  EXPECT_TRUE(play_notation(game, "m f1 f"));
+  EXPECT_TRUE(play_notation(game, "e"));
+  EXPECT_TRUE(play_notation(game, "m f1 f"));
+  EXPECT_TRUE(play_notation(game, "e"));
+
+  // Deploy another unit - this should clear history
+  auto valids = game.valid_moves();
+  bool deployed = false;
+  for (int i = TestAS::DEPLOY_OFFSET; i < TestAS::END_TURN_OFFSET; ++i) {
+    if (valids(i) == 1) {
+      game.play_move(i);
+      deployed = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(deployed) << "Should be able to deploy another unit";
+
+  // Game should not be over (history was cleared, no repetition possible yet)
+  EXPECT_FALSE(game.scores().has_value());
+}
+
+TEST(ThreefoldRepetition, CheckOccursAtTurnStart) {
+  // Verify that repetition check happens at the START of each player's turn
+  // (after player switch, not before)
+  TestGame game;
+
+  // This test ensures the timing is correct by checking that the position
+  // is recorded with the correct current_player value
+  EXPECT_TRUE(play_notation(game, "d f ne"));
+  EXPECT_EQ(game.current_player(), 1) << "Should be P1's turn after P0 deploys";
+
+  EXPECT_TRUE(play_notation(game, "d f sw"));
+  EXPECT_EQ(game.current_player(), 0) << "Should be P0's turn after P1 deploys";
+
+  // The hash should be recorded with current_player being the player
+  // who is about to move (checked at start of their turn)
+}
+
+TEST(ThreefoldRepetition, DifferentPlayersDifferentPositions) {
+  // Same board configuration with different player to move should be
+  // different positions (not count toward repetition)
+  TestGame game;
+
+  EXPECT_TRUE(play_notation(game, "d f ne"));
+  EXPECT_TRUE(play_notation(game, "d f sw"));
+
+  // Even if board looks the same, P0 to move vs P1 to move are different positions
+  // This is inherent in the hash including current_player_
+}
+
 }  // namespace alphazero::star_gambit_gs

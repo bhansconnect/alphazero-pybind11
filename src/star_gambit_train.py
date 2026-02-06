@@ -79,7 +79,7 @@ EVAL_TEMP = 0.5                    # Temperature during evaluation
 FINAL_TEMP = 0.2                   # Final temperature
 
 # === Batch Configuration ===
-SELF_PLAY_BATCH_SIZE = 128         # Games per batch
+SELF_PLAY_BATCH_SIZE = 256         # Games per batch
 SELF_PLAY_CONCURRENT_BATCH_MULT = 2
 SELF_PLAY_CHUNKS = 4
 TRAIN_BATCH_SIZE = 1024            # Training batch size
@@ -114,7 +114,7 @@ compare_past = 20                  # Iterations back to compare ELO
 # === Training Iterations ===
 bootstrap_iters = 0
 start = 0
-iters = 200
+iters = 400
 lr_milestone = 150
 
 # === Derived (set in main after variant selection) ===

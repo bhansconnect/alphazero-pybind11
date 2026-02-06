@@ -407,9 +407,14 @@ constexpr int ACTIONS_PER_POSITION = 10;
 // Self-inverse: SLOT_MAP[SLOT_MAP[x]] == x
 constexpr int SLOT_MAP[10] = {0, 2, 1, 4, 3, 5, 7, 6, 9, 8};
 
-// Direction map for NW-SE mirror symmetry: [5, 4, 3, 2, 1, 0]
-// E→SE, NE→SW, NW→W, W→NW, SW→NE, SE→E
-constexpr int MIRROR_DIRECTION_MAP[6] = {5, 4, 3, 2, 1, 0};
+// Direction map for NW-axis mirror symmetry: [4, 3, 2, 1, 0, 5]
+// Mirror about the NW direction (toward opponent's portal)
+// NW stays NW, SE stays SE, NE↔W, E↔SW
+constexpr int MIRROR_DIRECTION_MAP[6] = {4, 3, 2, 1, 0, 5};
+
+// Deploy action mirror for dreadnoughts uses a different axis (between NE/NW)
+// Swaps 0↔3, 1↔2, 4↔5 to preserve valid dreadnought facings {0,1,2,3}
+constexpr int DEPLOY_MIRROR_D[6] = {3, 2, 1, 0, 5, 4};
 
 template<typename Config>
 struct ActionSpace {

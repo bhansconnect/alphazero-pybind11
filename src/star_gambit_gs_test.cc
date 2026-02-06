@@ -948,7 +948,8 @@ TEST(MirrorSymmetry, ObservationTransposeCorrect) {
 }
 
 TEST(MirrorSymmetry, PolicySpatialActionsRemapped) {
-  // Spatial action at (row, col, slot) should map to (col, row, SLOT_MAP[slot])
+  // Spatial action at (row, col, slot) should map to
+  // (BOARD_DIM-1-row, row+col-(BOARD_SIDE-1), SLOT_MAP[slot])
   TestGame game;
 
   PlayHistory base;
@@ -958,9 +959,14 @@ TEST(MirrorSymmetry, PolicySpatialActionsRemapped) {
   base.pi = Vector<float>(TestAS::NUM_MOVES);
   base.pi.setZero();
 
+  constexpr int BOARD_DIM = TestAS::BOARD_DIM;
+  constexpr int BOARD_SIDE = TestConfig::BOARD_SIDE;
+
   // Set specific spatial actions to verify remapping
-  // Action at (row=2, col=5, slot=1) should map to (row=5, col=2, slot=2)
-  // because SLOT_MAP[1] = 2 (forward-left -> forward-right)
+  // Action at (row=2, col=5, slot=1) with NW-axis mirror:
+  // new_row = 8 - 2 = 6
+  // new_col = 2 + 5 - 4 = 3
+  // new_slot = SLOT_MAP[1] = 2 (forward-left -> forward-right)
   int test_row = 2, test_col = 5, test_slot = 1;
   int base_action = TestAS::encode_spatial_action(test_row, test_col, test_slot);
   base.pi(base_action) = 1.0f;
@@ -968,9 +974,10 @@ TEST(MirrorSymmetry, PolicySpatialActionsRemapped) {
   auto syms = game.symmetries(base);
   const auto& mirrored = syms[1];
 
-  // Expected mirrored action: (col, row, SLOT_MAP[slot]) = (5, 2, 2)
-  int expected_row = test_col, expected_col = test_row;
-  int expected_slot = SLOT_MAP[test_slot];
+  // Expected mirrored action with NW-axis position transform
+  int expected_row = (BOARD_DIM - 1) - test_row;  // 8 - 2 = 6
+  int expected_col = test_row + test_col - (BOARD_SIDE - 1);  // 2 + 5 - 4 = 3
+  int expected_slot = SLOT_MAP[test_slot];  // SLOT_MAP[1] = 2
   int expected_action = TestAS::encode_spatial_action(expected_row, expected_col, expected_slot);
 
   EXPECT_FLOAT_EQ(mirrored.pi(expected_action), 1.0f)
@@ -979,7 +986,9 @@ TEST(MirrorSymmetry, PolicySpatialActionsRemapped) {
 }
 
 TEST(MirrorSymmetry, PolicyDeployActionsRemapped) {
-  // Deploy action with facing f should map to MIRROR_DIRECTION_MAP[f]
+  // Deploy actions use:
+  // Fighters/Cruisers: MIRROR_DIRECTION_MAP (axis NW, swaps 0↔4, 1↔3)
+  // Dreadnoughts: DEPLOY_MIRROR_D (axis between NE/NW, swaps 0↔3, 1↔2, 4↔5)
   TestGame game;
 
   PlayHistory base;
@@ -989,21 +998,52 @@ TEST(MirrorSymmetry, PolicyDeployActionsRemapped) {
   base.pi = Vector<float>(TestAS::NUM_MOVES);
   base.pi.setZero();
 
-  // Test each facing direction for fighter deploy
+  // Test Fighter (type 0) - uses MIRROR_DIRECTION_MAP
   for (int facing = 0; facing < 6; ++facing) {
     base.pi.setZero();
-    int deploy_action = TestAS::encode_deploy(0, facing);  // Fighter with this facing
+    int deploy_action = TestAS::encode_deploy(0, facing);
     base.pi(deploy_action) = 1.0f;
 
     auto syms = game.symmetries(base);
     const auto& mirrored = syms[1];
 
-    // Expected mirrored facing
     int expected_facing = MIRROR_DIRECTION_MAP[facing];
     int expected_action = TestAS::encode_deploy(0, expected_facing);
 
     EXPECT_FLOAT_EQ(mirrored.pi(expected_action), 1.0f)
-        << "Deploy facing " << facing << " should map to " << expected_facing;
+        << "Fighter deploy facing " << facing << " should map to " << expected_facing;
+  }
+
+  // Test Cruiser (type 1) - uses MIRROR_DIRECTION_MAP
+  for (int facing = 0; facing < 6; ++facing) {
+    base.pi.setZero();
+    int deploy_action = TestAS::encode_deploy(1, facing);
+    base.pi(deploy_action) = 1.0f;
+
+    auto syms = game.symmetries(base);
+    const auto& mirrored = syms[1];
+
+    int expected_facing = MIRROR_DIRECTION_MAP[facing];
+    int expected_action = TestAS::encode_deploy(1, expected_facing);
+
+    EXPECT_FLOAT_EQ(mirrored.pi(expected_action), 1.0f)
+        << "Cruiser deploy facing " << facing << " should map to " << expected_facing;
+  }
+
+  // Test Dreadnought (type 2) - uses DEPLOY_MIRROR_D
+  for (int facing = 0; facing < 6; ++facing) {
+    base.pi.setZero();
+    int deploy_action = TestAS::encode_deploy(2, facing);
+    base.pi(deploy_action) = 1.0f;
+
+    auto syms = game.symmetries(base);
+    const auto& mirrored = syms[1];
+
+    int expected_facing = DEPLOY_MIRROR_D[facing];
+    int expected_action = TestAS::encode_deploy(2, expected_facing);
+
+    EXPECT_FLOAT_EQ(mirrored.pi(expected_action), 1.0f)
+        << "Dreadnought deploy facing " << facing << " should map to " << expected_facing;
   }
 }
 
@@ -1048,6 +1088,7 @@ TEST(MirrorSymmetry, ValuePreserved) {
 
 TEST(MirrorSymmetry, FacingChannelsRemapped) {
   // Facing channels (9-14) should be remapped via MIRROR_DIRECTION_MAP
+  // Position transform: (row, col) → (BOARD_DIM-1-row, row+col-(BOARD_SIDE-1))
   TestGame game;
 
   // Deploy a fighter with facing NE (direction 1)
@@ -1065,23 +1106,198 @@ TEST(MirrorSymmetry, FacingChannelsRemapped) {
   auto syms = game.symmetries(base);
   const auto& mirrored = syms[1];
 
+  constexpr int BOARD_DIM = TestAS::BOARD_DIM;
+  constexpr int BOARD_SIDE = TestConfig::BOARD_SIDE;
+
   // Find a position where there's facing info in the base observation
   // and verify it's remapped correctly in the mirror
-  for (int row = 0; row < TestAS::BOARD_DIM; ++row) {
-    for (int col = 0; col < TestAS::BOARD_DIM; ++col) {
+  for (int row = 0; row < BOARD_DIM; ++row) {
+    for (int col = 0; col < BOARD_DIM; ++col) {
       for (int dir = 0; dir < 6; ++dir) {
         float base_val = base.canonical(9 + dir, row, col);
         if (base_val > 0) {
           // This position has a unit facing direction 'dir'
-          // In the mirror, it should be at (col, row) facing MIRROR_DIRECTION_MAP[dir]
+          // NW-axis mirror position: (row, col) → (BOARD_DIM-1-row, row+col-(BOARD_SIDE-1))
+          int new_row = (BOARD_DIM - 1) - row;
+          int new_col = row + col - (BOARD_SIDE - 1);
           int expected_dir = MIRROR_DIRECTION_MAP[dir];
-          float mirrored_val = mirrored.canonical(9 + expected_dir, col, row);
-          EXPECT_FLOAT_EQ(mirrored_val, base_val)
-              << "Facing at (" << row << "," << col << ") dir=" << dir
-              << " should map to (" << col << "," << row << ") dir=" << expected_dir;
+
+          if (new_col >= 0 && new_col < BOARD_DIM) {
+            float mirrored_val = mirrored.canonical(9 + expected_dir, new_row, new_col);
+            EXPECT_FLOAT_EQ(mirrored_val, base_val)
+                << "Facing at (" << row << "," << col << ") dir=" << dir
+                << " should map to (" << new_row << "," << new_col << ") dir=" << expected_dir;
+          }
         }
       }
     }
+  }
+}
+
+TEST(MirrorSymmetry, DeployMirrorPreservesValidFacings) {
+  // Verify that mirroring deploy actions preserves valid facings
+  // Fighter/Cruiser valid canonical facings: {1, 2, 3}
+  // Dreadnought valid canonical facings: {0, 1, 2, 3}
+  //
+  // MIRROR_DIRECTION_MAP = [4, 3, 2, 1, 0, 5] preserves F/C validity:
+  //   1→3, 2→2, 3→1 => {1,2,3} → {3,2,1} = {1,2,3} ✓
+  // DEPLOY_MIRROR_D = [3, 2, 1, 0, 5, 4] preserves Dread validity:
+  //   0→3, 1→2, 2→1, 3→0 => {0,1,2,3} → {3,2,1,0} = {0,1,2,3} ✓
+  TestGame game;
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.5f, 0.5f, 0.0f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+
+  // Test Fighter - valid facings {1, 2, 3}
+  for (int facing : {1, 2, 3}) {
+    base.pi.setZero();
+    base.pi(TestAS::encode_deploy(0, facing)) = 1.0f;
+
+    auto syms = game.symmetries(base);
+    const auto& mirrored = syms[1];
+
+    // Find where the probability went
+    int mirrored_facing = -1;
+    for (int f = 0; f < 6; ++f) {
+      if (mirrored.pi(TestAS::encode_deploy(0, f)) > 0.5f) {
+        mirrored_facing = f;
+        break;
+      }
+    }
+
+    // Verify mirrored facing is valid for fighters
+    EXPECT_TRUE(mirrored_facing == 1 || mirrored_facing == 2 || mirrored_facing == 3)
+        << "Fighter facing " << facing << " mirrored to invalid facing " << mirrored_facing;
+  }
+
+  // Test Cruiser - valid facings {1, 2, 3}
+  for (int facing : {1, 2, 3}) {
+    base.pi.setZero();
+    base.pi(TestAS::encode_deploy(1, facing)) = 1.0f;
+
+    auto syms = game.symmetries(base);
+    const auto& mirrored = syms[1];
+
+    int mirrored_facing = -1;
+    for (int f = 0; f < 6; ++f) {
+      if (mirrored.pi(TestAS::encode_deploy(1, f)) > 0.5f) {
+        mirrored_facing = f;
+        break;
+      }
+    }
+
+    EXPECT_TRUE(mirrored_facing == 1 || mirrored_facing == 2 || mirrored_facing == 3)
+        << "Cruiser facing " << facing << " mirrored to invalid facing " << mirrored_facing;
+  }
+
+  // Test Dreadnought - valid facings {0, 1, 2, 3}
+  for (int facing : {0, 1, 2, 3}) {
+    base.pi.setZero();
+    base.pi(TestAS::encode_deploy(2, facing)) = 1.0f;
+
+    auto syms = game.symmetries(base);
+    const auto& mirrored = syms[1];
+
+    int mirrored_facing = -1;
+    for (int f = 0; f < 6; ++f) {
+      if (mirrored.pi(TestAS::encode_deploy(2, f)) > 0.5f) {
+        mirrored_facing = f;
+        break;
+      }
+    }
+
+    EXPECT_TRUE(mirrored_facing >= 0 && mirrored_facing <= 3)
+        << "Dreadnought facing " << facing << " mirrored to invalid facing " << mirrored_facing;
+  }
+}
+
+TEST(MirrorSymmetry, DeployMirrorRoundTrip) {
+  // Applying mirror twice should return to original
+  TestGame game;
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.5f, 0.5f, 0.0f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+
+  // Test all unit types with their valid facings
+  std::vector<std::pair<int, int>> test_cases = {
+    {0, 1}, {0, 2}, {0, 3},  // Fighter facings
+    {1, 1}, {1, 2}, {1, 3},  // Cruiser facings
+    {2, 0}, {2, 1}, {2, 2}, {2, 3}  // Dreadnought facings
+  };
+
+  for (const auto& [type_idx, facing] : test_cases) {
+    base.pi.setZero();
+    int original_action = TestAS::encode_deploy(type_idx, facing);
+    base.pi(original_action) = 1.0f;
+
+    auto syms = game.symmetries(base);
+    const auto& mirrored = syms[1];
+
+    // Apply mirror again
+    auto syms2 = game.symmetries(mirrored);
+    const auto& double_mirrored = syms2[1];
+
+    // Should be back to original
+    EXPECT_FLOAT_EQ(double_mirrored.pi(original_action), 1.0f)
+        << "Deploy type=" << type_idx << " facing=" << facing
+        << " not preserved after double mirror";
+  }
+}
+
+TEST(MirrorSymmetry, DeployMirrorMapsCorrectly) {
+  // Verify the specific mappings using MIRROR_DIRECTION_MAP = [4, 3, 2, 1, 0, 5]:
+  // F/C: 0→4, 1→3, 2→2, 3→1, 4→0, 5→5 (valid facings: 1↔3, 2→2)
+  // Dread uses DEPLOY_MIRROR_D = [3, 2, 1, 0, 5, 4]:
+  //   0↔3, 1↔2 (valid facings all swap within valid set)
+  TestGame game;
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.5f, 0.5f, 0.0f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+
+  // Fighter/Cruiser expected mappings for valid facings using MIRROR_DIRECTION_MAP
+  // MIRROR_DIRECTION_MAP = [4, 3, 2, 1, 0, 5]
+  std::vector<std::pair<int, int>> fc_expected = {
+    {1, 3}, {2, 2}, {3, 1}  // Valid facings only
+  };
+
+  for (int type_idx = 0; type_idx < 2; ++type_idx) {  // Fighter and Cruiser
+    for (const auto& [from_facing, to_facing] : fc_expected) {
+      base.pi.setZero();
+      base.pi(TestAS::encode_deploy(type_idx, from_facing)) = 1.0f;
+
+      auto syms = game.symmetries(base);
+      const auto& mirrored = syms[1];
+
+      EXPECT_FLOAT_EQ(mirrored.pi(TestAS::encode_deploy(type_idx, to_facing)), 1.0f)
+          << (type_idx == 0 ? "Fighter" : "Cruiser")
+          << " facing " << from_facing << " should map to " << to_facing;
+    }
+  }
+
+  // Dreadnought expected mappings for valid facings using DEPLOY_MIRROR_D
+  // DEPLOY_MIRROR_D = [3, 2, 1, 0, 5, 4]
+  std::vector<std::pair<int, int>> dread_expected = {
+    {0, 3}, {1, 2}, {2, 1}, {3, 0}  // Valid facings only
+  };
+
+  for (const auto& [from_facing, to_facing] : dread_expected) {
+    base.pi.setZero();
+    base.pi(TestAS::encode_deploy(2, from_facing)) = 1.0f;
+
+    auto syms = game.symmetries(base);
+    const auto& mirrored = syms[1];
+
+    EXPECT_FLOAT_EQ(mirrored.pi(TestAS::encode_deploy(2, to_facing)), 1.0f)
+        << "Dreadnought facing " << from_facing << " should map to " << to_facing;
   }
 }
 

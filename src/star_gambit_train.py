@@ -207,34 +207,25 @@ def get_next_run_name(experiment_name, base_name):
         import aim
         repo = aim.Repo(".")
 
-        # Find all runs in this experiment with matching base name
-        max_suffix = 0
-        base_prefix = base_name + "-"
-
+        # Collect all run names from this experiment
+        existing_names = set()
         for run in repo.iter_runs():
-            if run.experiment != experiment_name:
-                continue
-            name = run.name or ""
-            if name == base_name:
-                # Exact match with no suffix means we need at least -1
-                max_suffix = max(max_suffix, 1)
-            elif name.startswith(base_prefix):
-                # Has our prefix, try to extract suffix number
-                suffix = name[len(base_prefix):]
-                try:
-                    num = int(suffix)
-                    max_suffix = max(max_suffix, num + 1)
-                except ValueError:
-                    pass
+            if run.experiment == experiment_name and run.name:
+                existing_names.add(run.name)
 
-        if max_suffix > 0:
-            return f"{base_name}-{max_suffix}"
-        return base_name
+        # Find next available suffix
+        if base_name not in existing_names:
+            return base_name
+
+        suffix = 1
+        while f"{base_name}-{suffix}" in existing_names:
+            suffix += 1
+        return f"{base_name}-{suffix}"
 
     except ImportError:
         return base_name
-    except Exception:
-        # If anything goes wrong with Aim, just use base name
+    except Exception as e:
+        print(f"Warning: Could not query Aim for existing runs: {e}")
         return base_name
 
 

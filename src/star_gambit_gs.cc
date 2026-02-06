@@ -92,8 +92,10 @@ std::vector<Hex> get_unit_hexes(UnitType type, const Hex& anchor, int facing) {
       break;
 
     case UnitType::CRUISER: {
-      Hex front = hex_neighbor(anchor, facing);
-      hexes.push_back(front);
+      // Anchor is FRONT, rear is computed in opposite direction
+      int rear_dir = OPPOSITE_DIRECTION[facing];
+      Hex rear = hex_neighbor(anchor, rear_dir);
+      hexes.push_back(rear);
       break;
     }
 
@@ -203,10 +205,10 @@ std::vector<CannonInfo> get_cannon_info(UnitType type) {
       break;
 
     case UnitType::CRUISER:
-      // Cannon order: left (+1), forward (0), right (-1) from front hex
-      cannons.push_back({1, 1});   // Left cannon (counter-clockwise from facing)
-      cannons.push_back({0, 1});   // Forward cannon
-      cannons.push_back({-1, 1});  // Right cannon (clockwise from facing)
+      // Cannon order: left (+1), forward (0), right (-1) from anchor/front hex
+      cannons.push_back({1, 0});   // Left cannon (counter-clockwise from facing)
+      cannons.push_back({0, 0});   // Forward cannon
+      cannons.push_back({-1, 0});  // Right cannon (clockwise from facing)
       break;
 
     case UnitType::DREADNOUGHT:
@@ -729,6 +731,11 @@ bool StarGambitGS<Config>::is_deploy_valid(UnitType type, int facing) const {
     int anchor_dir = get_dreadnought_anchor_dir(current_player_, facing);
     Hex anchor = hex_neighbor(deploy_hex, anchor_dir);
     new_unit_hexes = get_unit_hexes(type, anchor, facing);
+  } else if (type == UnitType::CRUISER) {
+    // For cruisers, rear goes at deploy position, anchor (front) is offset
+    // Anchor is one hex in the facing direction from deploy_hex
+    Hex anchor = hex_neighbor(deploy_hex, facing);
+    new_unit_hexes = get_unit_hexes(type, anchor, facing);
   } else {
     new_unit_hexes = get_unit_hexes(type, deploy_hex, facing);
   }
@@ -755,7 +762,7 @@ bool StarGambitGS<Config>::is_end_turn_valid() const {
 }
 
 // =============================================================================
-// valid_moves() with new action encoding
+// valid_moves() with hex-based action encoding
 // =============================================================================
 
 template<typename Config>
@@ -767,86 +774,106 @@ Vector<uint8_t> StarGambitGS<Config>::valid_moves() const noexcept {
     return valids;
   }
 
-  // Fighter moves
+  // Hex-based actions for movement and firing
   if (!is_turn_one()) {
-    for (int slot = 0; slot < Config::MAX_FIGHTERS; ++slot) {
-      const Unit* unit = find_unit_by_slot(current_player_, UnitType::FIGHTER, slot);
-      if (!unit || !unit->is_alive() || unit->moves_left == 0) continue;
+    // Iterate through all units of current player
+    for (const auto& unit : units_) {
+      if (unit.player != current_player_ || !unit.is_alive()) continue;
+      if (unit.type == UnitType::PORTAL) continue;
 
-      for (int dir = 0; dir < FIGHTER_MOVE_DIRS; ++dir) {
-        if (is_fighter_move_valid(*unit, dir)) {
-          valids(AS::FIGHTER_MOVE_OFFSET + slot * FIGHTER_MOVE_DIRS + dir) = 1;
+      // Get anchor hex index
+      Hex anchor = {unit.anchor_q, unit.anchor_r};
+      int hex_idx = hex_to_index_fast<Config::BOARD_SIDE>(anchor);
+      if (hex_idx < 0) continue;  // Invalid hex
+
+      // Set valid movement actions based on unit type
+      if (unit.moves_left > 0) {
+        switch (unit.type) {
+          case UnitType::FIGHTER:
+            // Fighter: forward, forward-left, forward-right (slots 0, 1, 2)
+            if (is_fighter_move_valid(unit, static_cast<int>(FighterMove::FORWARD)))
+              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD)) = 1;
+            if (is_fighter_move_valid(unit, static_cast<int>(FighterMove::FORWARD_LEFT)))
+              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD_LEFT)) = 1;
+            if (is_fighter_move_valid(unit, static_cast<int>(FighterMove::FORWARD_RIGHT)))
+              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD_RIGHT)) = 1;
+            break;
+
+          case UnitType::CRUISER:
+            // Cruiser: forward, forward-left, forward-right, rotate-left, rotate-right
+            if (is_cruiser_move_valid(unit, static_cast<int>(CruiserMove::FORWARD)))
+              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD)) = 1;
+            if (is_cruiser_move_valid(unit, static_cast<int>(CruiserMove::FORWARD_LEFT)))
+              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD_LEFT)) = 1;
+            if (is_cruiser_move_valid(unit, static_cast<int>(CruiserMove::FORWARD_RIGHT)))
+              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD_RIGHT)) = 1;
+            if (is_cruiser_move_valid(unit, static_cast<int>(CruiserMove::ROTATE_LEFT)))
+              valids(AS::encode_hex_action(hex_idx, HexAction::ROTATE_LEFT)) = 1;
+            if (is_cruiser_move_valid(unit, static_cast<int>(CruiserMove::ROTATE_RIGHT)))
+              valids(AS::encode_hex_action(hex_idx, HexAction::ROTATE_RIGHT)) = 1;
+            break;
+
+          case UnitType::DREADNOUGHT:
+            // Dreadnought: forward-left, forward-right, rotate-left, rotate-right (no forward)
+            if (is_dreadnought_move_valid(unit, static_cast<int>(DreadnoughtMove::FORWARD_LEFT)))
+              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD_LEFT)) = 1;
+            if (is_dreadnought_move_valid(unit, static_cast<int>(DreadnoughtMove::FORWARD_RIGHT)))
+              valids(AS::encode_hex_action(hex_idx, HexAction::MOVE_FORWARD_RIGHT)) = 1;
+            if (is_dreadnought_move_valid(unit, static_cast<int>(DreadnoughtMove::ROTATE_LEFT)))
+              valids(AS::encode_hex_action(hex_idx, HexAction::ROTATE_LEFT)) = 1;
+            if (is_dreadnought_move_valid(unit, static_cast<int>(DreadnoughtMove::ROTATE_RIGHT)))
+              valids(AS::encode_hex_action(hex_idx, HexAction::ROTATE_RIGHT)) = 1;
+            break;
+
+          default:
+            break;
         }
       }
-    }
 
-    // Cruiser moves
-    for (int slot = 0; slot < Config::MAX_CRUISERS; ++slot) {
-      const Unit* unit = find_unit_by_slot(current_player_, UnitType::CRUISER, slot);
-      if (!unit || !unit->is_alive() || unit->moves_left == 0) continue;
+      // Set valid fire actions based on unit type
+      switch (unit.type) {
+        case UnitType::FIGHTER:
+          // Fighter: fire forward (slot 5)
+          if (is_fire_valid(unit, 0))  // Cannon 0 = forward
+            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_FORWARD)) = 1;
+          break;
 
-      for (int dir = 0; dir < CRUISER_MOVE_DIRS; ++dir) {
-        if (is_cruiser_move_valid(*unit, dir)) {
-          valids(AS::CRUISER_MOVE_OFFSET + slot * CRUISER_MOVE_DIRS + dir) = 1;
-        }
-      }
-    }
+        case UnitType::CRUISER:
+          // Cruiser: fire forward, forward-left, forward-right (slots 5, 6, 7)
+          // Cruiser cannons: 0=left(fl), 1=forward(f), 2=right(fr)
+          if (is_fire_valid(unit, 1))  // Cannon 1 = forward
+            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_FORWARD)) = 1;
+          if (is_fire_valid(unit, 0))  // Cannon 0 = left (forward-left)
+            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_FORWARD_LEFT)) = 1;
+          if (is_fire_valid(unit, 2))  // Cannon 2 = right (forward-right)
+            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_FORWARD_RIGHT)) = 1;
+          break;
 
-    // Dreadnought moves
-    for (int slot = 0; slot < Config::MAX_DREADNOUGHTS; ++slot) {
-      const Unit* unit = find_unit_by_slot(current_player_, UnitType::DREADNOUGHT, slot);
-      if (!unit || !unit->is_alive() || unit->moves_left == 0) continue;
+        case UnitType::DREADNOUGHT:
+          // Dreadnought: fire forward-left, forward-right, rear-left, rear-right (slots 6-9)
+          // Dread cannons: 0=rr, 1=fr, 2=fl, 3=rl
+          if (is_fire_valid(unit, 2))  // Cannon 2 = fl (forward-left)
+            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_FORWARD_LEFT)) = 1;
+          if (is_fire_valid(unit, 1))  // Cannon 1 = fr (forward-right)
+            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_FORWARD_RIGHT)) = 1;
+          if (is_fire_valid(unit, 3))  // Cannon 3 = rl (rear-left)
+            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_REAR_LEFT)) = 1;
+          if (is_fire_valid(unit, 0))  // Cannon 0 = rr (rear-right)
+            valids(AS::encode_hex_action(hex_idx, HexAction::FIRE_REAR_RIGHT)) = 1;
+          break;
 
-      for (int dir = 0; dir < DREAD_MOVE_DIRS; ++dir) {
-        if (is_dreadnought_move_valid(*unit, dir)) {
-          valids(AS::DREAD_MOVE_OFFSET + slot * DREAD_MOVE_DIRS + dir) = 1;
-        }
-      }
-    }
-
-    // Fighter fires
-    for (int slot = 0; slot < Config::MAX_FIGHTERS; ++slot) {
-      const Unit* unit = find_unit_by_slot(current_player_, UnitType::FIGHTER, slot);
-      if (!unit) continue;
-
-      for (int cannon = 0; cannon < FIGHTER_CANNONS; ++cannon) {
-        if (is_fire_valid(*unit, cannon)) {
-          valids(AS::FIGHTER_FIRE_OFFSET + slot * FIGHTER_CANNONS + cannon) = 1;
-        }
-      }
-    }
-
-    // Cruiser fires
-    for (int slot = 0; slot < Config::MAX_CRUISERS; ++slot) {
-      const Unit* unit = find_unit_by_slot(current_player_, UnitType::CRUISER, slot);
-      if (!unit) continue;
-
-      for (int cannon = 0; cannon < CRUISER_CANNONS; ++cannon) {
-        if (is_fire_valid(*unit, cannon)) {
-          valids(AS::CRUISER_FIRE_OFFSET + slot * CRUISER_CANNONS + cannon) = 1;
-        }
-      }
-    }
-
-    // Dreadnought fires
-    for (int slot = 0; slot < Config::MAX_DREADNOUGHTS; ++slot) {
-      const Unit* unit = find_unit_by_slot(current_player_, UnitType::DREADNOUGHT, slot);
-      if (!unit) continue;
-
-      for (int cannon = 0; cannon < DREAD_CANNONS; ++cannon) {
-        if (is_fire_valid(*unit, cannon)) {
-          valids(AS::DREAD_FIRE_OFFSET + slot * DREAD_CANNONS + cannon) = 1;
-        }
+        default:
+          break;
       }
     }
   }
 
-  // Deploy actions
+  // Deploy actions (unchanged encoding)
   for (int type_idx = 0; type_idx < 3; ++type_idx) {
     UnitType type = static_cast<UnitType>(type_idx);
     for (int facing = 0; facing < 6; ++facing) {
       if (is_deploy_valid(type, facing)) {
-        valids(AS::DEPLOY_OFFSET + type_idx * 6 + facing) = 1;
+        valids(AS::encode_deploy(type_idx, facing)) = 1;
       }
     }
   }
@@ -994,6 +1021,10 @@ void StarGambitGS<Config>::execute_deploy(UnitType type, int facing) {
     // For dreadnoughts, one rear hex goes at deploy position, anchor is offset
     int anchor_dir = get_dreadnought_anchor_dir(current_player_, facing);
     anchor = hex_neighbor(deploy_hex, anchor_dir);
+  } else if (type == UnitType::CRUISER) {
+    // For cruisers, rear goes at deploy position, anchor (front) is offset
+    // Anchor is one hex in the facing direction from deploy_hex
+    anchor = hex_neighbor(deploy_hex, facing);
   } else {
     anchor = deploy_hex;
   }
@@ -1017,55 +1048,129 @@ void StarGambitGS<Config>::execute_deploy(UnitType type, int facing) {
 }
 
 // =============================================================================
-// play_move() with new action decoding
+// play_move() with hex-based action decoding
 // =============================================================================
 
 template<typename Config>
 void StarGambitGS<Config>::play_move(uint32_t move) {
-  if (move < static_cast<uint32_t>(AS::CRUISER_MOVE_OFFSET)) {
-    // Fighter move
-    int rel = move - AS::FIGHTER_MOVE_OFFSET;
-    int slot = rel / FIGHTER_MOVE_DIRS;
-    int dir = rel % FIGHTER_MOVE_DIRS;
-    execute_fighter_move(slot, dir);
-  } else if (move < static_cast<uint32_t>(AS::DREAD_MOVE_OFFSET)) {
-    // Cruiser move
-    int rel = move - AS::CRUISER_MOVE_OFFSET;
-    int slot = rel / CRUISER_MOVE_DIRS;
-    int dir = rel % CRUISER_MOVE_DIRS;
-    execute_cruiser_move(slot, dir);
-  } else if (move < static_cast<uint32_t>(AS::FIGHTER_FIRE_OFFSET)) {
-    // Dreadnought move
-    int rel = move - AS::DREAD_MOVE_OFFSET;
-    int slot = rel / DREAD_MOVE_DIRS;
-    int dir = rel % DREAD_MOVE_DIRS;
-    execute_dreadnought_move(slot, dir);
-  } else if (move < static_cast<uint32_t>(AS::CRUISER_FIRE_OFFSET)) {
-    // Fighter fire
-    int rel = move - AS::FIGHTER_FIRE_OFFSET;
-    int slot = rel / FIGHTER_CANNONS;
-    int cannon = rel % FIGHTER_CANNONS;
-    const Unit* unit = find_unit_by_slot(current_player_, UnitType::FIGHTER, slot);
-    if (unit) execute_fire(*unit, cannon);
-  } else if (move < static_cast<uint32_t>(AS::DREAD_FIRE_OFFSET)) {
-    // Cruiser fire
-    int rel = move - AS::CRUISER_FIRE_OFFSET;
-    int slot = rel / CRUISER_CANNONS;
-    int cannon = rel % CRUISER_CANNONS;
-    const Unit* unit = find_unit_by_slot(current_player_, UnitType::CRUISER, slot);
-    if (unit) execute_fire(*unit, cannon);
-  } else if (move < static_cast<uint32_t>(AS::DEPLOY_OFFSET)) {
-    // Dreadnought fire
-    int rel = move - AS::DREAD_FIRE_OFFSET;
-    int slot = rel / DREAD_CANNONS;
-    int cannon = rel % DREAD_CANNONS;
-    const Unit* unit = find_unit_by_slot(current_player_, UnitType::DREADNOUGHT, slot);
-    if (unit) execute_fire(*unit, cannon);
+  if (move < static_cast<uint32_t>(AS::DEPLOY_OFFSET)) {
+    // Hex-based action: decode hex index and action slot
+    int hex_idx;
+    HexAction action;
+    AS::decode_hex_action(static_cast<int>(move), hex_idx, action);
+
+    // Find unit at this anchor hex
+    Hex anchor = index_to_hex_fast<Config::BOARD_SIDE>(hex_idx);
+    Unit* unit = nullptr;
+    for (auto& u : units_) {
+      if (u.player == current_player_ && u.is_alive() &&
+          u.anchor_q == anchor.q && u.anchor_r == anchor.r &&
+          u.type != UnitType::PORTAL) {
+        unit = &u;
+        break;
+      }
+    }
+    if (!unit) return;  // No unit at this hex
+
+    // Execute action based on action slot and unit type
+    switch (action) {
+      case HexAction::MOVE_FORWARD:
+        if (unit->type == UnitType::FIGHTER) {
+          execute_fighter_move(unit->slot, static_cast<int>(FighterMove::FORWARD));
+        } else if (unit->type == UnitType::CRUISER) {
+          execute_cruiser_move(unit->slot, static_cast<int>(CruiserMove::FORWARD));
+        }
+        // Dreadnought cannot move forward
+        break;
+
+      case HexAction::MOVE_FORWARD_LEFT:
+        if (unit->type == UnitType::FIGHTER) {
+          execute_fighter_move(unit->slot, static_cast<int>(FighterMove::FORWARD_LEFT));
+        } else if (unit->type == UnitType::CRUISER) {
+          execute_cruiser_move(unit->slot, static_cast<int>(CruiserMove::FORWARD_LEFT));
+        } else if (unit->type == UnitType::DREADNOUGHT) {
+          execute_dreadnought_move(unit->slot, static_cast<int>(DreadnoughtMove::FORWARD_LEFT));
+        }
+        break;
+
+      case HexAction::MOVE_FORWARD_RIGHT:
+        if (unit->type == UnitType::FIGHTER) {
+          execute_fighter_move(unit->slot, static_cast<int>(FighterMove::FORWARD_RIGHT));
+        } else if (unit->type == UnitType::CRUISER) {
+          execute_cruiser_move(unit->slot, static_cast<int>(CruiserMove::FORWARD_RIGHT));
+        } else if (unit->type == UnitType::DREADNOUGHT) {
+          execute_dreadnought_move(unit->slot, static_cast<int>(DreadnoughtMove::FORWARD_RIGHT));
+        }
+        break;
+
+      case HexAction::ROTATE_LEFT:
+        if (unit->type == UnitType::CRUISER) {
+          execute_cruiser_move(unit->slot, static_cast<int>(CruiserMove::ROTATE_LEFT));
+        } else if (unit->type == UnitType::DREADNOUGHT) {
+          execute_dreadnought_move(unit->slot, static_cast<int>(DreadnoughtMove::ROTATE_LEFT));
+        }
+        // Fighter cannot rotate
+        break;
+
+      case HexAction::ROTATE_RIGHT:
+        if (unit->type == UnitType::CRUISER) {
+          execute_cruiser_move(unit->slot, static_cast<int>(CruiserMove::ROTATE_RIGHT));
+        } else if (unit->type == UnitType::DREADNOUGHT) {
+          execute_dreadnought_move(unit->slot, static_cast<int>(DreadnoughtMove::ROTATE_RIGHT));
+        }
+        // Fighter cannot rotate
+        break;
+
+      case HexAction::FIRE_FORWARD:
+        if (unit->type == UnitType::FIGHTER) {
+          execute_fire(*unit, 0);  // Cannon 0 = forward
+        } else if (unit->type == UnitType::CRUISER) {
+          execute_fire(*unit, 1);  // Cannon 1 = forward
+        }
+        // Dreadnought cannot fire forward
+        break;
+
+      case HexAction::FIRE_FORWARD_LEFT:
+        if (unit->type == UnitType::CRUISER) {
+          execute_fire(*unit, 0);  // Cannon 0 = left (forward-left)
+        } else if (unit->type == UnitType::DREADNOUGHT) {
+          execute_fire(*unit, 2);  // Cannon 2 = fl (forward-left)
+        }
+        // Fighter cannot fire forward-left
+        break;
+
+      case HexAction::FIRE_FORWARD_RIGHT:
+        if (unit->type == UnitType::CRUISER) {
+          execute_fire(*unit, 2);  // Cannon 2 = right (forward-right)
+        } else if (unit->type == UnitType::DREADNOUGHT) {
+          execute_fire(*unit, 1);  // Cannon 1 = fr (forward-right)
+        }
+        // Fighter cannot fire forward-right
+        break;
+
+      case HexAction::FIRE_REAR_LEFT:
+        if (unit->type == UnitType::DREADNOUGHT) {
+          execute_fire(*unit, 3);  // Cannon 3 = rl (rear-left)
+        }
+        // Only dreadnought has rear cannons
+        break;
+
+      case HexAction::FIRE_REAR_RIGHT:
+        if (unit->type == UnitType::DREADNOUGHT) {
+          execute_fire(*unit, 0);  // Cannon 0 = rr (rear-right)
+        }
+        // Only dreadnought has rear cannons
+        break;
+    }
+
+    // After any hex action (move or fire), check for mid-turn threefold repetition
+    if (check_repetition()) {
+      return;  // Game ended due to repetition
+    }
   } else if (move < static_cast<uint32_t>(AS::END_TURN_OFFSET)) {
-    // Deploy
-    int rel = move - AS::DEPLOY_OFFSET;
-    int type_idx = rel / 6;
-    int facing = rel % 6;
+    // Deploy action
+    int type_idx, facing;
+    AS::decode_deploy(static_cast<int>(move), type_idx, facing);
     execute_deploy(static_cast<UnitType>(type_idx), facing);
   } else {
     // End turn
@@ -1077,8 +1182,10 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
 // Other Methods
 // =============================================================================
 
+// Helper: Check for threefold repetition after any action
+// Returns true if game ended due to repetition
 template<typename Config>
-void StarGambitGS<Config>::execute_end_turn() {
+bool StarGambitGS<Config>::check_repetition() {
   position_history_.push_back(compute_position_hash());
 
   uint64_t current_hash = position_history_.back();
@@ -1088,7 +1195,16 @@ void StarGambitGS<Config>::execute_end_turn() {
   }
   if (count >= 3) {
     game_over_ = true;
-    winner_ = 2;
+    winner_ = 2;  // Draw
+    return true;
+  }
+  return false;
+}
+
+template<typename Config>
+void StarGambitGS<Config>::execute_end_turn() {
+  // Check for threefold repetition (also adds position to history)
+  if (check_repetition()) {
     return;
   }
 
@@ -1208,202 +1324,272 @@ uint64_t StarGambitGS<Config>::compute_position_hash() const {
 
 template<typename Config>
 Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
-  Tensor<float, 3> tensor(AS::CANONICAL_SHAPE[0], AS::CANONICAL_SHAPE[1],
-                          AS::CANONICAL_SHAPE[2]);
+  constexpr int BOARD_DIM = AS::BOARD_DIM;
+  Tensor<float, 3> tensor(AS::CANONICAL_SHAPE[0], BOARD_DIM, BOARD_DIM);
   tensor.setZero();
 
-  int channel = 0;
+  // Canonicalization: always show from current player's perspective
+  // When P1 to move: rotate board 180° and swap my/opponent
+  const bool is_p1_to_move = (current_player_ == 1);
+  const int my_player = current_player_;
+  const int opp_player = 1 - current_player_;
+
+  // Helper: get 2D position, rotating 180° for P1
+  auto get_pos = [&](const Hex& h) -> std::pair<int, int> {
+    if (is_p1_to_move) {
+      // Rotate 180°: (q, r) → (-q, -r)
+      Hex rotated = {static_cast<int8_t>(-h.q), static_cast<int8_t>(-h.r)};
+      return hex_to_2d<Config::BOARD_SIDE>(rotated);
+    }
+    return hex_to_2d<Config::BOARD_SIDE>(h);
+  };
+
+  // Helper: rotate facing by 180° for P1
+  auto get_facing = [&](int facing) -> int {
+    if (is_p1_to_move) {
+      return (facing + 3) % 6;
+    }
+    return facing;
+  };
+
+  // Helper: set value at hex position (with rotation)
+  auto set_hex = [&](int channel, const Hex& h, float value = 1.0f) {
+    auto [row, col] = get_pos(h);
+    tensor(channel, row, col) = value;
+  };
+
+  // Helper: broadcast to all valid hexes
+  auto broadcast = [&](int channel, float value) {
+    for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+      Hex h = index_to_hex_fast<Config::BOARD_SIDE>(idx);
+      auto [row, col] = hex_to_2d<Config::BOARD_SIDE>(h);
+      tensor(channel, row, col) = value;
+    }
+  };
+
+  int ch = 0;
 
   // ========================================
-  // SECTION 1: Slot-indexed unit presence
+  // Channel 0: Valid hex mask
   // ========================================
-
-  // Fighter slots (MAX_FIGHTERS * 2 channels)
-  for (int p = 0; p < 2; ++p) {
-    for (int slot = 0; slot < Config::MAX_FIGHTERS; ++slot) {
-      const Unit* unit = find_unit_by_slot(p, UnitType::FIGHTER, slot);
-      if (unit && unit->is_alive()) {
-        auto hexes = get_unit_hexes(unit->type, {unit->anchor_q, unit->anchor_r}, unit->facing);
-        for (const auto& h : hexes) {
-          int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
-          if (idx >= 0 && idx < AS::NUM_HEXES) {
-            tensor(channel, 0, idx) = 1.0f;
-          }
-        }
-      }
-      channel++;
-    }
+  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
+    Hex h = index_to_hex_fast<Config::BOARD_SIDE>(idx);
+    auto [row, col] = hex_to_2d<Config::BOARD_SIDE>(h);
+    tensor(ch, row, col) = 1.0f;
   }
-
-  // Cruiser slots (MAX_CRUISERS * 2 channels)
-  for (int p = 0; p < 2; ++p) {
-    for (int slot = 0; slot < Config::MAX_CRUISERS; ++slot) {
-      const Unit* unit = find_unit_by_slot(p, UnitType::CRUISER, slot);
-      if (unit && unit->is_alive()) {
-        auto hexes = get_unit_hexes(unit->type, {unit->anchor_q, unit->anchor_r}, unit->facing);
-        for (const auto& h : hexes) {
-          int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
-          if (idx >= 0 && idx < AS::NUM_HEXES) {
-            tensor(channel, 0, idx) = 1.0f;
-          }
-        }
-      }
-      channel++;
-    }
-  }
-
-  // Dreadnought slots (MAX_DREADNOUGHTS * 2 channels)
-  for (int p = 0; p < 2; ++p) {
-    for (int slot = 0; slot < Config::MAX_DREADNOUGHTS; ++slot) {
-      const Unit* unit = find_unit_by_slot(p, UnitType::DREADNOUGHT, slot);
-      if (unit && unit->is_alive()) {
-        auto hexes = get_unit_hexes(unit->type, {unit->anchor_q, unit->anchor_r}, unit->facing);
-        for (const auto& h : hexes) {
-          int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
-          if (idx >= 0 && idx < AS::NUM_HEXES) {
-            tensor(channel, 0, idx) = 1.0f;
-          }
-        }
-      }
-      channel++;
-    }
-  }
-
-  // Portal presence (2 channels - one per player)
-  for (int p = 0; p < 2; ++p) {
-    const Unit* portal = find_unit_by_slot(p, UnitType::PORTAL, 0);
-    if (portal && portal->is_alive()) {
-      auto hexes = get_portal_hexes(p, Config::BOARD_SIDE);
-      for (const auto& h : hexes) {
-        int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
-        if (idx >= 0 && idx < AS::NUM_HEXES) {
-          tensor(channel, 0, idx) = 1.0f;
-        }
-      }
-    }
-    channel++;
-  }
+  ch++;  // ch = 1
 
   // ========================================
-  // SECTION 2: Orientation (12 channels)
-  // ========================================
-  for (const auto& unit : units_) {
-    if (!unit.is_alive()) continue;
-    if (unit.type == UnitType::PORTAL) continue;
-
-    int plane = channel + unit.facing * 2 + unit.player;
-    auto hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
-    for (const auto& h : hexes) {
-      int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
-      if (idx >= 0 && idx < AS::NUM_HEXES) {
-        tensor(plane, 0, idx) = 1.0f;
-      }
-    }
-  }
-  channel += 12;
-
-  // ========================================
-  // SECTION 3: HP planes (6 channels)
+  // Channels 1-8: Type-based unit presence (4 types × 2: my/opponent)
+  // Layout: My types [1-4], Opponent types [5-8]
+  // Type order: Fighter=0, Cruiser=1, Dreadnought=2, Portal=3
   // ========================================
   for (const auto& unit : units_) {
     if (!unit.is_alive()) continue;
 
-    int hp_plane = channel + std::min(static_cast<int>(unit.hp) - 1, 5);
+    int type_idx = static_cast<int>(unit.type);  // 0-3
+    bool is_my_unit = (unit.player == my_player);
+    int presence_ch = ch + (is_my_unit ? 0 : 4) + type_idx;
+
     std::vector<Hex> hexes;
     if (unit.type == UnitType::PORTAL) {
       hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
     } else {
       hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
     }
+
     for (const auto& h : hexes) {
-      int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
-      if (idx >= 0 && idx < AS::NUM_HEXES) {
-        tensor(hp_plane, 0, idx) = 1.0f;
-      }
+      set_hex(presence_ch, h, 1.0f);
     }
   }
-  channel += 6;
+  ch += 8;  // ch = 9
 
   // ========================================
-  // SECTION 4: Game state (2 channels)
+  // Channels 9-14: Heading (6 directions, generic)
+  // One-hot encoding at ALL unit hexes (broadcast to show unit cohesion)
   // ========================================
-  // Current player
-  for (int i = 0; i < AS::NUM_HEXES; ++i) {
-    tensor(channel, 0, i) = static_cast<float>(current_player_);
+  for (const auto& unit : units_) {
+    if (!unit.is_alive()) continue;
+    if (unit.type == UnitType::PORTAL) continue;
+
+    int rotated_facing = get_facing(unit.facing);
+    int heading_ch = ch + rotated_facing;
+
+    // Get all hexes for this unit and set heading on each
+    std::vector<Hex> hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
+    for (const auto& h : hexes) {
+      set_hex(heading_ch, h, 1.0f);
+    }
   }
-  channel++;
+  ch += 6;  // ch = 15
 
-  // Has taken action
-  for (int i = 0; i < AS::NUM_HEXES; ++i) {
-    tensor(channel, 0, i) = has_taken_action_ ? 1.0f : 0.0f;
+  // ========================================
+  // Channel 15: HP (generic, normalized)
+  // Broadcast to ALL unit hexes, value = hp / max_hp
+  // ========================================
+  for (const auto& unit : units_) {
+    if (!unit.is_alive()) continue;
+
+    float max_hp = static_cast<float>(get_max_hp(unit.type));
+    float norm_hp = static_cast<float>(unit.hp) / max_hp;
+
+    // Get all hexes for this unit
+    std::vector<Hex> hexes;
+    if (unit.type == UnitType::PORTAL) {
+      hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
+    } else {
+      hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
+    }
+
+    // Set HP on all occupied hexes
+    for (const auto& h : hexes) {
+      set_hex(ch, h, norm_hp);
+    }
   }
-  channel++;
+  ch++;  // ch = 16
 
   // ========================================
-  // SECTION 5: Reserves (6 channels)
+  // Channel 16: Moves remaining (generic, normalized)
+  // Broadcast to ALL unit hexes, value = moves_left / max_moves
   // ========================================
-  for (int p = 0; p < 2; ++p) {
-    tensor(channel, 0, 0) = static_cast<float>(reserves_[p][0]);      // Fighters
-    tensor(channel + 1, 0, 0) = static_cast<float>(reserves_[p][1]);  // Cruisers
-    tensor(channel + 2, 0, 0) = static_cast<float>(reserves_[p][2]);  // Dreadnoughts
-    channel += 3;
+  for (const auto& unit : units_) {
+    if (!unit.is_alive()) continue;
+    if (unit.type == UnitType::PORTAL) continue;
+
+    float max_moves = static_cast<float>(get_max_moves(unit.type));
+    float norm_moves = (max_moves > 0) ? static_cast<float>(unit.moves_left) / max_moves : 0.0f;
+
+    // Get all hexes for this unit and set moves on each
+    std::vector<Hex> hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
+    for (const auto& h : hexes) {
+      set_hex(ch, h, norm_moves);
+    }
   }
+  ch++;  // ch = 17
 
   // ========================================
-  // SECTION 6: Moves remaining (2 channels)
+  // Channels 17-21: Cannons available (5 types, generic)
+  // Broadcast to ALL unit hexes, 1.0 if unfired, 0.0 if fired or N/A
+  // Cannon order: forward, forward-left, forward-right, rear-left, rear-right
   // ========================================
-  for (int p = 0; p < 2; ++p) {
-    for (const auto& unit : units_) {
-      if (!unit.is_alive() || unit.player != p) continue;
-      if (unit.moves_left == 0) continue;
+  for (const auto& unit : units_) {
+    if (!unit.is_alive()) continue;
+    if (unit.type == UnitType::PORTAL) continue;
 
-      std::vector<Hex> hexes;
-      if (unit.type == UnitType::PORTAL) {
-        hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
-      } else {
-        hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
+    // Get all hexes for this unit
+    std::vector<Hex> unit_hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
+    auto cannons = get_cannon_info(unit.type);
+
+    for (size_t cannon_idx = 0; cannon_idx < cannons.size(); ++cannon_idx) {
+      int slot;
+      switch (cannons[cannon_idx].direction_offset) {
+        case 0: slot = 0; break;   // forward
+        case 1: slot = 1; break;   // forward-left
+        case -1: slot = 2; break;  // forward-right
+        case 2: slot = 3; break;   // rear-left
+        case -2: slot = 4; break;  // rear-right
+        default: continue;
       }
-      for (const auto& h : hexes) {
-        int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
-        if (idx >= 0 && idx < AS::NUM_HEXES) {
-          tensor(channel, 0, idx) = 1.0f;
+
+      int cannon_ch = ch + slot;
+      bool fired = (unit.cannons_fired >> cannon_idx) & 1;
+      if (!fired) {
+        // Broadcast cannon availability to all unit hexes
+        for (const auto& h : unit_hexes) {
+          set_hex(cannon_ch, h, 1.0f);
         }
       }
     }
-    channel++;
   }
+  ch += 5;  // ch = 22
 
   // ========================================
-  // SECTION 7: Cannons available (2 channels)
+  // Channel 22: Has taken action (broadcast)
   // ========================================
-  for (int p = 0; p < 2; ++p) {
-    for (const auto& unit : units_) {
-      if (!unit.is_alive() || unit.player != p) continue;
-      if (unit.type == UnitType::PORTAL) continue;
+  broadcast(ch, has_taken_action_ ? 1.0f : 0.0f);
+  ch++;  // ch = 23
 
-      int num_cannons = get_num_cannons(unit.type);
-      uint8_t all_fired_mask = (1 << num_cannons) - 1;
-      if (unit.cannons_fired == all_fired_mask) continue;
-
-      auto hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
-      for (const auto& h : hexes) {
-        int idx = hex_to_index_fast<Config::BOARD_SIDE>(h);
-        if (idx >= 0 && idx < AS::NUM_HEXES) {
-          tensor(channel, 0, idx) = 1.0f;
-        }
-      }
+  // ========================================
+  // Channel 23: Repetition count (broadcast)
+  // Count how many times current position has been seen
+  // 0.0 = never seen, 0.5 = seen once, 1.0 = seen twice or more
+  // ========================================
+  {
+    uint64_t current_hash = compute_position_hash();
+    int rep_count = 0;
+    for (const auto& h : position_history_) {
+      if (h == current_hash) rep_count++;
     }
-    channel++;
+    float rep_value = (rep_count == 0) ? 0.0f : (rep_count == 1) ? 0.5f : 1.0f;
+    broadcast(ch, rep_value);
+  }
+  ch++;  // ch = 24
+
+  // ========================================
+  // Channels 24-26: My reserves (3 types, broadcast)
+  // ========================================
+  {
+    float norm_f = (Config::STARTING_FIGHTERS > 0)
+        ? static_cast<float>(reserves_[my_player][0]) / static_cast<float>(Config::STARTING_FIGHTERS)
+        : 0.0f;
+    float norm_c = (Config::STARTING_CRUISERS > 0)
+        ? static_cast<float>(reserves_[my_player][1]) / static_cast<float>(Config::STARTING_CRUISERS)
+        : 0.0f;
+    float norm_d = (Config::STARTING_DREADNOUGHTS > 0)
+        ? static_cast<float>(reserves_[my_player][2]) / static_cast<float>(Config::STARTING_DREADNOUGHTS)
+        : 0.0f;
+
+    broadcast(ch, norm_f);
+    broadcast(ch + 1, norm_c);
+    broadcast(ch + 2, norm_d);
+    ch += 3;  // ch = 27
   }
 
   // ========================================
-  // SECTION 8: Turn progress (1 channel)
+  // Channels 27-29: Opponent reserves (3 types, broadcast)
   // ========================================
-  float turn_progress = static_cast<float>(turn_) / static_cast<float>(MAX_TURNS);
-  for (int i = 0; i < AS::NUM_HEXES; ++i) {
-    tensor(channel, 0, i) = turn_progress;
+  {
+    float norm_f = (Config::STARTING_FIGHTERS > 0)
+        ? static_cast<float>(reserves_[opp_player][0]) / static_cast<float>(Config::STARTING_FIGHTERS)
+        : 0.0f;
+    float norm_c = (Config::STARTING_CRUISERS > 0)
+        ? static_cast<float>(reserves_[opp_player][1]) / static_cast<float>(Config::STARTING_CRUISERS)
+        : 0.0f;
+    float norm_d = (Config::STARTING_DREADNOUGHTS > 0)
+        ? static_cast<float>(reserves_[opp_player][2]) / static_cast<float>(Config::STARTING_DREADNOUGHTS)
+        : 0.0f;
+
+    broadcast(ch, norm_f);
+    broadcast(ch + 1, norm_c);
+    broadcast(ch + 2, norm_d);
+    ch += 3;  // ch = 30
   }
-  channel++;
+
+  // ========================================
+  // Channel 30: My portal HP (broadcast)
+  // ========================================
+  {
+    const Unit* portal = find_unit_by_slot(my_player, UnitType::PORTAL, 0);
+    float norm_hp = 0.0f;
+    if (portal && portal->is_alive()) {
+      norm_hp = static_cast<float>(portal->hp) / static_cast<float>(PORTAL_HP);
+    }
+    broadcast(ch, norm_hp);
+    ch++;  // ch = 31
+  }
+
+  // ========================================
+  // Channel 31: Opponent portal HP (broadcast)
+  // ========================================
+  {
+    const Unit* portal = find_unit_by_slot(opp_player, UnitType::PORTAL, 0);
+    float norm_hp = 0.0f;
+    if (portal && portal->is_alive()) {
+      norm_hp = static_cast<float>(portal->hp) / static_cast<float>(PORTAL_HP);
+    }
+    broadcast(ch, norm_hp);
+    ch++;  // ch = 32
+  }
 
   return tensor;
 }
@@ -1411,206 +1597,13 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
 template<typename Config>
 std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
     const PlayHistory& base) const noexcept {
+  // With canonicalized observations, the 180° rotation symmetry is already
+  // exploited by the perspective transformation. When P1 is to move, we rotate
+  // the board 180° and swap "my"/"opponent" channels, which is equivalent to
+  // the symmetry transformation. No additional augmentation is possible without
+  // creating invalid positions (units on wrong side of board).
   std::vector<PlayHistory> syms;
   syms.push_back(base);
-
-  // Create 180-degree rotated version
-  PlayHistory rotated;
-
-  // ========================================
-  // Step 1: Build hex index rotation lookup
-  // For 180° rotation: (q, r) → (-q, -r)
-  // ========================================
-  std::array<int, AS::NUM_HEXES> hex_rotation_map;
-  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-    Hex h = index_to_hex_fast<Config::BOARD_SIDE>(idx);
-    Hex rotated_h = {static_cast<int8_t>(-h.q), static_cast<int8_t>(-h.r)};
-    hex_rotation_map[idx] = hex_to_index_fast<Config::BOARD_SIDE>(rotated_h);
-  }
-
-  // ========================================
-  // Step 2: Transform canonical tensor
-  // ========================================
-  rotated.canonical = Tensor<float, 3>(AS::CANONICAL_SHAPE[0],
-                                       AS::CANONICAL_SHAPE[1],
-                                       AS::CANONICAL_SHAPE[2]);
-  rotated.canonical.setZero();
-
-  int channel = 0;
-
-  // SECTION 1: Slot-indexed unit presence
-  // Layout: [P0_F0..P0_Fn, P1_F0..P1_Fn, P0_C0..P0_Cn, P1_C0..P1_Cn,
-  //          P0_D0..P0_Dn, P1_D0..P1_Dn, P0_Portal, P1_Portal]
-
-  // Fighters: swap P0 <-> P1, rotate hexes
-  int p0_fighter_start = channel;
-  int p1_fighter_start = channel + Config::MAX_FIGHTERS;
-  for (int slot = 0; slot < Config::MAX_FIGHTERS; ++slot) {
-    for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-      int rotated_idx = hex_rotation_map[idx];
-      // P0 slot -> P1 slot (swapped)
-      rotated.canonical(p1_fighter_start + slot, 0, rotated_idx) =
-          base.canonical(p0_fighter_start + slot, 0, idx);
-      // P1 slot -> P0 slot (swapped)
-      rotated.canonical(p0_fighter_start + slot, 0, rotated_idx) =
-          base.canonical(p1_fighter_start + slot, 0, idx);
-    }
-  }
-  channel += Config::MAX_FIGHTERS * 2;
-
-  // Cruisers: same pattern
-  int p0_cruiser_start = channel;
-  int p1_cruiser_start = channel + Config::MAX_CRUISERS;
-  for (int slot = 0; slot < Config::MAX_CRUISERS; ++slot) {
-    for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-      int rotated_idx = hex_rotation_map[idx];
-      rotated.canonical(p1_cruiser_start + slot, 0, rotated_idx) =
-          base.canonical(p0_cruiser_start + slot, 0, idx);
-      rotated.canonical(p0_cruiser_start + slot, 0, rotated_idx) =
-          base.canonical(p1_cruiser_start + slot, 0, idx);
-    }
-  }
-  channel += Config::MAX_CRUISERS * 2;
-
-  // Dreadnoughts: same pattern
-  int p0_dread_start = channel;
-  int p1_dread_start = channel + Config::MAX_DREADNOUGHTS;
-  for (int slot = 0; slot < Config::MAX_DREADNOUGHTS; ++slot) {
-    for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-      int rotated_idx = hex_rotation_map[idx];
-      rotated.canonical(p1_dread_start + slot, 0, rotated_idx) =
-          base.canonical(p0_dread_start + slot, 0, idx);
-      rotated.canonical(p0_dread_start + slot, 0, rotated_idx) =
-          base.canonical(p1_dread_start + slot, 0, idx);
-    }
-  }
-  channel += Config::MAX_DREADNOUGHTS * 2;
-
-  // Portals: swap P0 <-> P1, rotate hexes
-  int p0_portal_ch = channel;
-  int p1_portal_ch = channel + 1;
-  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-    int rotated_idx = hex_rotation_map[idx];
-    rotated.canonical(p1_portal_ch, 0, rotated_idx) =
-        base.canonical(p0_portal_ch, 0, idx);
-    rotated.canonical(p0_portal_ch, 0, rotated_idx) =
-        base.canonical(p1_portal_ch, 0, idx);
-  }
-  channel += 2;
-
-  // SECTION 2: Orientation (12 channels)
-  // Layout: [dir0_p0, dir0_p1, dir1_p0, dir1_p1, ..., dir5_p0, dir5_p1]
-  // Transformation: dir d maps to (d+3)%6, player p maps to 1-p
-  int orientation_start = channel;
-  for (int dir = 0; dir < 6; ++dir) {
-    int new_dir = (dir + 3) % 6;
-    for (int p = 0; p < 2; ++p) {
-      int new_p = 1 - p;
-      int src_ch = orientation_start + dir * 2 + p;
-      int dst_ch = orientation_start + new_dir * 2 + new_p;
-      for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-        int rotated_idx = hex_rotation_map[idx];
-        rotated.canonical(dst_ch, 0, rotated_idx) = base.canonical(src_ch, 0, idx);
-      }
-    }
-  }
-  channel += 12;
-
-  // SECTION 3: HP (6 channels) - only rotate hexes, no player swap
-  for (int hp_ch = 0; hp_ch < 6; ++hp_ch) {
-    for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-      int rotated_idx = hex_rotation_map[idx];
-      rotated.canonical(channel + hp_ch, 0, rotated_idx) =
-          base.canonical(channel + hp_ch, 0, idx);
-    }
-  }
-  channel += 6;
-
-  // SECTION 4: Current player (flip value) + Has acted (unchanged)
-  // Current player: value flipped (0->1, 1->0)
-  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-    rotated.canonical(channel, 0, idx) = 1.0f - base.canonical(channel, 0, idx);
-  }
-  channel++;
-
-  // Has acted: unchanged
-  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-    rotated.canonical(channel, 0, idx) = base.canonical(channel, 0, idx);
-  }
-  channel++;
-
-  // SECTION 5: Reserves (6 channels) - swap P0 and P1
-  // Layout: [P0_F, P0_C, P0_D, P1_F, P1_C, P1_D]
-  int p0_res_start = channel;
-  int p1_res_start = channel + 3;
-  for (int t = 0; t < 3; ++t) {
-    // Only hex 0 has the value, but copy all to be safe
-    for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-      rotated.canonical(p1_res_start + t, 0, idx) = base.canonical(p0_res_start + t, 0, idx);
-      rotated.canonical(p0_res_start + t, 0, idx) = base.canonical(p1_res_start + t, 0, idx);
-    }
-  }
-  channel += 6;
-
-  // SECTION 6: Moves remaining (2 channels) - swap P0 <-> P1, rotate hexes
-  int p0_moves_ch = channel;
-  int p1_moves_ch = channel + 1;
-  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-    int rotated_idx = hex_rotation_map[idx];
-    rotated.canonical(p1_moves_ch, 0, rotated_idx) = base.canonical(p0_moves_ch, 0, idx);
-    rotated.canonical(p0_moves_ch, 0, rotated_idx) = base.canonical(p1_moves_ch, 0, idx);
-  }
-  channel += 2;
-
-  // SECTION 7: Cannons available (2 channels) - swap P0 <-> P1, rotate hexes
-  int p0_cannons_ch = channel;
-  int p1_cannons_ch = channel + 1;
-  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-    int rotated_idx = hex_rotation_map[idx];
-    rotated.canonical(p1_cannons_ch, 0, rotated_idx) = base.canonical(p0_cannons_ch, 0, idx);
-    rotated.canonical(p0_cannons_ch, 0, rotated_idx) = base.canonical(p1_cannons_ch, 0, idx);
-  }
-  channel += 2;
-
-  // SECTION 8: Turn progress (1 channel) - unchanged (scalar broadcast)
-  for (int idx = 0; idx < AS::NUM_HEXES; ++idx) {
-    rotated.canonical(channel, 0, idx) = base.canonical(channel, 0, idx);
-  }
-  channel++;
-
-  // ========================================
-  // Step 3: Transform value
-  // ========================================
-  rotated.v = Vector<float>(base.v.size());
-  rotated.v(0) = base.v(1);  // P0 win becomes P1 win
-  rotated.v(1) = base.v(0);  // P1 win becomes P0 win
-  rotated.v(2) = base.v(2);  // Draw unchanged
-
-  // ========================================
-  // Step 4: Transform policy
-  // ========================================
-  rotated.pi = Vector<float>(base.pi.size());
-
-  // Move and fire actions (indices 0 to DEPLOY_OFFSET-1): unchanged
-  // These use relative directions from the unit's perspective
-  for (int i = 0; i < AS::DEPLOY_OFFSET; ++i) {
-    rotated.pi(i) = base.pi(i);
-  }
-
-  // Deploy actions: rotate facing by 180 degrees
-  for (int type_idx = 0; type_idx < 3; ++type_idx) {
-    for (int facing = 0; facing < 6; ++facing) {
-      int new_facing = (facing + 3) % 6;
-      int src_action = AS::DEPLOY_OFFSET + type_idx * 6 + facing;
-      int dst_action = AS::DEPLOY_OFFSET + type_idx * 6 + new_facing;
-      rotated.pi(dst_action) = base.pi(src_action);
-    }
-  }
-
-  // End turn: unchanged
-  rotated.pi(AS::END_TURN_OFFSET) = base.pi(AS::END_TURN_OFFSET);
-
-  syms.push_back(rotated);
   return syms;
 }
 
@@ -1940,37 +1933,63 @@ FireInfo StarGambitGS<Config>::get_fire_info(uint32_t move) const {
   using AS = ActionSpace<Config>;
   FireInfo result = {false, -1, -1, -1, 0};
 
-  // Determine if this is a fire action and decode it
-  const Unit* unit = nullptr;
-  int cannon_idx = -1;
+  // Check if this is a hex action (not deploy or end turn)
+  if (move >= static_cast<uint32_t>(AS::DEPLOY_OFFSET)) {
+    return result;  // Not a fire action
+  }
 
-  if (move >= static_cast<uint32_t>(AS::FIGHTER_FIRE_OFFSET) &&
-      move < static_cast<uint32_t>(AS::CRUISER_FIRE_OFFSET)) {
-    // Fighter fire
-    int rel = move - AS::FIGHTER_FIRE_OFFSET;
-    int slot = rel;  // FIGHTER_CANNONS == 1
-    unit = find_unit_by_slot(current_player_, UnitType::FIGHTER, slot);
-    cannon_idx = 0;
-  } else if (move >= static_cast<uint32_t>(AS::CRUISER_FIRE_OFFSET) &&
-             move < static_cast<uint32_t>(AS::DREAD_FIRE_OFFSET)) {
-    // Cruiser fire
-    int rel = move - AS::CRUISER_FIRE_OFFSET;
-    int slot = rel / CRUISER_CANNONS;
-    cannon_idx = rel % CRUISER_CANNONS;
-    unit = find_unit_by_slot(current_player_, UnitType::CRUISER, slot);
-  } else if (move >= static_cast<uint32_t>(AS::DREAD_FIRE_OFFSET) &&
-             move < static_cast<uint32_t>(AS::DEPLOY_OFFSET)) {
-    // Dreadnought fire
-    int rel = move - AS::DREAD_FIRE_OFFSET;
-    int slot = rel / DREAD_CANNONS;
-    cannon_idx = rel % DREAD_CANNONS;
-    unit = find_unit_by_slot(current_player_, UnitType::DREADNOUGHT, slot);
-  } else {
-    // Not a fire action
+  // Decode hex action
+  int hex_idx;
+  HexAction action;
+  AS::decode_hex_action(static_cast<int>(move), hex_idx, action);
+
+  // Check if this is a fire action
+  if (action < HexAction::FIRE_FORWARD || action > HexAction::FIRE_REAR_RIGHT) {
+    return result;  // Not a fire action
+  }
+
+  // Find unit at this anchor hex
+  Hex anchor = index_to_hex_fast<Config::BOARD_SIDE>(hex_idx);
+  const Unit* unit = nullptr;
+  for (const auto& u : units_) {
+    if (u.player == current_player_ && u.is_alive() &&
+        u.anchor_q == anchor.q && u.anchor_r == anchor.r &&
+        u.type != UnitType::PORTAL) {
+      unit = &u;
+      break;
+    }
+  }
+
+  if (!unit || !unit->is_alive()) {
     return result;
   }
 
-  if (!unit || !unit->is_alive() || cannon_idx < 0) {
+  // Map action slot to cannon index based on unit type
+  int cannon_idx = -1;
+  switch (action) {
+    case HexAction::FIRE_FORWARD:
+      if (unit->type == UnitType::FIGHTER) cannon_idx = 0;
+      else if (unit->type == UnitType::CRUISER) cannon_idx = 1;
+      break;
+    case HexAction::FIRE_FORWARD_LEFT:
+      if (unit->type == UnitType::CRUISER) cannon_idx = 0;
+      else if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 2;
+      break;
+    case HexAction::FIRE_FORWARD_RIGHT:
+      if (unit->type == UnitType::CRUISER) cannon_idx = 2;
+      else if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 1;
+      break;
+    case HexAction::FIRE_REAR_LEFT:
+      if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 3;
+      break;
+    case HexAction::FIRE_REAR_RIGHT:
+      if (unit->type == UnitType::DREADNOUGHT) cannon_idx = 0;
+      break;
+    default:
+      return result;
+  }
+
+  if (cannon_idx < 0) {
     return result;
   }
 

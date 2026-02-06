@@ -49,7 +49,7 @@ struct BattleConfig {
 // ============================================================================
 
 constexpr int NUM_PLAYERS = 2;
-constexpr int NUM_SYMMETRIES = 2;  // 180 degree rotation
+constexpr int NUM_SYMMETRIES = 1;  // No augmentation - canonicalization exploits symmetry
 
 // Unit type constants
 constexpr int NUM_UNIT_TYPES = 4;
@@ -202,6 +202,29 @@ constexpr std::array<const char*, 6> DIRECTION_NAMES = {"E", "NE", "NW", "W", "S
 // Rotate direction by steps (positive = counterclockwise, negative = clockwise)
 inline int rotate_direction(int dir, int steps) {
   return (dir + steps + 6) % 6;
+}
+
+// ============================================================================
+// 2D Coordinate Helpers for Observation Space
+// ============================================================================
+
+// Convert hex (q, r) to 2D array position (row, col) for observation tensor
+template<int BoardSide>
+inline std::pair<int, int> hex_to_2d(const Hex& h) {
+  return {h.q + BoardSide - 1, h.r + BoardSide - 1};
+}
+
+// Check if a 2D position is valid (corresponds to a valid hex)
+template<int BoardSide>
+inline bool is_valid_2d_pos(int row, int col) {
+  if (row < 0 || row >= 2 * BoardSide - 1 || col < 0 || col >= 2 * BoardSide - 1) {
+    return false;
+  }
+  // Convert back to hex and check if valid
+  int q = row - (BoardSide - 1);
+  int r = col - (BoardSide - 1);
+  int s = -q - r;
+  return std::abs(q) < BoardSide && std::abs(r) < BoardSide && std::abs(s) < BoardSide;
 }
 
 // ============================================================================
@@ -358,8 +381,26 @@ bool has_line_of_sight(const Hex& from, int direction, int distance,
                        const std::vector<Hex>& occupied_hexes);
 
 // ============================================================================
-// Action Space Encoding (Template-based)
+// Hex-Based Action Space Encoding
 // ============================================================================
+
+// Per-hex action slots (10 total)
+// Movement slots: 0-4 (relative to unit's facing)
+// Fire slots: 5-9 (relative to unit's facing)
+enum class HexAction : uint8_t {
+  MOVE_FORWARD = 0,       // All units except dreadnought
+  MOVE_FORWARD_LEFT = 1,  // All units
+  MOVE_FORWARD_RIGHT = 2, // All units
+  ROTATE_LEFT = 3,        // Cruiser, Dreadnought
+  ROTATE_RIGHT = 4,       // Cruiser, Dreadnought
+  FIRE_FORWARD = 5,       // Fighter, Cruiser
+  FIRE_FORWARD_LEFT = 6,  // Cruiser (fl cannon), Dreadnought (fl cannon)
+  FIRE_FORWARD_RIGHT = 7, // Cruiser (fr cannon), Dreadnought (fr cannon)
+  FIRE_REAR_LEFT = 8,     // Dreadnought (rl cannon)
+  FIRE_REAR_RIGHT = 9     // Dreadnought (rr cannon)
+};
+
+constexpr int ACTIONS_PER_HEX = 10;
 
 template<typename Config>
 struct ActionSpace {
@@ -367,15 +408,8 @@ struct ActionSpace {
   static constexpr int NUM_HEXES = 3 * Config::BOARD_SIDE * Config::BOARD_SIDE
                                    - 3 * Config::BOARD_SIDE + 1;
 
-  // Movement actions
-  static constexpr int FIGHTER_MOVE_ACTIONS = Config::MAX_FIGHTERS * FIGHTER_MOVE_DIRS;
-  static constexpr int CRUISER_MOVE_ACTIONS = Config::MAX_CRUISERS * CRUISER_MOVE_DIRS;
-  static constexpr int DREAD_MOVE_ACTIONS = Config::MAX_DREADNOUGHTS * DREAD_MOVE_DIRS;
-
-  // Fire actions
-  static constexpr int FIGHTER_FIRE_ACTIONS = Config::MAX_FIGHTERS * FIGHTER_CANNONS;
-  static constexpr int CRUISER_FIRE_ACTIONS = Config::MAX_CRUISERS * CRUISER_CANNONS;
-  static constexpr int DREAD_FIRE_ACTIONS = Config::MAX_DREADNOUGHTS * DREAD_CANNONS;
+  // Hex-based actions: select anchor hex, then action slot
+  static constexpr int HEX_ACTIONS = NUM_HEXES * ACTIONS_PER_HEX;
 
   // Deploy actions: 3 unit types * 6 facings (mask invalid facings at runtime)
   static constexpr int DEPLOY_ACTIONS = 3 * 6;
@@ -383,30 +417,75 @@ struct ActionSpace {
   // End turn
   static constexpr int END_TURN_ACTIONS = 1;
 
-  // Action offsets
-  static constexpr int FIGHTER_MOVE_OFFSET = 0;
-  static constexpr int CRUISER_MOVE_OFFSET = FIGHTER_MOVE_OFFSET + FIGHTER_MOVE_ACTIONS;
-  static constexpr int DREAD_MOVE_OFFSET = CRUISER_MOVE_OFFSET + CRUISER_MOVE_ACTIONS;
-  static constexpr int FIGHTER_FIRE_OFFSET = DREAD_MOVE_OFFSET + DREAD_MOVE_ACTIONS;
-  static constexpr int CRUISER_FIRE_OFFSET = FIGHTER_FIRE_OFFSET + FIGHTER_FIRE_ACTIONS;
-  static constexpr int DREAD_FIRE_OFFSET = CRUISER_FIRE_OFFSET + CRUISER_FIRE_ACTIONS;
-  static constexpr int DEPLOY_OFFSET = DREAD_FIRE_OFFSET + DREAD_FIRE_ACTIONS;
+  // Action layout: [hex_actions | deploy_actions | end_turn]
+  static constexpr int HEX_ACTION_OFFSET = 0;
+  static constexpr int DEPLOY_OFFSET = HEX_ACTION_OFFSET + HEX_ACTIONS;
   static constexpr int END_TURN_OFFSET = DEPLOY_OFFSET + DEPLOY_ACTIONS;
 
   // Total actions
   static constexpr int NUM_MOVES = END_TURN_OFFSET + END_TURN_ACTIONS;
 
+  // Helper: encode hex action
+  static constexpr int encode_hex_action(int hex_idx, HexAction action) {
+    return HEX_ACTION_OFFSET + hex_idx * ACTIONS_PER_HEX + static_cast<int>(action);
+  }
+
+  // Helper: decode hex action
+  static constexpr void decode_hex_action(int action_idx, int& hex_idx, HexAction& action) {
+    int rel = action_idx - HEX_ACTION_OFFSET;
+    hex_idx = rel / ACTIONS_PER_HEX;
+    action = static_cast<HexAction>(rel % ACTIONS_PER_HEX);
+  }
+
+  // Helper: encode deploy action
+  static constexpr int encode_deploy(int type_idx, int facing) {
+    return DEPLOY_OFFSET + type_idx * 6 + facing;
+  }
+
+  // Helper: decode deploy action
+  static constexpr void decode_deploy(int action_idx, int& type_idx, int& facing) {
+    int rel = action_idx - DEPLOY_OFFSET;
+    type_idx = rel / 6;
+    facing = rel % 6;
+  }
+
   // Canonical representation shape
-  // Slot-indexed presence: (MAX_F + MAX_C + MAX_D) * 2 players + 2 portals
-  static constexpr int SLOT_PRESENCE_CHANNELS =
-      (Config::MAX_FIGHTERS + Config::MAX_CRUISERS + Config::MAX_DREADNOUGHTS) * 2 + 2;
+  // Observations are canonicalized to current player's perspective
+  static constexpr int BOARD_DIM = 2 * Config::BOARD_SIDE - 1;
 
-  // Fixed channels: orientation(12) + HP(6) + current_player(1) + has_acted(1)
-  //                 + reserves(6) + moves_remaining(2) + cannons_available(2) + turn_progress(1)
-  static constexpr int FIXED_CHANNELS = 31;
+  // Type-based presence: 4 types × 2 (my/opponent) = 8
+  static constexpr int TYPE_PRESENCE_CHANNELS = 8;
 
-  static constexpr int CANONICAL_CHANNELS = SLOT_PRESENCE_CHANNELS + FIXED_CHANNELS;
-  static constexpr std::array<int, 3> CANONICAL_SHAPE = {CANONICAL_CHANNELS, 1, NUM_HEXES};
+  // Heading: 6 directions, broadcast to all unit hexes
+  static constexpr int HEADING_CHANNELS = 6;
+
+  // HP/moves: single channel each, broadcast to all unit hexes
+  static constexpr int HP_CHANNELS = 1;
+  static constexpr int MOVES_CHANNELS = 1;
+
+  // Cannon availability: 5 types, broadcast to all unit hexes
+  static constexpr int CANNON_CHANNELS = 5;
+
+  // Global: valid_hex(1) + has_acted(1) + repetition(1)
+  //         + reserves(6) + portal_hp(2) = 11
+  static constexpr int GLOBAL_CHANNELS = 11;
+
+  // Canonical observation channels (32 total):
+  //   0:     Valid hex mask
+  //   1-4:   My unit types (Fighter, Cruiser, Dreadnought, Portal)
+  //   5-8:   Opponent unit types
+  //   9-14:  Facing direction (6 dirs, all unit hexes)
+  //   15:    HP (normalized, all unit hexes)
+  //   16:    Moves remaining (normalized, all unit hexes)
+  //   17-21: Cannon availability (5 slots, all unit hexes)
+  //   22:    Has taken action (broadcast)
+  //   23:    Repetition count (broadcast, 0/0.5/1.0)
+  //   24-26: My reserves (Fighter, Cruiser, Dreadnought)
+  //   27-29: Opponent reserves
+  //   30:    My portal HP (broadcast)
+  //   31:    Opponent portal HP (broadcast)
+  static constexpr int CANONICAL_CHANNELS = 32;
+  static constexpr std::array<int, 3> CANONICAL_SHAPE = {CANONICAL_CHANNELS, BOARD_DIM, BOARD_DIM};
 };
 
 // ============================================================================
@@ -540,6 +619,9 @@ class StarGambitGS : public GameState {
 
   // Check for game end conditions
   void check_game_end();
+
+  // Check for threefold repetition (adds position to history, returns true if draw)
+  bool check_repetition();
 
   // Compute position hash for threefold repetition
   uint64_t compute_position_hash() const;

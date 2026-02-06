@@ -67,9 +67,9 @@ dense_net = True       # DenseNet tends to train faster
 star_gambit_spatial = True  # Use spatial policy head with canonicalized actions
 
 # === MCTS Configuration ===
-nn_selfplay_mcts_depth = 100       # Full search for quality games
-nn_selfplay_fast_mcts_depth = 25   # Fast depth for playout cap
-nn_compare_mcts_depth = 50         # Comparison depth for gating
+nn_selfplay_mcts_depth = 300       # Full search for quality games
+nn_selfplay_fast_mcts_depth = 50   # Fast depth for playout cap
+nn_compare_mcts_depth = 100        # Comparison depth for gating
 
 # === Training Parameters ===
 CPUCT = 1.25                       # Exploration constant
@@ -79,7 +79,7 @@ EVAL_TEMP = 0.5                    # Temperature during evaluation
 FINAL_TEMP = 0.2                   # Final temperature
 
 # === Batch Configuration ===
-SELF_PLAY_BATCH_SIZE = 256         # Games per batch
+SELF_PLAY_BATCH_SIZE = 128         # Games per batch
 SELF_PLAY_CONCURRENT_BATCH_MULT = 2
 SELF_PLAY_CHUNKS = 4
 TRAIN_BATCH_SIZE = 1024            # Training batch size

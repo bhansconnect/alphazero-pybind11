@@ -227,28 +227,61 @@ BLUE = '\033[94m'
 RESET = '\033[0m'
 
 # Game size selection - using Skirmish by default
-# Skirmish: 3F, 1C, 0D, 5-side board, 39 actions
-# Clash: 3F, 2C, 1D, 5-side board, 55 actions
-# Battle: 4F, 3C, 2D, 6-side board, 75 actions
+# New hex-based action space layout:
+#   Hex actions: 0 to (NUM_HEXES * 10 - 1)
+#     Each hex has 10 slots:
+#       0: MOVE_FORWARD, 1: MOVE_FORWARD_LEFT, 2: MOVE_FORWARD_RIGHT
+#       3: ROTATE_LEFT, 4: ROTATE_RIGHT
+#       5: FIRE_FORWARD, 6: FIRE_FORWARD_LEFT, 7: FIRE_FORWARD_RIGHT
+#       8: FIRE_REAR_LEFT, 9: FIRE_REAR_RIGHT
+#   Deploy actions: HEX_ACTIONS to HEX_ACTIONS + 17 (3 types * 6 facings)
+#   End turn: HEX_ACTIONS + 18
+#
+# For Skirmish (BOARD_SIDE=5): NUM_HEXES=61, so NUM_MOVES = 61*10 + 18 + 1 = 629
 
-# Skirmish action space layout (39 total):
-#   Fighter moves:  0-8   (3 fighters * 3 directions)
-#   Cruiser moves:  9-13  (1 cruiser * 5 directions)
-#   Dread moves:    14-13 (0 dreadnoughts)
-#   Fighter fire:   14-16 (3 fighters * 1 cannon)
-#   Cruiser fire:   17-19 (1 cruiser * 3 cannons)
-#   Dread fire:     20-19 (0 dreadnoughts)
-#   Deploy:         20-37 (3 types * 6 facings)
-#   End turn:       38
+# Hex action slot mapping
+ACTIONS_PER_HEX = 10
+
+# Slot meanings (shared across unit types, but not all units use all slots)
+HEX_SLOT_NAMES = {
+    0: 'move_forward',
+    1: 'move_forward_left',
+    2: 'move_forward_right',
+    3: 'rotate_left',
+    4: 'rotate_right',
+    5: 'fire_forward',
+    6: 'fire_forward_left',
+    7: 'fire_forward_right',
+    8: 'fire_rear_left',
+    9: 'fire_rear_right',
+}
+
+# Short names for commands
+HEX_SLOT_SHORT = {
+    0: 'f', 1: 'fl', 2: 'fr', 3: 'l', 4: 'r',
+    5: 'ff', 6: 'ffl', 7: 'ffr', 8: 'frl', 9: 'frr'
+}
+
+# Which slots are valid per unit type (from C++ definitions)
+# Fighter: move f/fl/fr (0,1,2), fire forward (5)
+# Cruiser: move f/fl/fr/l/r (0,1,2,3,4), fire forward/fl/fr (5,6,7)
+# Dread: move fl/fr/l/r (1,2,3,4), fire fl/fr/rl/rr (6,7,8,9)
+VALID_SLOTS = {
+    0: {0, 1, 2, 5},  # Fighter
+    1: {0, 1, 2, 3, 4, 5, 6, 7},  # Cruiser
+    2: {1, 2, 3, 4, 6, 7, 8, 9},  # Dreadnought
+}
+
 
 class GameConfig:
-    """Action space configuration for a game size."""
-    def __init__(self, max_fighters, max_cruisers, max_dreads):
+    """Action space configuration for a game size (hex-based encoding)."""
+    def __init__(self, max_fighters, max_cruisers, max_dreads, board_side):
         self.max_fighters = max_fighters
         self.max_cruisers = max_cruisers
         self.max_dreads = max_dreads
+        self.board_side = board_side
 
-        # Movement directions per unit type
+        # Movement directions per unit type (kept for reference)
         self.fighter_dirs = 3  # f, fl, fr
         self.cruiser_dirs = 5  # l, fl, f, fr, r
         self.dread_dirs = 4    # l, fl, fr, r
@@ -258,30 +291,40 @@ class GameConfig:
         self.cruiser_cannons = 3
         self.dread_cannons = 4
 
-        # Action counts
-        self.fighter_move_actions = max_fighters * self.fighter_dirs
-        self.cruiser_move_actions = max_cruisers * self.cruiser_dirs
-        self.dread_move_actions = max_dreads * self.dread_dirs
-        self.fighter_fire_actions = max_fighters * self.fighter_cannons
-        self.cruiser_fire_actions = max_cruisers * self.cruiser_cannons
-        self.dread_fire_actions = max_dreads * self.dread_cannons
+        # Hex-based action space
+        self.num_hexes = 3 * board_side * board_side - 3 * board_side + 1
+        self.actions_per_hex = ACTIONS_PER_HEX
+        self.hex_actions = self.num_hexes * self.actions_per_hex
         self.deploy_actions = 18  # 3 types * 6 facings
 
         # Action offsets
-        self.fighter_move_offset = 0
-        self.cruiser_move_offset = self.fighter_move_offset + self.fighter_move_actions
-        self.dread_move_offset = self.cruiser_move_offset + self.cruiser_move_actions
-        self.fighter_fire_offset = self.dread_move_offset + self.dread_move_actions
-        self.cruiser_fire_offset = self.fighter_fire_offset + self.fighter_fire_actions
-        self.dread_fire_offset = self.cruiser_fire_offset + self.cruiser_fire_actions
-        self.deploy_offset = self.dread_fire_offset + self.dread_fire_actions
+        self.hex_action_offset = 0
+        self.deploy_offset = self.hex_actions
         self.end_turn_offset = self.deploy_offset + self.deploy_actions
         self.num_moves = self.end_turn_offset + 1
 
+    def encode_hex_action(self, hex_idx, slot):
+        """Encode (hex_idx, slot) -> action"""
+        return self.hex_action_offset + hex_idx * self.actions_per_hex + slot
 
-SKIRMISH = GameConfig(3, 1, 0)
-CLASH = GameConfig(3, 2, 1)
-BATTLE = GameConfig(4, 3, 2)
+    def decode_hex_action(self, action):
+        """Decode action -> (hex_idx, slot)"""
+        rel = action - self.hex_action_offset
+        return rel // self.actions_per_hex, rel % self.actions_per_hex
+
+    def encode_deploy(self, unit_type, facing):
+        """Encode deploy action"""
+        return self.deploy_offset + unit_type * 6 + facing
+
+    def decode_deploy(self, action):
+        """Decode deploy action -> (unit_type, facing)"""
+        rel = action - self.deploy_offset
+        return rel // 6, rel % 6
+
+
+SKIRMISH = GameConfig(3, 1, 0, board_side=5)
+CLASH = GameConfig(3, 2, 1, board_side=5)
+BATTLE = GameConfig(4, 3, 2, board_side=6)
 
 # Direction names
 DIRECTION_NAMES = ['E', 'NE', 'NW', 'W', 'SW', 'SE']
@@ -491,143 +534,147 @@ def get_unit_name(unit_type, slot):
     return f"{TYPE_CHARS[unit_type]}{slot + 1}"
 
 
-def decode_action(action, cfg):
-    """Decode action ID to human-readable description."""
-    if action < cfg.cruiser_move_offset:
-        # Fighter move
-        idx = action - cfg.fighter_move_offset
-        slot = idx // cfg.fighter_dirs
-        dir_idx = idx % cfg.fighter_dirs
-        return f"m f{slot+1} {FIGHTER_MOVE_NAMES[dir_idx]}"
-    elif action < cfg.dread_move_offset:
-        # Cruiser move
-        idx = action - cfg.cruiser_move_offset
-        slot = idx // cfg.cruiser_dirs
-        dir_idx = idx % cfg.cruiser_dirs
-        return f"m c{slot+1} {CRUISER_MOVE_NAMES[dir_idx]}"
-    elif action < cfg.fighter_fire_offset:
-        # Dreadnought move
-        idx = action - cfg.dread_move_offset
-        slot = idx // cfg.dread_dirs
-        dir_idx = idx % cfg.dread_dirs
-        return f"m d{slot+1} {DREAD_MOVE_NAMES[dir_idx]}"
-    elif action < cfg.cruiser_fire_offset:
-        # Fighter fire
-        idx = action - cfg.fighter_fire_offset
-        return f"f f{idx+1}"
-    elif action < cfg.dread_fire_offset:
-        # Cruiser fire
-        idx = action - cfg.cruiser_fire_offset
-        slot = idx // cfg.cruiser_cannons
-        cannon = idx % cfg.cruiser_cannons
-        return f"f c{slot+1} {CRUISER_CANNON_NAMES[cannon]}"
-    elif action < cfg.deploy_offset:
-        # Dreadnought fire
-        idx = action - cfg.dread_fire_offset
-        slot = idx // cfg.dread_cannons
-        cannon = idx % cfg.dread_cannons
-        return f"f d{slot+1} {DREAD_CANNON_NAMES[cannon]}"
-    elif action < cfg.end_turn_offset:
-        # Deploy
-        idx = action - cfg.deploy_offset
-        unit_type = idx // 6
-        facing = idx % 6
+def hex_to_index(q, r, board_side):
+    """Convert hex (q, r) to index. Returns -1 if invalid."""
+    s = -q - r
+    if abs(q) >= board_side or abs(r) >= board_side or abs(s) >= board_side:
+        return -1
+    idx = 0
+    for rr in range(-(board_side - 1), board_side):
+        for qq in range(-(board_side - 1), board_side):
+            ss = -qq - rr
+            if abs(qq) < board_side and abs(rr) < board_side and abs(ss) < board_side:
+                if qq == q and rr == r:
+                    return idx
+                idx += 1
+    return -1
+
+
+def index_to_hex(idx, board_side):
+    """Convert index to hex (q, r)."""
+    i = 0
+    for r in range(-(board_side - 1), board_side):
+        for q in range(-(board_side - 1), board_side):
+            s = -q - r
+            if abs(q) < board_side and abs(r) < board_side and abs(s) < board_side:
+                if i == idx:
+                    return (q, r)
+                i += 1
+    return None
+
+
+def find_unit_at_hex(game, hex_idx, board_side):
+    """Find unit whose anchor is at the given hex index. Returns UnitInfo or None."""
+    q, r = index_to_hex(hex_idx, board_side)
+    if q is None:
+        return None
+    units = game.get_units()
+    for u in units:
+        if u.anchor_q == q and u.anchor_r == r:
+            return u
+    return None
+
+
+def find_unit_by_type_slot(game, unit_type, slot):
+    """Find unit by type and slot. Returns UnitInfo or None."""
+    units = game.get_units()
+    for u in units:
+        if u.type == unit_type and u.slot == slot:
+            return u
+    return None
+
+
+def decode_action(action, cfg, game=None):
+    """Decode action ID to human-readable description (hex-based encoding)."""
+    # Deploy actions
+    if action >= cfg.deploy_offset and action < cfg.end_turn_offset:
+        unit_type, facing = cfg.decode_deploy(action)
         type_chars = ['f', 'c', 'd']
         facing_names = ['e', 'ne', 'nw', 'w', 'sw', 'se']
         return f"d {type_chars[unit_type]} {facing_names[facing]}"
-    else:
+
+    # End turn
+    if action >= cfg.end_turn_offset:
         return "e"
+
+    # Hex-based action
+    if action < cfg.hex_actions:
+        hex_idx, slot = cfg.decode_hex_action(action)
+
+        # Try to find unit at this hex if game is provided
+        unit = None
+        if game is not None:
+            unit = find_unit_at_hex(game, hex_idx, cfg.board_side)
+
+        # Format unit name
+        if unit is not None:
+            unit_name = f"{TYPE_CHARS[unit.type].lower()}{unit.slot + 1}"
+        else:
+            unit_name = f"hex{hex_idx}"
+
+        # Movement slots (0-4)
+        if slot <= 4:
+            move_names = {0: 'f', 1: 'fl', 2: 'fr', 3: 'l', 4: 'r'}
+            return f"m {unit_name} {move_names.get(slot, '?')}"
+        # Fire slots (5-9)
+        else:
+            fire_names = {5: 'f', 6: 'fl', 7: 'fr', 8: 'rl', 9: 'rr'}
+            return f"f {unit_name} {fire_names.get(slot, '?')}"
+
+    return f"?{action}"
 
 
 def format_action(action, cfg, game):
     """Format action with short form and detailed description, with colored unit names."""
-    short = decode_action(action, cfg)
+    short = decode_action(action, cfg, game)
     current_player = game.current_player()
 
-    # Build unit lookup from game state
-    units = game.get_units()
-    unit_lookup = {}  # (player, type, slot) -> UnitInfo
-    for u in units:
-        unit_lookup[(u.player, u.type, u.slot)] = u
-
-    if action < cfg.cruiser_move_offset:
-        # Fighter move
-        idx = action - cfg.fighter_move_offset
-        slot = idx // cfg.fighter_dirs
-        dir_idx = idx % cfg.fighter_dirs
-        name = color_unit(get_unit_name(0, slot), current_player)
-        detail = FIGHTER_MOVE_DETAIL[dir_idx]
-        return f"{short:<10} -  {name} {detail}"
-
-    elif action < cfg.dread_move_offset:
-        # Cruiser move
-        idx = action - cfg.cruiser_move_offset
-        slot = idx // cfg.cruiser_dirs
-        dir_idx = idx % cfg.cruiser_dirs
-        name = color_unit(get_unit_name(1, slot), current_player)
-        detail = CRUISER_MOVE_DETAIL[dir_idx]
-        return f"{short:<10} -  {name} {detail}"
-
-    elif action < cfg.fighter_fire_offset:
-        # Dreadnought move
-        idx = action - cfg.dread_move_offset
-        slot = idx // cfg.dread_dirs
-        dir_idx = idx % cfg.dread_dirs
-        name = color_unit(get_unit_name(2, slot), current_player)
-        detail = DREAD_MOVE_DETAIL[dir_idx]
-        return f"{short:<10} -  {name} {detail}"
-
-    elif action < cfg.cruiser_fire_offset:
-        # Fighter fire
-        idx = action - cfg.fighter_fire_offset
-        slot = idx
-        name = color_unit(get_unit_name(0, slot), current_player)
-        fire_info = game.get_fire_info(action)
-        if fire_info.has_target:
-            target_name = color_unit(get_unit_name(fire_info.target_type, fire_info.target_slot),
-                                     fire_info.target_player)
-            return f"{short:<10} -  {name} cannon -> {target_name} ({fire_info.damage} dmg)"
-        return f"{short:<10} -  {name} cannon"
-
-    elif action < cfg.dread_fire_offset:
-        # Cruiser fire
-        idx = action - cfg.cruiser_fire_offset
-        slot = idx // cfg.cruiser_cannons
-        cannon = idx % cfg.cruiser_cannons
-        name = color_unit(get_unit_name(1, slot), current_player)
-        fire_info = game.get_fire_info(action)
-        cannon_name = CRUISER_CANNON_DETAIL[cannon]
-        if fire_info.has_target:
-            target_name = color_unit(get_unit_name(fire_info.target_type, fire_info.target_slot),
-                                     fire_info.target_player)
-            return f"{short:<10} -  {name} {cannon_name} -> {target_name} ({fire_info.damage} dmg)"
-        return f"{short:<10} -  {name} {cannon_name}"
-
-    elif action < cfg.deploy_offset:
-        # Dreadnought fire
-        idx = action - cfg.dread_fire_offset
-        slot = idx // cfg.dread_cannons
-        cannon = idx % cfg.dread_cannons
-        name = color_unit(get_unit_name(2, slot), current_player)
-        fire_info = game.get_fire_info(action)
-        cannon_name = DREAD_CANNON_DETAIL[cannon]
-        if fire_info.has_target:
-            target_name = color_unit(get_unit_name(fire_info.target_type, fire_info.target_slot),
-                                     fire_info.target_player)
-            return f"{short:<10} -  {name} {cannon_name} -> {target_name} ({fire_info.damage} dmg)"
-        return f"{short:<10} -  {name} {cannon_name}"
-
-    elif action < cfg.end_turn_offset:
-        # Deploy
-        idx = action - cfg.deploy_offset
-        unit_type = idx // 6
-        facing = idx % 6
+    # Deploy action
+    if action >= cfg.deploy_offset and action < cfg.end_turn_offset:
+        unit_type, facing = cfg.decode_deploy(action)
         type_name = TYPE_NAMES[unit_type].lower()
         facing_name = DIRECTION_NAMES[facing]
-        return f"{short:<10} -  Deploy {type_name} facing {facing_name}"
+        return f"{short:<12} -  Deploy {type_name} facing {facing_name}"
 
-    else:
-        return f"{short:<10} -  End turn"
+    # End turn
+    if action >= cfg.end_turn_offset:
+        return f"{short:<12} -  End turn"
+
+    # Hex-based action
+    if action < cfg.hex_actions:
+        hex_idx, slot = cfg.decode_hex_action(action)
+        unit = find_unit_at_hex(game, hex_idx, cfg.board_side)
+
+        if unit is None:
+            return f"{short:<12} -  (no unit at hex {hex_idx})"
+
+        name = color_unit(get_unit_name(unit.type, unit.slot), current_player)
+
+        # Movement slots (0-4)
+        if slot <= 4:
+            move_detail = {
+                0: 'forward', 1: 'forward-left', 2: 'forward-right',
+                3: 'rotate-left', 4: 'rotate-right'
+            }
+            detail = move_detail.get(slot, f'slot{slot}')
+            return f"{short:<12} -  {name} {detail}"
+
+        # Fire slots (5-9)
+        else:
+            cannon_detail = {
+                5: 'forward cannon', 6: 'forward-left cannon', 7: 'forward-right cannon',
+                8: 'rear-left cannon', 9: 'rear-right cannon'
+            }
+            cannon_name = cannon_detail.get(slot, f'cannon{slot}')
+
+            fire_info = game.get_fire_info(action)
+            if fire_info.has_target:
+                target_name = color_unit(get_unit_name(fire_info.target_type, fire_info.target_slot),
+                                         fire_info.target_player)
+                return f"{short:<12} -  {name} {cannon_name} -> {target_name} ({fire_info.damage} dmg)"
+            return f"{short:<12} -  {name} {cannon_name}"
+
+    return f"{short:<12} -  ???"
 
 
 def print_unit_lists(game):
@@ -839,8 +886,12 @@ def parse_command(cmd, valids, cfg, ctx=None):
         print("End turn not valid!")
         return None
 
+    # Get game from context for hex-based action encoding
+    game = ctx.game if ctx else None
+
     if parts[0] == 'm' and len(parts) >= 3:
         # Move: m <unit><slot> <direction>
+        # Hex-based: find unit's anchor hex, encode hex_idx * 10 + slot
         unit_slot = parts[1]
         direction = parts[2]
 
@@ -848,34 +899,49 @@ def parse_command(cmd, valids, cfg, ctx=None):
             print("Invalid unit. Use f1, f2, c1, d1, etc.")
             return None
 
-        unit_type = unit_slot[0]
+        unit_type_char = unit_slot[0]
         try:
             slot = int(unit_slot[1:]) - 1  # Convert to 0-indexed
         except ValueError:
             print("Invalid slot number.")
             return None
 
-        if unit_type == 'f':
-            dir_map = {'f': 0, 'fl': 1, 'fr': 2}
-            if direction not in dir_map or slot < 0 or slot >= cfg.max_fighters:
-                print("Invalid fighter move.")
-                return None
-            action = cfg.fighter_move_offset + slot * cfg.fighter_dirs + dir_map[direction]
-        elif unit_type == 'c':
-            dir_map = {'l': 0, 'fl': 1, 'f': 2, 'fr': 3, 'r': 4}
-            if direction not in dir_map or slot < 0 or slot >= cfg.max_cruisers:
-                print("Invalid cruiser move.")
-                return None
-            action = cfg.cruiser_move_offset + slot * cfg.cruiser_dirs + dir_map[direction]
-        elif unit_type == 'd':
-            dir_map = {'l': 0, 'fl': 1, 'fr': 2, 'r': 3}
-            if direction not in dir_map or slot < 0 or slot >= cfg.max_dreads:
-                print("Invalid dreadnought move.")
-                return None
-            action = cfg.dread_move_offset + slot * cfg.dread_dirs + dir_map[direction]
-        else:
+        # Map unit type char to type index
+        type_map = {'f': 0, 'c': 1, 'd': 2}
+        if unit_type_char not in type_map:
             print("Invalid unit type. Use f, c, or d.")
             return None
+        unit_type = type_map[unit_type_char]
+
+        # Find the unit to get its anchor hex
+        if game is None:
+            print("Game state not available for move parsing.")
+            return None
+
+        unit = find_unit_by_type_slot(game, unit_type, slot)
+        if unit is None:
+            print(f"Unit {unit_slot} not found on board.")
+            return None
+
+        # Get hex index from unit anchor
+        hex_idx = hex_to_index(unit.anchor_q, unit.anchor_r, cfg.board_side)
+        if hex_idx < 0:
+            print(f"Unit {unit_slot} at invalid position.")
+            return None
+
+        # Map direction to movement slot (0-4)
+        if unit_type == 0:  # Fighter
+            dir_map = {'f': 0, 'fl': 1, 'fr': 2}
+        elif unit_type == 1:  # Cruiser
+            dir_map = {'f': 0, 'fl': 1, 'fr': 2, 'l': 3, 'r': 4}
+        else:  # Dreadnought
+            dir_map = {'fl': 1, 'fr': 2, 'l': 3, 'r': 4}
+
+        if direction not in dir_map:
+            print(f"Invalid direction '{direction}' for {TYPE_NAMES[unit_type]}.")
+            return None
+
+        action = cfg.encode_hex_action(hex_idx, dir_map[direction])
 
         if valids[action] == 1:
             return action
@@ -884,6 +950,7 @@ def parse_command(cmd, valids, cfg, ctx=None):
 
     if parts[0] == 'f' and len(parts) >= 2:
         # Fire: f <unit><slot> [cannon]
+        # Hex-based: find unit's anchor hex, encode hex_idx * 10 + fire_slot
         unit_slot = parts[1]
         cannon = parts[2] if len(parts) >= 3 else None
 
@@ -891,33 +958,57 @@ def parse_command(cmd, valids, cfg, ctx=None):
             print("Invalid unit. Use f1, c1 l, d1 fl, etc.")
             return None
 
-        unit_type = unit_slot[0]
+        unit_type_char = unit_slot[0]
         try:
             slot = int(unit_slot[1:]) - 1
         except ValueError:
             print("Invalid slot number.")
             return None
 
-        if unit_type == 'f':
-            if slot < 0 or slot >= cfg.max_fighters:
-                print("Invalid fighter slot.")
-                return None
-            action = cfg.fighter_fire_offset + slot
-        elif unit_type == 'c':
-            cannon_map = {'l': 0, 'f': 1, 'r': 2}
-            if cannon not in cannon_map or slot < 0 or slot >= cfg.max_cruisers:
-                print("Invalid cruiser fire. Specify cannon: l, f, r")
-                return None
-            action = cfg.cruiser_fire_offset + slot * cfg.cruiser_cannons + cannon_map[cannon]
-        elif unit_type == 'd':
-            cannon_map = {'rr': 0, 'fr': 1, 'fl': 2, 'rl': 3}
-            if cannon not in cannon_map or slot < 0 or slot >= cfg.max_dreads:
-                print("Invalid dreadnought fire. Specify cannon: rr, fr, fl, rl")
-                return None
-            action = cfg.dread_fire_offset + slot * cfg.dread_cannons + cannon_map[cannon]
-        else:
+        # Map unit type char to type index
+        type_map = {'f': 0, 'c': 1, 'd': 2}
+        if unit_type_char not in type_map:
             print("Invalid unit type. Use f, c, or d.")
             return None
+        unit_type = type_map[unit_type_char]
+
+        # Find the unit to get its anchor hex
+        if game is None:
+            print("Game state not available for fire parsing.")
+            return None
+
+        unit = find_unit_by_type_slot(game, unit_type, slot)
+        if unit is None:
+            print(f"Unit {unit_slot} not found on board.")
+            return None
+
+        # Get hex index from unit anchor
+        hex_idx = hex_to_index(unit.anchor_q, unit.anchor_r, cfg.board_side)
+        if hex_idx < 0:
+            print(f"Unit {unit_slot} at invalid position.")
+            return None
+
+        # Map cannon direction to fire slot (5-9)
+        if unit_type == 0:  # Fighter - only forward fire (slot 5)
+            if cannon is not None and cannon != 'f':
+                print("Fighter only has forward cannon.")
+                return None
+            fire_slot = 5
+        elif unit_type == 1:  # Cruiser - forward, forward-left, forward-right (slots 5,6,7)
+            # Cruiser cannon mapping: l->6 (fl), f->5 (forward), r->7 (fr)
+            cannon_map = {'l': 6, 'f': 5, 'r': 7, 'fl': 6, 'fr': 7}
+            if cannon not in cannon_map:
+                print("Invalid cruiser cannon. Use l, f, r (or fl, fr).")
+                return None
+            fire_slot = cannon_map[cannon]
+        else:  # Dreadnought - forward-left, forward-right, rear-left, rear-right (slots 6,7,8,9)
+            cannon_map = {'fl': 6, 'fr': 7, 'rl': 8, 'rr': 9}
+            if cannon not in cannon_map:
+                print("Invalid dreadnought cannon. Use fl, fr, rl, rr.")
+                return None
+            fire_slot = cannon_map[cannon]
+
+        action = cfg.encode_hex_action(hex_idx, fire_slot)
 
         if valids[action] == 1:
             return action
@@ -973,6 +1064,7 @@ def print_actions_menu(valids, cfg, game, probs=None, source=None, show_commands
         return base
 
     # Group valid actions (keep original order within groups)
+    # Hex-based: slots 0-4 are moves, slots 5-9 are fires
     moves = []
     fires = []
     deploys = []
@@ -981,10 +1073,13 @@ def print_actions_menu(valids, cfg, game, probs=None, source=None, show_commands
     for i in range(cfg.num_moves):
         if valids[i] != 1:
             continue
-        if i < cfg.fighter_fire_offset:
-            moves.append(i)
-        elif i < cfg.deploy_offset:
-            fires.append(i)
+        if i < cfg.hex_actions:
+            # Hex action - determine if move or fire by slot
+            _, slot = cfg.decode_hex_action(i)
+            if slot <= 4:
+                moves.append(i)
+            else:
+                fires.append(i)
         elif i < cfg.end_turn_offset:
             deploys.append(i)
         else:

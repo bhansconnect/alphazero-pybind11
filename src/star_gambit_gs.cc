@@ -475,35 +475,49 @@ MoveResult StarGambitGS<Config>::compute_fighter_move(const Unit& unit, int dire
 template<typename Config>
 MoveResult StarGambitGS<Config>::compute_cruiser_move(const Unit& unit, int direction) const {
   MoveResult result;
+  // NOTE: For cruisers, anchor IS the front hex (rear is computed in opposite direction)
   Hex current_anchor = {unit.anchor_q, unit.anchor_r};
-  Hex current_front = hex_neighbor(current_anchor, unit.facing);
 
   // Cruiser moves: 0=rotate-left, 1=fwd-left, 2=forward, 3=fwd-right, 4=rotate-right
   switch (direction) {
-    case 0:  // Rotate left (anchor stays, facing += 1)
-      result.new_anchor = current_anchor;
+    case 0:  // Rotate left: rear stays in place, front pivots
+      {
+        // Find current rear position
+        int rear_dir = OPPOSITE_DIRECTION[unit.facing];
+        Hex current_rear = hex_neighbor(current_anchor, rear_dir);
+        // New facing
+        result.new_facing = rotate_direction(unit.facing, 1);
+        // New anchor (front) is in the new facing direction from the stationary rear
+        result.new_anchor = hex_neighbor(current_rear, result.new_facing);
+        result.valid = true;
+      }
+      break;
+    case 1:  // Forward-left: front moves to forward-left, rear moves to old front
       result.new_facing = rotate_direction(unit.facing, 1);
+      result.new_anchor = hex_neighbor(current_anchor, result.new_facing);
       result.valid = true;
       break;
-    case 1:  // Forward-left
-      result.new_anchor = current_front;  // Rear moves to where front was
-      result.new_facing = rotate_direction(unit.facing, 1);
-      result.valid = true;
-      break;
-    case 2:  // Forward (straight)
-      result.new_anchor = current_front;
+    case 2:  // Forward (straight): front moves forward, rear moves to old front
       result.new_facing = unit.facing;
+      result.new_anchor = hex_neighbor(current_anchor, result.new_facing);
       result.valid = true;
       break;
-    case 3:  // Forward-right
-      result.new_anchor = current_front;
+    case 3:  // Forward-right: front moves to forward-right, rear moves to old front
       result.new_facing = rotate_direction(unit.facing, -1);
+      result.new_anchor = hex_neighbor(current_anchor, result.new_facing);
       result.valid = true;
       break;
-    case 4:  // Rotate right (anchor stays, facing -= 1)
-      result.new_anchor = current_anchor;
-      result.new_facing = rotate_direction(unit.facing, -1);
-      result.valid = true;
+    case 4:  // Rotate right: rear stays in place, front pivots
+      {
+        // Find current rear position
+        int rear_dir = OPPOSITE_DIRECTION[unit.facing];
+        Hex current_rear = hex_neighbor(current_anchor, rear_dir);
+        // New facing
+        result.new_facing = rotate_direction(unit.facing, -1);
+        // New anchor (front) is in the new facing direction from the stationary rear
+        result.new_anchor = hex_neighbor(current_rear, result.new_facing);
+        result.valid = true;
+      }
       break;
     default:
       result.valid = false;

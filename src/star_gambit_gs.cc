@@ -1652,13 +1652,18 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
 template<typename Config>
 std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
     const PlayHistory& base) const noexcept {
-  // Two symmetries: identity and NW-SE diagonal mirror
+  // Two symmetries: identity and NW-axis mirror
   // The 180° rotation is already exploited by the perspective canonicalization.
-  // The diagonal mirror (q, r) → (r, q) is still valid and doubles training data.
+  // The NW-axis mirror reflects across the "forward toward opponent" direction.
+  //
+  // In hex coordinates: (q, r) → (-q, r+q)
+  // In 2D array: (row, col) → (BOARD_DIM-1-row, row+col-(BOARD_SIDE-1))
+  // Direction map: NW stays, SE stays, NE↔W, E↔SW
   std::vector<PlayHistory> syms;
   syms.push_back(base);  // Identity
 
   constexpr int BOARD_DIM = AS::BOARD_DIM;
+  constexpr int BOARD_SIDE = Config::BOARD_SIDE;
   constexpr int NUM_CHANNELS = AS::CANONICAL_CHANNELS;
 
   // Create mirrored version
@@ -1667,26 +1672,28 @@ std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
 
   // ========================================
   // Mirror observation tensor
-  // NW-SE mirror in 2D space is simply transpose: (row, col) → (col, row)
+  // NW-axis mirror: (row, col) → (BOARD_DIM-1-row, row+col-(BOARD_SIDE-1))
   // ========================================
   mirrored.canonical.resize(NUM_CHANNELS, BOARD_DIM, BOARD_DIM);
+  mirrored.canonical.setZero();
 
-  // First pass: transpose all spatial dimensions
+  // First pass: apply position transformation to all channels
   for (int ch = 0; ch < NUM_CHANNELS; ++ch) {
     for (int row = 0; row < BOARD_DIM; ++row) {
       for (int col = 0; col < BOARD_DIM; ++col) {
-        mirrored.canonical(ch, col, row) = base.canonical(ch, row, col);
+        int new_row = (BOARD_DIM - 1) - row;
+        int new_col = row + col - (BOARD_SIDE - 1);
+        // Check bounds (some positions may map outside valid range)
+        if (new_col >= 0 && new_col < BOARD_DIM) {
+          mirrored.canonical(ch, new_row, new_col) = base.canonical(ch, row, col);
+        }
       }
     }
   }
 
   // Second pass: permute facing channels 9-14 using MIRROR_DIRECTION_MAP
-  // The transposed tensor has facing at the wrong direction indices
-  // Original direction d at position (r,c) becomes direction MIRROR_DIRECTION_MAP[d] at (c,r)
-  // We need to swap channel contents: channel 9+d should get content from channel 9+MIRROR_DIR_MAP[d]
-  // after accounting for the spatial transpose already done
+  // Direction d becomes direction MIRROR_DIRECTION_MAP[d]
   {
-    // Temporary storage for the 6 facing channels
     Tensor<float, 3> facing_copy(6, BOARD_DIM, BOARD_DIM);
     for (int d = 0; d < 6; ++d) {
       for (int row = 0; row < BOARD_DIM; ++row) {
@@ -1695,9 +1702,8 @@ std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
         }
       }
     }
-    // Now remap: direction d becomes direction MIRROR_DIRECTION_MAP[d]
-    // So channel 9+new_d gets content from channel 9+d where new_d = MIRROR_DIR_MAP[d]
-    // Equivalently: channel 9+d gets content from channel 9+MIRROR_DIR_MAP[d] (since map is self-inverse)
+    // Remap: channel 9+d gets content from channel 9+MIRROR_DIRECTION_MAP[d]
+    // (MIRROR_DIRECTION_MAP is self-inverse)
     for (int d = 0; d < 6; ++d) {
       int src_d = MIRROR_DIRECTION_MAP[d];
       for (int row = 0; row < BOARD_DIM; ++row) {
@@ -1737,14 +1743,22 @@ std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
   mirrored.pi.resize(1, AS::NUM_MOVES);  // Vector is 1xN matrix
   mirrored.pi.setZero();
 
-  // Spatial actions: transpose (row, col), swap L/R slots
+  // Spatial actions: apply position transformation, swap L/R slots
+  // Only transform valid hex positions; invalid positions use identity (copy as-is)
   for (int action = 0; action < AS::SPATIAL_ACTIONS; ++action) {
     int row, col, slot;
     AS::decode_spatial_action(action, row, col, slot);
 
-    // Transpose position
-    int new_row = col;
-    int new_col = row;
+    // Check if this position corresponds to a valid hex
+    if (!AS::is_valid_hex_pos(row, col)) {
+      // Invalid hex position - copy as-is (should be 0 probability anyway)
+      mirrored.pi(action) = base.pi(action);
+      continue;
+    }
+
+    // Apply NW-axis mirror position transformation
+    int new_row = (BOARD_DIM - 1) - row;
+    int new_col = row + col - (BOARD_SIDE - 1);
     // Swap L/R slots
     int new_slot = SLOT_MAP[slot];
 
@@ -1752,11 +1766,14 @@ std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
     mirrored.pi(new_action) = base.pi(action);
   }
 
-  // Deploy actions: remap facing using MIRROR_DIRECTION_MAP
+  // Deploy actions: use MIRROR_DIRECTION_MAP for F/C, DEPLOY_MIRROR_D for dreadnoughts
+  // F/C use same mirror as spatial (NW axis), dreadnoughts need different axis
   for (int d = 0; d < AS::DEPLOY_ACTIONS; ++d) {
     int type_idx = d / 6;
     int facing = d % 6;
-    int new_facing = MIRROR_DIRECTION_MAP[facing];
+    // Dreadnoughts use different axis to preserve valid facings {0,1,2,3}
+    int new_facing = (type_idx == 2) ? DEPLOY_MIRROR_D[facing]
+                                     : MIRROR_DIRECTION_MAP[facing];
     int new_d = type_idx * 6 + new_facing;
     mirrored.pi(AS::DEPLOY_OFFSET + new_d) = base.pi(AS::DEPLOY_OFFSET + d);
   }

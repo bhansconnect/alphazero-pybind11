@@ -199,6 +199,43 @@ def configure_game_runner():
     game_runner.compare_past = compare_past
 
 
+def get_next_run_name(experiment_name, base_name):
+    """Query Aim for existing runs and return next available run name with suffix."""
+    try:
+        import aim
+        repo = aim.Repo(".")
+
+        # Find all runs in this experiment with matching base name
+        max_suffix = 0
+        base_prefix = base_name + "-"
+
+        for run in repo.iter_runs():
+            if run.experiment != experiment_name:
+                continue
+            name = run.name or ""
+            if name == base_name:
+                # Exact match with no suffix means we need at least -1
+                max_suffix = max(max_suffix, 1)
+            elif name.startswith(base_prefix):
+                # Has our prefix, try to extract suffix number
+                suffix = name[len(base_prefix):]
+                try:
+                    num = int(suffix)
+                    max_suffix = max(max_suffix, num + 1)
+                except ValueError:
+                    pass
+
+        if max_suffix > 0:
+            return f"{base_name}-{max_suffix}"
+        return base_name
+
+    except ImportError:
+        return base_name
+    except Exception:
+        # If anything goes wrong with Aim, just use base name
+        return base_name
+
+
 if __name__ == "__main__":
     print(f"=== Star Gambit Training ===\n")
 
@@ -207,9 +244,11 @@ if __name__ == "__main__":
 
     # Update derived values now that game_name is set
     network_name = "densenet" if dense_net else "resnet"
-    run_name = f"{game_name}-{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims"
+    base_run_name = f"{game_name}-{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims"
+    run_name = get_next_run_name(game_name, base_run_name)
 
     print(f"Game: {game_name}")
+    print(f"Run: {run_name}")
     print(f"Network: {network_name} {depth}d {channels}c {kernel_size}k")
     print(f"MCTS depth: {nn_selfplay_mcts_depth}")
     print(f"Iterations: {iters}")

@@ -115,6 +115,8 @@ void PlayManager::play() {
           ph.v.setZero();
           game.partial_history.push_back(ph);
         }
+        game.total_avg_leaf_depth += mcts.avg_leaf_depth();
+        game.total_search_entropy += mcts.normalized_root_entropy();
         for (auto& m : game.mcts) {
           m.update_root(*game.gs, chosen_m);
         }
@@ -144,6 +146,10 @@ void PlayManager::play() {
             }
             ++games_completed_;
             game_length_ += game.gs->current_turn();
+            total_avg_leaf_depth_ += game.total_avg_leaf_depth;
+            total_search_entropy_ += game.total_search_entropy;
+            game.total_avg_leaf_depth = 0;
+            game.total_search_entropy = 0;
             // If we have started enough games just loop and complete games.
             if (games_started_ >= params_.games_to_play) {
               continue;

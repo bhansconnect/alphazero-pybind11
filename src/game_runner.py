@@ -780,8 +780,10 @@ if __name__ == "__main__":
         if total > 0:
             hr = hits / total
         agl = pm.avg_game_length()
+        avg_depth = pm.avg_leaf_depth()
+        avg_entropy = pm.avg_search_entropy()
         del pm, nn
-        return win_rates, hr, agl, resign_win_rates, resign_rate
+        return win_rates, hr, agl, resign_win_rates, resign_rate, avg_depth, avg_entropy
 
     @tracy_zone
     def play_past(Game, depth, iteration, past_iter):
@@ -789,6 +791,8 @@ if __name__ == "__main__":
         draw_rate = 0
         hr = 0
         agl = 0
+        avg_depth = 0
+        avg_entropy = 0
         nn = neural_net.NNWrapper.load_checkpoint(
             Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{experiment_name}.pt"
         )
@@ -834,6 +838,8 @@ if __name__ == "__main__":
                 if total > 0:
                     hr += hits / total
                 agl += pm.avg_game_length()
+                avg_depth += pm.avg_leaf_depth()
+                avg_entropy += pm.avg_search_entropy()
                 del pm
                 gc.collect()
             for i in tqdm.trange(
@@ -869,12 +875,16 @@ if __name__ == "__main__":
                 if total > 0:
                     hr += hits / total
                 agl += pm.avg_game_length()
+                avg_depth += pm.avg_leaf_depth()
+                avg_entropy += pm.avg_search_entropy()
                 del pm
                 gc.collect()
             nn_rate /= 2 * Game.NUM_PLAYERS()
             draw_rate /= 2 * Game.NUM_PLAYERS()
             hr /= 2 * Game.NUM_PLAYERS()
             agl /= 2 * Game.NUM_PLAYERS()
+            avg_depth /= 2 * Game.NUM_PLAYERS()
+            avg_entropy /= 2 * Game.NUM_PLAYERS()
         else:
             bs = 64
             n = bs * cb
@@ -908,15 +918,19 @@ if __name__ == "__main__":
                 if total > 0:
                     hr += hits / total
                 agl += pm.avg_game_length()
+                avg_depth += pm.avg_leaf_depth()
+                avg_entropy += pm.avg_search_entropy()
                 del pm
                 gc.collect()
             nn_rate /= Game.NUM_PLAYERS()
             draw_rate /= Game.NUM_PLAYERS()
             hr /= Game.NUM_PLAYERS()
             agl /= Game.NUM_PLAYERS()
+            avg_depth /= Game.NUM_PLAYERS()
+            avg_entropy /= Game.NUM_PLAYERS()
 
         del nn, nn_past
-        return nn_rate, draw_rate, hr, agl
+        return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy
 
     try:
         import aim
@@ -1041,7 +1055,7 @@ if __name__ == "__main__":
             with TracyZone("stage_history"):
                 past_iter = max(0, i - compare_past)
                 if past_iter != i and math.isnan(wr[i, past_iter]):
-                    nn_rate, draw_rate, _, game_length = play_past(
+                    nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy = play_past(
                         Game, nn_compare_mcts_depth, i, past_iter
                     )
                     wr[i, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
@@ -1063,6 +1077,20 @@ if __name__ == "__main__":
                     run.track(
                         game_length,
                         name="average_game_length",
+                        epoch=i,
+                        step=total_train_steps,
+                        context={"vs": f"-{compare_past}"},
+                    )
+                    run.track(
+                        bench_depth,
+                        name="avg_leaf_depth",
+                        epoch=i,
+                        step=total_train_steps,
+                        context={"vs": f"-{compare_past}"},
+                    )
+                    run.track(
+                        bench_entropy,
+                        name="search_entropy",
                         epoch=i,
                         step=total_train_steps,
                         context={"vs": f"-{compare_past}"},
@@ -1097,7 +1125,7 @@ if __name__ == "__main__":
 
             stage_start = time.time()
             with TracyZone("stage_selfplay"):
-                win_rates, hit_rate, game_length, resign_win_rates, resignation_rate = (
+                win_rates, hit_rate, game_length, resign_win_rates, resignation_rate, selfplay_depth, selfplay_entropy = (
                     self_play(
                         Game,
                         current_best,
@@ -1157,6 +1185,20 @@ if __name__ == "__main__":
                     step=total_train_steps,
                     context={"vs": "self"},
                 )
+                run.track(
+                    selfplay_depth,
+                    name="avg_leaf_depth",
+                    epoch=i,
+                    step=total_train_steps,
+                    context={"vs": "self"},
+                )
+                run.track(
+                    selfplay_entropy,
+                    name="search_entropy",
+                    epoch=i,
+                    step=total_train_steps,
+                    context={"vs": "self"},
+                )
                 postfix["win_rates"] = list(map(lambda x: f"{x:0.3f}", win_rates))
                 pbar.set_postfix(postfix)
                 gc.collect()
@@ -1199,16 +1241,20 @@ if __name__ == "__main__":
                 panel_nn_rate = 0
                 panel_draw_rate = 0
                 panel_game_length = 0
+                panel_depth = 0
+                panel_entropy = 0
                 best_win_rate = 0
                 for gate_net in tqdm.tqdm(
                     panel, desc=f"Pitting against Panel {panel}", leave=False
                 ):
-                    nn_rate, draw_rate, _, game_length = play_past(
+                    nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy = play_past(
                         Game, nn_compare_mcts_depth, next_net, gate_net
                     )
                     panel_nn_rate += nn_rate
                     panel_draw_rate += draw_rate
                     panel_game_length += game_length
+                    panel_depth += gate_depth
+                    panel_entropy += gate_entropy
                     wr[next_net, gate_net] = nn_rate + draw_rate / Game.NUM_PLAYERS()
                     wr[gate_net, next_net] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
                     gc.collect()
@@ -1233,12 +1279,28 @@ if __name__ == "__main__":
                             epoch=next_net,
                             context={"vs": "best"},
                         )
+                        run.track(
+                            gate_depth,
+                            name="avg_leaf_depth",
+                            epoch=next_net,
+                            step=total_train_steps,
+                            context={"vs": "best"},
+                        )
+                        run.track(
+                            gate_entropy,
+                            name="search_entropy",
+                            epoch=next_net,
+                            step=total_train_steps,
+                            context={"vs": "best"},
+                        )
                         best_win_rate = nn_rate + draw_rate / Game.NUM_PLAYERS()
                         postfix["vs best"] = best_win_rate
                         pbar.set_postfix(postfix)
                 panel_nn_rate /= len(panel)
                 panel_draw_rate /= len(panel)
                 panel_game_length /= len(panel)
+                panel_depth /= len(panel)
+                panel_entropy /= len(panel)
                 run.track(
                     panel_nn_rate,
                     name="win_rate",
@@ -1257,6 +1319,20 @@ if __name__ == "__main__":
                     panel_game_length,
                     name="average_game_length",
                     epoch=next_net,
+                    context={"vs": "panel"},
+                )
+                run.track(
+                    panel_depth,
+                    name="avg_leaf_depth",
+                    epoch=next_net,
+                    step=total_train_steps,
+                    context={"vs": "panel"},
+                )
+                run.track(
+                    panel_entropy,
+                    name="search_entropy",
+                    epoch=next_net,
+                    step=total_train_steps,
                     context={"vs": "panel"},
                 )
                 panel_win_rate = panel_nn_rate + panel_draw_rate / Game.NUM_PLAYERS()

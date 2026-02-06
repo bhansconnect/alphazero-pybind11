@@ -68,6 +68,10 @@ class DLLEXPORT MCTS {
   [[nodiscard]] Vector<uint32_t> counts() const noexcept;
   [[nodiscard]] Vector<float> probs(float temp) const noexcept;
   [[nodiscard]] uint32_t depth() const noexcept { return depth_; };
+  [[nodiscard]] float avg_leaf_depth() const noexcept {
+      return depth_ == 0 ? 0.0f : static_cast<float>(total_leaf_depth_) / static_cast<float>(depth_);
+  };
+  [[nodiscard]] float normalized_root_entropy() const noexcept;
 
   [[nodiscard]] static uint32_t pick_move(const Vector<float>& p);
 
@@ -77,6 +81,7 @@ class DLLEXPORT MCTS {
   int32_t num_moves_;
 
   uint32_t depth_ = 0;
+  uint64_t total_leaf_depth_ = 0;
   Node root_ = Node{};
   Node* current_;
   std::vector<Node*> path_{};

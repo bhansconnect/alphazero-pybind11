@@ -119,7 +119,7 @@ lr_milestone = 150
 
 # === Derived (set in main after variant selection) ===
 network_name = None
-run_name = None
+experiment_name = None
 
 
 def configure_game_runner():
@@ -140,7 +140,7 @@ def configure_game_runner():
     game_runner.dense_net = dense_net
     game_runner.star_gambit_spatial = star_gambit_spatial
     game_runner.network_name = network_name
-    game_runner.run_name = run_name
+    game_runner.experiment_name = experiment_name
     game_runner.lr_milestone = lr_milestone
 
     # MCTS
@@ -201,32 +201,32 @@ def configure_game_runner():
     game_runner.compare_past = compare_past
 
 
-def get_next_run_name(experiment_name, base_name):
-    """Query Aim for existing runs and return next available run name with suffix."""
+def get_next_experiment_name(base_experiment):
+    """Query Aim for existing experiments and return next available name with suffix."""
     try:
         import aim
         repo = aim.Repo(".")
 
-        # Collect all run names from this experiment
-        existing_names = set()
+        # Collect all experiment names
+        existing_experiments = set()
         for run in repo.iter_runs():
-            if run.experiment == experiment_name and run.name:
-                existing_names.add(run.name)
+            if run.experiment:
+                existing_experiments.add(run.experiment)
 
         # Find next available suffix
-        if base_name not in existing_names:
-            return base_name
+        if base_experiment not in existing_experiments:
+            return base_experiment
 
         suffix = 1
-        while f"{base_name}-{suffix}" in existing_names:
+        while f"{base_experiment}-{suffix}" in existing_experiments:
             suffix += 1
-        return f"{base_name}-{suffix}"
+        return f"{base_experiment}-{suffix}"
 
     except ImportError:
-        return base_name
+        return base_experiment
     except Exception as e:
-        print(f"Warning: Could not query Aim for existing runs: {e}")
-        return base_name
+        print(f"Warning: Could not query Aim for existing experiments: {e}")
+        return base_experiment
 
 
 if __name__ == "__main__":
@@ -237,11 +237,11 @@ if __name__ == "__main__":
 
     # Update derived values now that game_name is set
     network_name = "densenet" if dense_net else "resnet"
-    base_run_name = f"{game_name}-{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims"
-    run_name = get_next_run_name(game_name, base_run_name)
+    base_experiment = f"{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims"
+    experiment_name = get_next_experiment_name(base_experiment)
 
     print(f"Game: {game_name}")
-    print(f"Run: {run_name}")
+    print(f"Experiment: {experiment_name}")
     print(f"Network: {network_name} {depth}d {channels}c {kernel_size}k")
     print(f"MCTS depth: {nn_selfplay_mcts_depth}")
     print(f"Iterations: {iters}")

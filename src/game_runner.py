@@ -132,7 +132,7 @@ nn_compare_mcts_depth = nn_selfplay_mcts_depth // 2
 compare_past = 20
 
 
-run_name = f"{game_name}-{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims"
+experiment_name = f"{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims"
 
 
 class GameRunner:
@@ -420,7 +420,7 @@ if __name__ == "__main__":
     @tracy_zone
     def create_init_net(Game, nnargs):
         nn = neural_net.NNWrapper(Game, nnargs)
-        nn.save_checkpoint(CHECKPOINT_LOCATION, f"0000-{run_name}.pt")
+        nn.save_checkpoint(CHECKPOINT_LOCATION, f"0000-{experiment_name}.pt")
 
     def calc_hist_size(i):
         return int(
@@ -594,7 +594,7 @@ if __name__ == "__main__":
         dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE, shuffle=False)
 
         nn = neural_net.NNWrapper.load_checkpoint(
-            Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{run_name}.pt"
+            Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{experiment_name}.pt"
         )
         loss = nn.sample_loss(dataloader, sample_count)
         total_loss = np.sum(loss)
@@ -670,7 +670,7 @@ if __name__ == "__main__":
         dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE, shuffle=True)
 
         nn = neural_net.NNWrapper.load_checkpoint(
-            Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{run_name}.pt"
+            Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{experiment_name}.pt"
         )
         v_loss, pi_loss = nn.losses(dataloader)
 
@@ -706,14 +706,14 @@ if __name__ == "__main__":
 
         average_generation = total_size / min(hist_size, iteration + 1)
         nn = neural_net.NNWrapper.load_checkpoint(
-            Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{run_name}.pt"
+            Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{experiment_name}.pt"
         )
         steps_to_train = int(math.ceil(average_generation / bs * TRAIN_SAMPLE_RATE))
         v_loss, pi_loss = nn.train(
             dataloader, steps_to_train, run, iteration, total_train_steps
         )
         total_train_steps += steps_to_train
-        nn.save_checkpoint(CHECKPOINT_LOCATION, f"{iteration + 1:04d}-{run_name}.pt")
+        nn.save_checkpoint(CHECKPOINT_LOCATION, f"{iteration + 1:04d}-{experiment_name}.pt")
         del datasets, dataset, dataloader, nn
         return v_loss, pi_loss, total_train_steps
 
@@ -744,7 +744,7 @@ if __name__ == "__main__":
             params.max_cache_size = 0
         else:
             nn = neural_net.NNWrapper.load_checkpoint(
-                Game, CHECKPOINT_LOCATION, f"{best:04d}-{run_name}.pt"
+                Game, CHECKPOINT_LOCATION, f"{best:04d}-{experiment_name}.pt"
             )
 
         pm = alphazero.PlayManager(new_game(), params)
@@ -790,13 +790,13 @@ if __name__ == "__main__":
         hr = 0
         agl = 0
         nn = neural_net.NNWrapper.load_checkpoint(
-            Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{run_name}.pt"
+            Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{experiment_name}.pt"
         )
         if past_iter == 0:
             nn_past = RandPlayer(Game, 64)
         else:
             nn_past = neural_net.NNWrapper.load_checkpoint(
-                Game, CHECKPOINT_LOCATION, f"{past_iter:04d}-{run_name}.pt"
+                Game, CHECKPOINT_LOCATION, f"{past_iter:04d}-{experiment_name}.pt"
             )
         cb = Game.NUM_PLAYERS()
         if Game.NUM_PLAYERS() > 2:
@@ -921,8 +921,8 @@ if __name__ == "__main__":
     try:
         import aim
 
-        run = aim.Run(experiment=game_name)
-        run.name = run_name
+        run = aim.Run(experiment=experiment_name)
+        run.name = game_name
 
         run["hparams"] = {
             "network": network_name,

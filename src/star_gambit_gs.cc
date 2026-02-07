@@ -2541,39 +2541,56 @@ MoveResult StarGambitUnifiedGS::compute_fighter_move(const Unit& unit, int direc
 
 MoveResult StarGambitUnifiedGS::compute_cruiser_move(const Unit& unit, int direction) const {
   MoveResult result;
-  CruiserMove move = static_cast<CruiserMove>(direction);
+  // NOTE: For cruisers, anchor IS the front hex (rear is computed in opposite direction)
+  Hex current_anchor = {unit.anchor_q, unit.anchor_r};
 
-  Hex anchor = {unit.anchor_q, unit.anchor_r};
-  int facing = unit.facing;
-
-  switch (move) {
-    case CruiserMove::ROTATE_LEFT:
-      result.new_anchor = anchor;
-      result.new_facing = rotate_direction(facing, 1);
+  // Cruiser moves: 0=rotate-left, 1=fwd-left, 2=forward, 3=fwd-right, 4=rotate-right
+  switch (direction) {
+    case 0:  // Rotate left: rear stays in place, front pivots
+      {
+        int rear_dir = OPPOSITE_DIRECTION[unit.facing];
+        Hex current_rear = hex_neighbor(current_anchor, rear_dir);
+        result.new_facing = rotate_direction(unit.facing, 1);
+        result.new_anchor = hex_neighbor(current_rear, result.new_facing);
+        result.valid = true;
+      }
+      break;
+    case 1:  // Forward-left: front moves to forward-left, rear moves to old front
+      result.new_facing = rotate_direction(unit.facing, 1);
+      result.new_anchor = hex_neighbor(current_anchor, result.new_facing);
       result.valid = true;
       break;
-    case CruiserMove::ROTATE_RIGHT:
-      result.new_anchor = anchor;
-      result.new_facing = rotate_direction(facing, -1);
+    case 2:  // Forward (straight): front moves forward, rear moves to old front
+      result.new_facing = unit.facing;
+      result.new_anchor = hex_neighbor(current_anchor, result.new_facing);
       result.valid = true;
       break;
-    case CruiserMove::FORWARD:
-      result.new_anchor = hex_neighbor(anchor, facing);
-      result.new_facing = facing;
-      result.valid = hex_in_bounds_rt(result.new_anchor);
+    case 3:  // Forward-right: front moves to forward-right, rear moves to old front
+      result.new_facing = rotate_direction(unit.facing, -1);
+      result.new_anchor = hex_neighbor(current_anchor, result.new_facing);
+      result.valid = true;
       break;
-    case CruiserMove::FORWARD_LEFT:
-      result.new_anchor = hex_neighbor(anchor, facing);
-      result.new_facing = rotate_direction(facing, 1);
-      result.valid = hex_in_bounds_rt(result.new_anchor);
-      break;
-    case CruiserMove::FORWARD_RIGHT:
-      result.new_anchor = hex_neighbor(anchor, facing);
-      result.new_facing = rotate_direction(facing, -1);
-      result.valid = hex_in_bounds_rt(result.new_anchor);
+    case 4:  // Rotate right: rear stays in place, front pivots
+      {
+        int rear_dir = OPPOSITE_DIRECTION[unit.facing];
+        Hex current_rear = hex_neighbor(current_anchor, rear_dir);
+        result.new_facing = rotate_direction(unit.facing, -1);
+        result.new_anchor = hex_neighbor(current_rear, result.new_facing);
+        result.valid = true;
+      }
       break;
     default:
       result.valid = false;
+      return result;
+  }
+
+  // Check all new hexes are in bounds
+  auto new_hexes = get_unit_hexes(UnitType::CRUISER, result.new_anchor, result.new_facing);
+  for (const auto& h : new_hexes) {
+    if (!hex_in_bounds_rt(h)) {
+      result.valid = false;
+      break;
+    }
   }
 
   return result;
@@ -2581,38 +2598,57 @@ MoveResult StarGambitUnifiedGS::compute_cruiser_move(const Unit& unit, int direc
 
 MoveResult StarGambitUnifiedGS::compute_dreadnought_move(const Unit& unit, int direction) const {
   MoveResult result;
-  DreadnoughtMove move = static_cast<DreadnoughtMove>(direction);
+  Hex current_anchor = {unit.anchor_q, unit.anchor_r};
 
-  Hex anchor = {unit.anchor_q, unit.anchor_r};
-  int facing = unit.facing;
+  // Dreadnought moves: 0=left (pivot), 1=fwd-left (slide), 2=fwd-right (slide), 3=right (pivot)
+  switch (direction) {
+    case 0:  // Left: pivot around rear-left hex
+      {
+        int rear_dir = OPPOSITE_DIRECTION[unit.facing];
+        Hex rear_left = hex_neighbor(current_anchor, rear_dir);
 
-  switch (move) {
-    case DreadnoughtMove::ROTATE_LEFT:
-      result.new_anchor = anchor;
-      result.new_facing = rotate_direction(facing, 1);
+        int anchor_dir_from_pivot = OPPOSITE_DIRECTION[rear_dir];
+        int new_anchor_dir = rotate_direction(anchor_dir_from_pivot, 1);
+        result.new_anchor = hex_neighbor(rear_left, new_anchor_dir);
+        result.new_facing = rotate_direction(unit.facing, 1);
+        result.valid = true;
+      }
+      break;
+    case 1:  // Forward-left: slide in forward-left direction
+      result.new_anchor = hex_neighbor(current_anchor, rotate_direction(unit.facing, 1));
+      result.new_facing = unit.facing;
       result.valid = true;
       break;
-    case DreadnoughtMove::ROTATE_RIGHT:
-      result.new_anchor = anchor;
-      result.new_facing = rotate_direction(facing, -1);
+    case 2:  // Forward-right: slide in forward direction
+      result.new_anchor = hex_neighbor(current_anchor, unit.facing);
+      result.new_facing = unit.facing;
       result.valid = true;
       break;
-    case DreadnoughtMove::FORWARD_LEFT: {
-      int move_dir = rotate_direction(facing, 1);
-      result.new_anchor = hex_neighbor(anchor, move_dir);
-      result.new_facing = facing;
-      result.valid = hex_in_bounds_rt(result.new_anchor);
+    case 3:  // Right: pivot around rear-right hex
+      {
+        int rear_dir = OPPOSITE_DIRECTION[unit.facing];
+        int rear_right_dir = rotate_direction(rear_dir, 1);
+        Hex rear_right = hex_neighbor(current_anchor, rear_right_dir);
+
+        int anchor_dir_from_pivot = OPPOSITE_DIRECTION[rear_right_dir];
+        int new_anchor_dir = rotate_direction(anchor_dir_from_pivot, -1);
+        result.new_anchor = hex_neighbor(rear_right, new_anchor_dir);
+        result.new_facing = rotate_direction(unit.facing, -1);
+        result.valid = true;
+      }
       break;
-    }
-    case DreadnoughtMove::FORWARD_RIGHT: {
-      int move_dir = rotate_direction(facing, -1);
-      result.new_anchor = hex_neighbor(anchor, move_dir);
-      result.new_facing = facing;
-      result.valid = hex_in_bounds_rt(result.new_anchor);
-      break;
-    }
     default:
       result.valid = false;
+      return result;
+  }
+
+  // Check all new hexes are in bounds
+  auto new_hexes = get_unit_hexes(UnitType::DREADNOUGHT, result.new_anchor, result.new_facing);
+  for (const auto& h : new_hexes) {
+    if (!hex_in_bounds_rt(h)) {
+      result.valid = false;
+      break;
+    }
   }
 
   return result;
@@ -2852,13 +2888,8 @@ Vector<uint8_t> StarGambitUnifiedGS::valid_moves() const noexcept {
     }
   }
 
-  // End turn - also allow if no other moves are available (prevents deadlock)
-  bool has_other_moves = false;
-  for (int i = 0; i < UAS::END_TURN_OFFSET; ++i) {
-    if (valids(i) == 1) { has_other_moves = true; break; }
-  }
-
-  if (is_end_turn_valid() || (!has_other_moves && !is_turn_one())) {
+  // End turn
+  if (is_end_turn_valid()) {
     valids(UAS::END_TURN_OFFSET) = 1;
   }
 
@@ -3087,13 +3118,18 @@ bool StarGambitUnifiedGS::check_repetition() {
 
 uint64_t StarGambitUnifiedGS::compute_position_hash() const {
   uint64_t hash = 0;
-  hash ^= std::hash<int>{}(current_player_);
+  hash ^= static_cast<uint64_t>(current_player_) * 0x9e3779b97f4a7c15ULL;
 
   for (const auto& unit : units_) {
     if (!unit.is_alive()) continue;
-    hash ^= std::hash<int>{}(static_cast<int>(unit.type) * 1000 + unit.player * 100 +
-                             unit.anchor_q * 10 + unit.anchor_r);
-    hash ^= std::hash<int>{}(unit.facing << 16);
+    uint64_t unit_hash = static_cast<uint64_t>(unit.type) ^
+                         (static_cast<uint64_t>(unit.player) << 8) ^
+                         (static_cast<uint64_t>(unit.slot) << 12) ^
+                         (static_cast<uint64_t>(unit.hp) << 16) ^
+                         (static_cast<uint64_t>(unit.facing) << 24) ^
+                         (static_cast<uint64_t>(unit.anchor_q + 10) << 32) ^
+                         (static_cast<uint64_t>(unit.anchor_r + 10) << 40);
+    hash ^= unit_hash * 0x517cc1b727220a95ULL;
   }
 
   return hash;

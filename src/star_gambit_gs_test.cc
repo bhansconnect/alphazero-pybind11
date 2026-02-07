@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <map>
 #include <optional>
@@ -3155,6 +3156,99 @@ TEST(UnifiedGS, ReserveNormalizationUsesGlobalMax) {
   EXPECT_FLOAT_EQ(bt_tensor(CH_MY_FIGHTERS, CENTER, CENTER), 4.0f / 4.0f);
   EXPECT_FLOAT_EQ(bt_tensor(CH_MY_CRUISERS, CENTER, CENTER), 3.0f / 3.0f);
   EXPECT_FLOAT_EQ(bt_tensor(CH_MY_DREADNOUGHTS, CENTER, CENTER), 2.0f / 2.0f);
+}
+
+// =============================================================================
+// Cross-validation: Template (Battle) vs Unified (Battle)
+// =============================================================================
+
+TEST(StarGambitCrossValidation, TemplateVsUnifiedBattle) {
+  // Play random games on both implementations and verify they match
+  constexpr int NUM_GAMES = 50;
+  constexpr int MAX_MOVES = 500;
+
+  std::mt19937 rng(42);
+
+  for (int game_idx = 0; game_idx < NUM_GAMES; ++game_idx) {
+    StarGambitBattleGS tmpl_game;
+    StarGambitUnifiedGS unified_game(StarGambitVariant::BATTLE);
+
+    for (int move_idx = 0; move_idx < MAX_MOVES; ++move_idx) {
+      // Check both games agree on current player
+      ASSERT_EQ(tmpl_game.current_player(), unified_game.current_player())
+          << "Game " << game_idx << " move " << move_idx << ": player mismatch";
+
+      // Check both games agree on terminal state
+      auto tmpl_scores = tmpl_game.scores();
+      auto unified_scores = unified_game.scores();
+      bool tmpl_over = tmpl_scores.has_value();
+      bool unified_over = unified_scores.has_value();
+      ASSERT_EQ(tmpl_over, unified_over)
+          << "Game " << game_idx << " move " << move_idx << ": game_over mismatch"
+          << " (template=" << tmpl_over << ", unified=" << unified_over << ")";
+
+      if (tmpl_over) {
+        // Verify same outcome
+        for (int i = 0; i < 3; ++i) {
+          EXPECT_FLOAT_EQ((*tmpl_scores)(i), (*unified_scores)(i))
+              << "Game " << game_idx << " move " << move_idx << ": score[" << i << "] mismatch";
+        }
+        break;
+      }
+
+      // Compare valid_moves
+      auto tmpl_valids = tmpl_game.valid_moves();
+      auto unified_valids = unified_game.valid_moves();
+      ASSERT_EQ(tmpl_valids.size(), unified_valids.size())
+          << "Game " << game_idx << " move " << move_idx << ": valid_moves size mismatch";
+
+      for (int i = 0; i < tmpl_valids.size(); ++i) {
+        ASSERT_EQ(tmpl_valids(i), unified_valids(i))
+            << "Game " << game_idx << " move " << move_idx
+            << ": valid_moves differ at index " << i
+            << " (template=" << (int)tmpl_valids(i) << ", unified=" << (int)unified_valids(i) << ")";
+      }
+
+      // Collect valid move indices
+      std::vector<uint32_t> valid_indices;
+      for (int i = 0; i < tmpl_valids.size(); ++i) {
+        if (tmpl_valids(i)) valid_indices.push_back(i);
+      }
+      ASSERT_FALSE(valid_indices.empty())
+          << "Game " << game_idx << " move " << move_idx << ": no valid moves but game not over";
+
+      // Pick a random valid move and play on both
+      std::uniform_int_distribution<size_t> dist(0, valid_indices.size() - 1);
+      uint32_t chosen_move = valid_indices[dist(rng)];
+      tmpl_game.play_move(chosen_move);
+      unified_game.play_move(chosen_move);
+
+      // Compare unit states after the move
+      auto tmpl_units = tmpl_game.get_units();
+      auto unified_units = unified_game.get_units();
+      ASSERT_EQ(tmpl_units.size(), unified_units.size())
+          << "Game " << game_idx << " move " << move_idx << ": unit count mismatch";
+
+      for (size_t u = 0; u < tmpl_units.size(); ++u) {
+        const auto& tu = tmpl_units[u];
+        const auto& uu = unified_units[u];
+        ASSERT_EQ(tu.player, uu.player)
+            << "Game " << game_idx << " move " << move_idx << " unit " << u << ": player mismatch";
+        ASSERT_EQ(tu.type, uu.type)
+            << "Game " << game_idx << " move " << move_idx << " unit " << u << ": type mismatch";
+        ASSERT_EQ(tu.hp, uu.hp)
+            << "Game " << game_idx << " move " << move_idx << " unit " << u << ": hp mismatch";
+        ASSERT_EQ(tu.anchor_q, uu.anchor_q)
+            << "Game " << game_idx << " move " << move_idx << " unit " << u << ": anchor_q mismatch";
+        ASSERT_EQ(tu.anchor_r, uu.anchor_r)
+            << "Game " << game_idx << " move " << move_idx << " unit " << u << ": anchor_r mismatch";
+        ASSERT_EQ(tu.facing, uu.facing)
+            << "Game " << game_idx << " move " << move_idx << " unit " << u << ": facing mismatch";
+        ASSERT_EQ(tu.moves_left, uu.moves_left)
+            << "Game " << game_idx << " move " << move_idx << " unit " << u << ": moves_left mismatch";
+      }
+    }
+  }
 }
 
 }  // namespace alphazero::star_gambit_gs

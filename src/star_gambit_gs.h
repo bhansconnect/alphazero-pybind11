@@ -176,20 +176,20 @@ enum class FighterMove : uint8_t {
 // Cruiser movement directions: rotate-left, forward-left, forward, forward-right, rotate-right
 constexpr int CRUISER_MOVE_DIRS = 5;
 enum class CruiserMove : uint8_t {
-  ROTATE_LEFT = 0,    // Anchor stays, facing += 1
-  FORWARD_LEFT = 1,   // Move forward, new facing = (facing + 1) % 6
+  ROTATE_LEFT = 0,    // Rear stays, front pivots left
+  FORWARD_LEFT = 1,   // Move in new facing dir (facing+1)
   FORWARD = 2,        // Move forward, facing unchanged
-  FORWARD_RIGHT = 3,  // Move forward, new facing = (facing + 5) % 6
-  ROTATE_RIGHT = 4    // Anchor stays, facing -= 1
+  FORWARD_RIGHT = 3,  // Move in new facing dir (facing-1)
+  ROTATE_RIGHT = 4    // Rear stays, front pivots right
 };
 
 // Dreadnought movement directions: rotate-left, forward-left, forward-right, rotate-right
 constexpr int DREAD_MOVE_DIRS = 4;
 enum class DreadnoughtMove : uint8_t {
-  ROTATE_LEFT = 0,    // Anchor stays, facing += 1
-  FORWARD_LEFT = 1,   // Move forward-left
-  FORWARD_RIGHT = 2,  // Move forward-right
-  ROTATE_RIGHT = 3    // Anchor stays, facing -= 1
+  ROTATE_LEFT = 0,    // Pivot around rear-left hex
+  FORWARD_LEFT = 1,   // Slide in forward-left direction
+  FORWARD_RIGHT = 2,  // Slide in forward direction
+  ROTATE_RIGHT = 3    // Pivot around rear-right hex
 };
 
 // ============================================================================

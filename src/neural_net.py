@@ -232,8 +232,6 @@ class NNArch(nn.Module):
 
 
 class NNWrapper:
-    _concurrent_safe = True
-
     def __init__(self, game, args):
         self.game = game
         self.args = args

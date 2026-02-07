@@ -3,7 +3,7 @@
 
 Determines the optimal MCTS visit count for self-play and evaluation by:
 1. Running an Elo tournament between different visit count configurations
-2. Measuring policy convergence (KL divergence from max-visits policy)
+2. Measuring policy convergence (JSD, TV, Hellinger, top-k agreement vs max-visits policy)
 3. Measuring value estimate convergence (correlation + MAE vs max-visits, and vs game outcomes)
 """
 
@@ -43,15 +43,32 @@ def calc_temp(turn):
     return temp
 
 
-def kl_divergence(p, q):
-    """KL(p || q) with epsilon smoothing."""
-    eps = 1e-9
-    result = 0.0
-    for i in range(len(p)):
-        if p[i] > eps:
-            q_val = max(q[i], eps)
-            result += p[i] * math.log(p[i] / q_val)
-    return result
+def jensen_shannon_divergence(p, q):
+    """JSD(p, q). Bounded [0, ln(2)]."""
+    m = 0.5 * (p + q)
+    jsd = 0.0
+    mask_p = p > 0
+    jsd += 0.5 * np.sum(p[mask_p] * np.log(p[mask_p] / m[mask_p]))
+    mask_q = q > 0
+    jsd += 0.5 * np.sum(q[mask_q] * np.log(q[mask_q] / m[mask_q]))
+    return float(jsd)
+
+
+def total_variation(p, q):
+    """TV(p, q). Bounded [0, 1]."""
+    return 0.5 * float(np.sum(np.abs(p - q)))
+
+
+def hellinger_distance(p, q):
+    """Hellinger distance. Bounded [0, 1]."""
+    return float(np.sqrt(0.5 * np.sum((np.sqrt(p) - np.sqrt(q))**2)))
+
+
+def top_k_agreement(p, q, k):
+    """Fraction of top-k moves by p that appear in top-k of q."""
+    top_p = set(np.argsort(p)[-k:])
+    top_q = set(np.argsort(q)[-k:])
+    return len(top_p & top_q) / k
 
 
 # --- Phase 1: Interactive Configuration ---
@@ -367,7 +384,12 @@ def run_analysis(Game, network_path, visit_counts):
     print(f"Collected {total_positions} positions across {ANALYSIS_GAMES} games")
 
     # Aggregate metrics from all games
-    all_kl = {vc: [] for vc in visit_counts}
+    all_jsd = {vc: [] for vc in visit_counts}
+    all_tv = {vc: [] for vc in visit_counts}
+    all_hellinger = {vc: [] for vc in visit_counts}
+    all_top1 = {vc: [] for vc in visit_counts}
+    all_top3 = {vc: [] for vc in visit_counts}
+    all_top9 = {vc: [] for vc in visit_counts}
     position_values = {vc: [] for vc in visit_counts}
     position_max_values = []
     position_outcomes = []
@@ -386,13 +408,18 @@ def run_analysis(Game, network_path, visit_counts):
                 outcome = 0.0
             position_outcomes.append(outcome)
 
-            # Policy KL divergence vs max visits
+            # Policy divergence metrics vs max visits
             if max_visits in policies_at_pos:
                 max_policy = policies_at_pos[max_visits]
                 for vc in visit_counts:
                     if vc in policies_at_pos:
-                        kl = kl_divergence(max_policy, policies_at_pos[vc])
-                        all_kl[vc].append(kl)
+                        q = policies_at_pos[vc]
+                        all_jsd[vc].append(jensen_shannon_divergence(max_policy, q))
+                        all_tv[vc].append(total_variation(max_policy, q))
+                        all_hellinger[vc].append(hellinger_distance(max_policy, q))
+                        all_top1[vc].append(top_k_agreement(max_policy, q, 1))
+                        all_top3[vc].append(top_k_agreement(max_policy, q, 3))
+                        all_top9[vc].append(top_k_agreement(max_policy, q, 9))
 
             # Store values
             for vc in visit_counts:
@@ -417,16 +444,23 @@ def run_analysis(Game, network_path, visit_counts):
         "num_games": ANALYSIS_GAMES,
     }
 
-    # Policy KL divergence
-    kl_means = {}
-    kl_all = {}
-    for vc in visit_counts:
-        if vc != max_visits and vc in all_kl and len(all_kl[vc]) > 0:
-            arr = np.array(all_kl[vc])
-            kl_means[vc] = float(np.mean(arr))
-            kl_all[vc] = arr
-    metrics["kl_means"] = kl_means
-    metrics["kl_all"] = kl_all
+    # Policy divergence metrics
+    policy_metric_names = ["jsd", "tv", "hellinger", "top1", "top3", "top9"]
+    policy_metric_data = {
+        "jsd": all_jsd, "tv": all_tv, "hellinger": all_hellinger,
+        "top1": all_top1, "top3": all_top3, "top9": all_top9,
+    }
+    for name in policy_metric_names:
+        means = {}
+        all_vals = {}
+        for vc in visit_counts:
+            data = policy_metric_data[name]
+            if vc != max_visits and vc in data and len(data[vc]) > 0:
+                arr = np.array(data[vc])
+                means[vc] = float(np.mean(arr))
+                all_vals[vc] = arr
+        metrics[f"{name}_means"] = means
+        metrics[f"{name}_all"] = all_vals
 
     # Value metrics
     value_corr_vs_max = {}
@@ -484,10 +518,15 @@ def run_analysis(Game, network_path, visit_counts):
     metrics["regret_all"] = regret_all
 
     # Print summary
-    print("\n--- Policy Analysis (KL divergence from max-visits policy) ---")
-    print(f"{'Visits':>8s} {'Mean KL':>10s}")
-    for vc in sorted(kl_means.keys()):
-        print(f"{vc:>8d} {kl_means[vc]:>10.4f}")
+    print("\n--- Policy Analysis (divergence from max-visits policy) ---")
+    print(f"{'Visits':>8s} {'JSD':>10s} {'TV':>10s} {'Hellinger':>10s} {'Top-1':>10s} {'Top-3':>10s} {'Top-9':>10s}")
+    all_policy_vcs = sorted(set().union(*(metrics[f"{n}_means"].keys() for n in policy_metric_names)))
+    for vc in all_policy_vcs:
+        vals = []
+        for name in policy_metric_names:
+            v = metrics[f"{name}_means"].get(vc)
+            vals.append(f"{v:>10.4f}" if v is not None else f"{'N/A':>10s}")
+        print(f"{vc:>8d} {''.join(vals)}")
 
     print("\n--- Value Analysis vs Max-Visits ---")
     print(f"{'Visits':>8s} {'Corr':>8s} {'MAE':>8s}")
@@ -559,37 +598,58 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
         print(f"Saved: {path}")
         fig_num += 1
 
-    # Figure 2: Policy KL divergence
-    if metrics and "kl_means" in metrics and metrics["kl_means"]:
-        kl_means = metrics["kl_means"]
-        kl_all = metrics["kl_all"]
-        kl_vcs = sorted(kl_means.keys())
+    # Figure 2: Policy divergence metrics (2x3 grid)
+    policy_metric_info = [
+        ("jsd", "Jensen-Shannon Divergence", "lightblue"),
+        ("tv", "Total Variation", "lightgreen"),
+        ("hellinger", "Hellinger Distance", "lightyellow"),
+        ("top1", "Top-1 Agreement", "lightsalmon"),
+        ("top3", "Top-3 Agreement", "plum"),
+        ("top9", "Top-9 Agreement", "lightskyblue"),
+    ]
+    has_policy_metrics = metrics and any(
+        metrics.get(f"{name}_means") for name, _, _ in policy_metric_info
+    )
+    if has_policy_metrics:
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+        axes = axes.flatten()
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+        for idx, (name, title, color) in enumerate(policy_metric_info):
+            ax = axes[idx]
+            means = metrics.get(f"{name}_means", {})
+            all_data = metrics.get(f"{name}_all", {})
+            if not means:
+                ax.set_visible(False)
+                continue
 
-        # Mean line
-        ax1.plot(kl_vcs, [kl_means[vc] for vc in kl_vcs], "o-", markersize=8, linewidth=2)
-        ax1.set_xscale("log")
-        ax1.set_xlabel("MCTS Visit Count")
-        ax1.set_ylabel("KL Divergence")
-        ax1.set_title("Mean Policy KL Divergence vs Max-Visits")
-        ax1.set_xticks(kl_vcs)
-        ax1.set_xticklabels([str(v) for v in kl_vcs])
-        ax1.grid(True, alpha=0.3)
+            vcs = sorted(means.keys())
+            labels = [str(v) for v in vcs]
 
-        # Box plot
-        bp_data = [kl_all[vc] for vc in kl_vcs]
-        bp = ax2.boxplot(bp_data, labels=[str(v) for v in kl_vcs],
-                         showfliers=False, patch_artist=True)
-        for patch in bp["boxes"]:
-            patch.set_facecolor("lightblue")
-        ax2.set_xlabel("MCTS Visit Count")
-        ax2.set_ylabel("KL Divergence")
-        ax2.set_title("Policy KL Divergence Distribution")
-        ax2.grid(True, alpha=0.3)
+            # Box plot with mean overlay
+            if all_data:
+                bp_data = [all_data[vc] for vc in vcs]
+                bp = ax.boxplot(bp_data, labels=labels,
+                                showfliers=False, patch_artist=True)
+                for patch in bp["boxes"]:
+                    patch.set_facecolor(color)
+                # Overlay mean line
+                ax.plot(range(1, len(vcs) + 1), [means[vc] for vc in vcs],
+                        "D-", markersize=6, linewidth=2, color="tab:blue",
+                        zorder=3, label="mean")
+                ax.legend(fontsize=8)
+            else:
+                ax.plot(range(1, len(vcs) + 1), [means[vc] for vc in vcs],
+                        "o-", markersize=8, linewidth=2)
+                ax.set_xticks(range(1, len(vcs) + 1))
+                ax.set_xticklabels(labels)
+
+            ax.set_xlabel("MCTS Visit Count")
+            ax.set_ylabel(title)
+            ax.set_title(title)
+            ax.grid(True, alpha=0.3)
 
         fig.tight_layout()
-        path = os.path.join(save_dir, "policy_kl.png")
+        path = os.path.join(save_dir, "policy_metrics.png")
         fig.savefig(path, dpi=150)
         print(f"Saved: {path}")
         fig_num += 1
@@ -725,12 +785,14 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
         for key in ["total_positions", "num_games", "max_visits"]:
             if key in metrics:
                 save_data[key] = np.array(metrics[key])
-        # KL data
-        if "kl_means" in metrics:
-            for vc, val in metrics["kl_means"].items():
-                save_data[f"kl_mean_{vc}"] = np.array(val)
-            for vc, arr in metrics.get("kl_all", {}).items():
-                save_data[f"kl_all_{vc}"] = arr
+        # Policy divergence metrics
+        for prefix in ["jsd", "tv", "hellinger", "top1", "top3", "top9"]:
+            if f"{prefix}_means" in metrics:
+                for vc, val in metrics[f"{prefix}_means"].items():
+                    save_data[f"{prefix}_mean_{vc}"] = np.array(val)
+            if f"{prefix}_all" in metrics:
+                for vc, arr in metrics[f"{prefix}_all"].items():
+                    save_data[f"{prefix}_all_{vc}"] = arr
         # Value data
         for prefix in ["value_corr_vs_max", "value_mae_vs_max",
                         "value_corr_vs_outcome", "value_mae_vs_outcome"]:

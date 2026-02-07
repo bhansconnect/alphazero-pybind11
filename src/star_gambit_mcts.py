@@ -139,9 +139,9 @@ def interactive_config():
     checkpoints = runs[selected_run]
     network_path = select_checkpoint_from_run(checkpoints)
     if network_path is None:
-        print("Random policy selected - analysis requires a network. Exiting.")
-        sys.exit(1)
-    print(f"  -> {os.path.basename(network_path)}\n")
+        print("  -> Random policy (uniform)\n")
+    else:
+        print(f"  -> {os.path.basename(network_path)}\n")
 
     # Visit counts
     print(f"Default visit counts: {DEFAULT_VISIT_COUNTS}")
@@ -181,12 +181,15 @@ def run_tournament(Game, network_path, visit_counts):
     print("Phase: Elo Tournament (Round-Robin)")
     print("=" * 60)
 
-    net_dir = os.path.dirname(network_path)
-    net_file = os.path.basename(network_path)
     count = len(visit_counts)
 
-    # Load a single network, reuse for all configs
-    agent = neural_net.NNWrapper.load_checkpoint(Game, net_dir, net_file)
+    # Load a single network (or random player), reuse for all configs
+    if network_path is None:
+        agent = RandPlayer(Game, TOURNAMENT_BATCH_SIZE)
+    else:
+        net_dir = os.path.dirname(network_path)
+        net_file = os.path.basename(network_path)
+        agent = neural_net.NNWrapper.load_checkpoint(Game, net_dir, net_file)
 
     win_matrix = np.full((count, count), np.nan)
 
@@ -241,9 +244,12 @@ def run_analysis(Game, network_path, visit_counts):
     print("Phase: Policy & Value Analysis")
     print("=" * 60)
 
-    net_dir = os.path.dirname(network_path)
-    net_file = os.path.basename(network_path)
-    agent = neural_net.NNWrapper.load_checkpoint(Game, net_dir, net_file)
+    if network_path is None:
+        agent = RandPlayer(Game, ANALYSIS_GAMES)
+    else:
+        net_dir = os.path.dirname(network_path)
+        net_file = os.path.basename(network_path)
+        agent = neural_net.NNWrapper.load_checkpoint(Game, net_dir, net_file)
 
     num_players = Game.NUM_PLAYERS()
     num_moves = Game.NUM_MOVES()

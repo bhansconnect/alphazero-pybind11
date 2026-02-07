@@ -79,17 +79,45 @@ def interactive_config():
     print(f"  -> {variant_name}\n")
 
     # Network selection
-    runs = discover_networks()
-    if not runs:
+    variants = discover_networks()
+    if not variants:
         print("No checkpoints found in data/checkpoint/")
         sys.exit(1)
 
-    run_names = list(runs.keys())
+    # Variant selection
+    variant_names = list(variants.keys())
+    if len(variant_names) == 1:
+        selected_variant = variant_names[0]
+        print(f"Variant: {selected_variant}")
+    else:
+        print("Available variants:")
+        for i, name in enumerate(variant_names):
+            runs = variants[name]
+            total_cpts = sum(len(cpts) for cpts in runs.values())
+            print(f"  {i + 1}. {name} ({len(runs)} run(s), {total_cpts} checkpoints)")
+        while True:
+            rc = input("\nSelect variant (number) [1]: ").strip()
+            if rc == "":
+                selected_variant = variant_names[0]
+                break
+            try:
+                idx = int(rc) - 1
+                if 0 <= idx < len(variant_names):
+                    selected_variant = variant_names[idx]
+                    break
+                print(f"Enter 1-{len(variant_names)}")
+            except ValueError:
+                print("Invalid input")
+
+    runs = variants[selected_variant]
+
+    # Run selection
+    run_names = sorted(runs.keys())
     if len(run_names) == 1:
         selected_run = run_names[0]
-        print(f"Training run: {selected_run}")
+        print(f"Run: {selected_run}")
     else:
-        print("Available training runs:")
+        print("Available runs:")
         for i, name in enumerate(run_names):
             cpts = runs[name]
             iter_range = f"{cpts[-1][0]:04d}-{cpts[0][0]:04d}"

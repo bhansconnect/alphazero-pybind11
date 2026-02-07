@@ -26,6 +26,7 @@ import neural_net
 from game_runner import RandPlayer
 import glob
 import math
+import re
 import numpy as np
 import tqdm
 
@@ -70,11 +71,56 @@ def main():
     if os.path.isdir(bench_path):
         model_path = bench_path
 
-    # Load agents
-    nn_agents = [
-        os.path.basename(x)
-        for x in sorted(glob.glob(os.path.join(model_path, "*.pt")), reverse=False)
-    ]
+    # Discover and group agents by run name
+    all_pt_files = sorted(glob.glob(os.path.join(model_path, "*.pt")))
+    runs = {}
+    for pt_file in all_pt_files:
+        filename = os.path.basename(pt_file)
+        match = re.match(r'^(\d+)-(.+)\.pt$', filename)
+        if match:
+            run_name = match.group(2)
+            if run_name not in runs:
+                runs[run_name] = []
+            runs[run_name].append(filename)
+
+    if not runs:
+        print(f"No checkpoints found in {model_path}")
+        return
+
+    # Run selection
+    run_names = sorted(runs.keys())
+    if len(run_names) == 1:
+        selected_runs = run_names
+        print(f"Run: {run_names[0]}")
+    else:
+        print("Available runs:")
+        for i, name in enumerate(run_names):
+            print(f"  {i+1}. {name} ({len(runs[name])} checkpoints)")
+        print(f"  a. All runs (cross-architecture tournament)")
+
+        while True:
+            choice = input("\nSelect run (number, or 'a' for all): ").strip().lower()
+            if choice == 'a':
+                selected_runs = run_names
+                break
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(run_names):
+                    selected_runs = [run_names[idx]]
+                    break
+                print(f"Enter 1-{len(run_names)} or 'a'")
+            except ValueError:
+                if choice == '':
+                    selected_runs = run_names
+                    break
+                print("Invalid input")
+
+    # Build agent list from selected runs
+    nn_agents = []
+    for run_name in selected_runs:
+        nn_agents.extend(runs[run_name])
+    nn_agents.sort()  # Sort by filename (iteration order)
+
     rand_agents = []  # Add random agents if desired, e.g., [5000]
     agents = rand_agents + nn_agents
 
@@ -87,8 +133,10 @@ def main():
         agents.insert(0, "dummy")
 
     count = len(agents)
-    print(f"=== Star Gambit Monrad Tournament ===")
+    run_str = ", ".join(selected_runs) if len(selected_runs) <= 3 else f"{len(selected_runs)} runs"
+    print(f"\n=== Star Gambit Monrad Tournament ===")
     print(f"Game: {variant_name.capitalize()} ({Game.__name__})")
+    print(f"Run(s): {run_str}")
     print(f"MCTS depth: {NN_MCTS_DEPTH}")
     print(f"Batch size: {BATCH_SIZE}")
     print(f"Model path: {model_path}")

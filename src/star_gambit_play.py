@@ -27,33 +27,41 @@ except ImportError:
 
 def discover_networks(base_path="data/checkpoint"):
     """
-    Discover available network checkpoints organized by training run.
-    Returns: {run_name: [(iter_num, full_path), ...]} sorted by iter descending (newest first)
+    Discover available network checkpoints organized by variant and run.
+    Returns: {variant_name: {run_name: [(iter_num, full_path), ...]}}
+    Each run's checkpoints sorted by iteration descending (newest first).
+    Run name is extracted from filename: {iter:04d}-{run_name}.pt
     """
-    runs = {}
+    variants = {}
     if not os.path.isdir(base_path):
-        return runs
+        return variants
 
-    for run_name in sorted(os.listdir(base_path)):
-        run_path = os.path.join(base_path, run_name)
-        if not os.path.isdir(run_path):
+    for variant_name in sorted(os.listdir(base_path)):
+        variant_path = os.path.join(base_path, variant_name)
+        if not os.path.isdir(variant_path):
             continue
 
-        checkpoints = []
-        for pt_file in glob.glob(os.path.join(run_path, "*.pt")):
+        runs = {}
+        for pt_file in glob.glob(os.path.join(variant_path, "*.pt")):
             filename = os.path.basename(pt_file)
-            # Extract iteration number from prefix (e.g., "0049" from "0049-name.pt")
-            match = re.match(r'^(\d+)-', filename)
+            # Extract iteration number and run name from filename
+            # e.g., "0049-densenet-4d-16c-3k-300sims.pt" -> iter=49, run="densenet-4d-16c-3k-300sims"
+            match = re.match(r'^(\d+)-(.+)\.pt$', filename)
             if match:
                 iter_num = int(match.group(1))
-                checkpoints.append((iter_num, pt_file))
+                run_name = match.group(2)
+                if run_name not in runs:
+                    runs[run_name] = []
+                runs[run_name].append((iter_num, pt_file))
 
-        if checkpoints:
-            # Sort by iteration descending (newest first)
-            checkpoints.sort(key=lambda x: x[0], reverse=True)
-            runs[run_name] = checkpoints
+        # Sort each run's checkpoints by iteration descending (newest first)
+        for run_name in runs:
+            runs[run_name].sort(key=lambda x: x[0], reverse=True)
 
-    return runs
+        if runs:
+            variants[variant_name] = runs
+
+    return variants
 
 
 def load_network_for_players(ctx, path, players):
@@ -140,41 +148,56 @@ def select_checkpoint_from_run(checkpoints, prompt_prefix=""):
             print("Invalid input")
 
 
-def select_network_interactive(ctx):
+def select_run_and_checkpoint(variants, prompt_prefix=""):
     """
-    Interactive network selection menu.
-    Returns True if a network was selected, False if both players use random.
+    Interactive variant -> run -> checkpoint selection.
+    Auto-selects when only 1 option exists at each level.
+    Returns path string, or None for random policy.
     """
-    if not TORCH_AVAILABLE:
-        print("torch not available - using random policy")
-        return False
+    # Variant selection
+    variant_names = list(variants.keys())
+    if len(variant_names) == 1:
+        selected_variant = variant_names[0]
+        print(f"{prompt_prefix}Variant: {selected_variant}")
+    else:
+        print(f"{prompt_prefix}Available variants:")
+        for i, name in enumerate(variant_names):
+            runs = variants[name]
+            total_cpts = sum(len(cpts) for cpts in runs.values())
+            print(f"  {i+1}. {name} ({len(runs)} run(s), {total_cpts} checkpoints)")
+        while True:
+            choice = input(f"\n{prompt_prefix}Select variant (number, or 'r' for random): ").strip().lower()
+            if choice == 'r':
+                return None
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(variant_names):
+                    selected_variant = variant_names[idx]
+                    break
+                print(f"Enter 1-{len(variant_names)}")
+            except ValueError:
+                if choice == '':
+                    selected_variant = variant_names[0]
+                    break
+                print("Invalid input")
 
-    runs = discover_networks()
-
-    if not runs:
-        print("No checkpoints found in data/checkpoint/")
-        print("Using random policy")
-        return False
-
-    print("\n=== Network Selection ===")
+    runs = variants[selected_variant]
 
     # Run selection
-    run_names = list(runs.keys())
+    run_names = sorted(runs.keys())
     if len(run_names) == 1:
         selected_run = run_names[0]
-        print(f"Training run: {selected_run}")
+        print(f"{prompt_prefix}Run: {selected_run}")
     else:
-        print("Available training runs:")
+        print(f"\n{prompt_prefix}Available runs in {selected_variant}:")
         for i, name in enumerate(run_names):
             cpts = runs[name]
             iter_range = f"{cpts[-1][0]:04d}-{cpts[0][0]:04d}"
             print(f"  {i+1}. {name} ({len(cpts)} checkpoints: {iter_range})")
-
         while True:
-            choice = input("\nSelect run (number, or 'r' for random): ").strip().lower()
+            choice = input(f"\n{prompt_prefix}Select run (number, or 'r' for random): ").strip().lower()
             if choice == 'r':
-                print("Using random policy for both players")
-                return False
+                return None
             try:
                 idx = int(choice) - 1
                 if 0 <= idx < len(run_names):
@@ -188,9 +211,28 @@ def select_network_interactive(ctx):
                 print("Invalid input")
 
     checkpoints = runs[selected_run]
+    return select_checkpoint_from_run(checkpoints, prompt_prefix)
+
+
+def select_network_interactive(ctx):
+    """
+    Interactive network selection menu.
+    Returns True if a network was selected, False if both players use random.
+    """
+    if not TORCH_AVAILABLE:
+        print("torch not available - using random policy")
+        return False
+
+    variants = discover_networks()
+
+    if not variants:
+        print("No checkpoints found in data/checkpoint/")
+        print("Using random policy")
+        return False
+
+    print("\n=== Network Selection ===")
 
     # Ask if same or different networks
-    print(f"\nRun: {selected_run}")
     choice = input("Same network for both players? [y]es / [n]o / [r]andom (default=yes): ").strip().lower()
 
     if choice == 'r':
@@ -198,11 +240,11 @@ def select_network_interactive(ctx):
         return False
 
     if choice == 'n':
-        # Different networks per player
+        # Different networks per player — each independently picks variant/run/iteration
         any_loaded = False
         for player in [0, 1]:
             print(f"\n--- Player {player} ---")
-            path = select_checkpoint_from_run(checkpoints, f"P{player} ")
+            path = select_run_and_checkpoint(variants, f"P{player} ")
             if path is None:
                 print(f"Player {player} using random policy")
             elif load_network_for_players(ctx, path, [player]):
@@ -211,7 +253,7 @@ def select_network_interactive(ctx):
         return any_loaded
     else:
         # Same network for both
-        path = select_checkpoint_from_run(checkpoints)
+        path = select_run_and_checkpoint(variants)
         if path is None:
             print("Using random policy for both players")
             return False

@@ -8,7 +8,7 @@ Usage:
     python src/star_gambit_monrad.py
 
 Networks are loaded from data/bench/{variant}/ (if exists) or data/checkpoint/{variant}/.
-Results are saved to data/star_gambit_{variant}_monrad_wr.csv.
+Results are saved to data/tournaments/{variant}_monrad_{timestamp}/.
 """
 
 import os
@@ -24,9 +24,11 @@ from monrad import calc_elo, pit_agents
 
 import neural_net
 from game_runner import RandPlayer
-import glob
+from network_selector import (
+    discover_runs, interactive_select, create_tournament_dir,
+    save_tournament_results,
+)
 import math
-import re
 import numpy as np
 import tqdm
 
@@ -41,7 +43,6 @@ VARIANTS = {
 
 # === Star Gambit Configuration ===
 BATCH_SIZE = 64
-NN_MCTS_DEPTH = 200
 
 
 def select_variant():
@@ -71,57 +72,16 @@ def main():
     if os.path.isdir(bench_path):
         model_path = bench_path
 
-    # Discover and group agents by run name
-    all_pt_files = sorted(glob.glob(os.path.join(model_path, "*.pt")))
-    runs = {}
-    for pt_file in all_pt_files:
-        filename = os.path.basename(pt_file)
-        match = re.match(r'^(\d+)-(.+)\.pt$', filename)
-        if match:
-            run_name = match.group(2)
-            if run_name not in runs:
-                runs[run_name] = []
-            runs[run_name].append(filename)
-
+    # Discover and select networks
+    runs = discover_runs(model_path)
     if not runs:
         print(f"No checkpoints found in {model_path}")
         return
 
-    # Run selection
-    run_names = sorted(runs.keys())
-    if len(run_names) == 1:
-        selected_runs = run_names
-        print(f"Run: {run_names[0]}")
-    else:
-        print("Available runs:")
-        for i, name in enumerate(run_names):
-            print(f"  {i+1}. {name} ({len(runs[name])} checkpoints)")
-        print(f"  a. All runs (cross-architecture tournament)")
+    nn_agents, mcts_visits, num_random = interactive_select(runs, default_mcts=200)
 
-        while True:
-            choice = input("\nSelect run (number, or 'a' for all): ").strip().lower()
-            if choice == 'a':
-                selected_runs = run_names
-                break
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(run_names):
-                    selected_runs = [run_names[idx]]
-                    break
-                print(f"Enter 1-{len(run_names)} or 'a'")
-            except ValueError:
-                if choice == '':
-                    selected_runs = run_names
-                    break
-                print("Invalid input")
-
-    # Build agent list from selected runs
-    nn_agents = []
-    for run_name in selected_runs:
-        nn_agents.extend(runs[run_name])
-    nn_agents.sort()  # Sort by filename (iteration order)
-
-    rand_agents = []  # Add random agents if desired, e.g., [5000]
+    # Build agent list
+    rand_agents = [mcts_visits] * num_random
     agents = rand_agents + nn_agents
 
     if len(agents) < 2:
@@ -133,11 +93,14 @@ def main():
         agents.insert(0, "dummy")
 
     count = len(agents)
+    selected_runs = sorted(set(
+        r for r in runs if any(runs[r].filenames[it] in nn_agents for it in runs[r].iterations)
+    ))
     run_str = ", ".join(selected_runs) if len(selected_runs) <= 3 else f"{len(selected_runs)} runs"
     print(f"\n=== Star Gambit Monrad Tournament ===")
     print(f"Game: {variant_name.capitalize()} ({Game.__name__})")
     print(f"Run(s): {run_str}")
-    print(f"MCTS depth: {NN_MCTS_DEPTH}")
+    print(f"MCTS visits: {mcts_visits}")
     print(f"Batch size: {BATCH_SIZE}")
     print(f"Model path: {model_path}")
     print(f"Agents ({count}): {agents}")
@@ -216,7 +179,7 @@ def main():
                     p1 = neural_net.NNWrapper.load_checkpoint(
                         Game, model_path, agents[i]
                     )
-                    d1 = NN_MCTS_DEPTH
+                    d1 = mcts_visits
 
                 if agents[j] in rand_agents:
                     p2 = RandPlayer(Game, BATCH_SIZE)
@@ -225,7 +188,7 @@ def main():
                     p2 = neural_net.NNWrapper.load_checkpoint(
                         Game, model_path, agents[j]
                     )
-                    d2 = NN_MCTS_DEPTH
+                    d2 = mcts_visits
 
                 # Pit agents
                 players = [p2] * Game.NUM_PLAYERS()
@@ -265,15 +228,15 @@ def main():
     for rank, (agent, rating) in enumerate(reversed(sorted_agents)):
         print(f"  {rank+1}. {agent}: {rating:.0f}")
 
-    # Save results
-    output_file = os.path.join("data", f"star_gambit_{variant_name}_monrad_wr.csv")
-    np.savetxt(
-        output_file,
-        win_matrix,
-        delimiter=",",
-        header=",".join([str(a) for a in agents]),
+    # Save results to tournament directory
+    output_dir = create_tournament_dir(".", variant_name, "monrad")
+    save_tournament_results(
+        output_dir, agents, elo, win_matrix,
+        mcts_visits=mcts_visits,
+        num_random=num_random,
+        variant=variant_name,
+        fmt="monrad",
     )
-    print(f"\nResults saved to {output_file}")
 
 
 if __name__ == "__main__":

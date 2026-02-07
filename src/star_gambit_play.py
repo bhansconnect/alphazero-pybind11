@@ -65,7 +65,17 @@ def discover_networks(base_path="data/checkpoint"):
 
 
 def load_network_for_players(ctx, path, players):
-    """Load a network and assign it to specified players."""
+    """Load a network and assign it to specified players.
+
+    path can be a file path (network), None (random), or "playout".
+    """
+    if path == "playout":
+        for p in players:
+            ctx.players[p].network = None
+            ctx.players[p].network_path = None
+            ctx.players[p].eval_type = "playout"
+            ctx.players[p].mcts = None
+        return True
     if not TORCH_AVAILABLE:
         print("Error: torch not available")
         return False
@@ -76,6 +86,7 @@ def load_network_for_players(ctx, path, players):
         for p in players:
             ctx.players[p].network = net
             ctx.players[p].network_path = path
+            ctx.players[p].eval_type = "network"
             ctx.players[p].mcts = None
         return True
     except Exception as e:
@@ -93,6 +104,7 @@ def select_checkpoint_from_run(checkpoints, prompt_prefix=""):
     print(f"\nCheckpoints (newest first):")
     print(f"  l. Latest   -> iter {latest_iter:04d} ({os.path.basename(latest_path)})")
     print(f"  r. Random policy (no network)")
+    print(f"  p. Playout policy (random rollout)")
     print("  " + "-" * 50)
 
     # Show first few checkpoints
@@ -115,6 +127,10 @@ def select_checkpoint_from_run(checkpoints, prompt_prefix=""):
         # 'r' = random
         if choice == 'r':
             return None
+
+        # 'p' = playout
+        if choice == 'p':
+            return "playout"
 
         # Negative number = go back N from latest
         if choice.startswith('-'):
@@ -233,11 +249,20 @@ def select_network_interactive(ctx):
     print("\n=== Network Selection ===")
 
     # Ask if same or different networks
-    choice = input("Same network for both players? [y]es / [n]o / [r]andom (default=yes): ").strip().lower()
+    choice = input("Same network for both players? [y]es / [n]o / [r]andom / [p]layout (default=yes): ").strip().lower()
 
     if choice == 'r':
         print("Using random policy for both players")
         return False
+
+    if choice == 'p':
+        for p in [0, 1]:
+            ctx.players[p].network = None
+            ctx.players[p].network_path = None
+            ctx.players[p].eval_type = "playout"
+            ctx.players[p].mcts = None
+        print("Using playout policy for both players")
+        return True
 
     if choice == 'n':
         # Different networks per player — each independently picks variant/run/iteration
@@ -245,7 +270,11 @@ def select_network_interactive(ctx):
         for player in [0, 1]:
             print(f"\n--- Player {player} ---")
             path = select_run_and_checkpoint(variants, f"P{player} ")
-            if path is None:
+            if path == "playout":
+                load_network_for_players(ctx, "playout", [player])
+                print(f"Player {player} using playout policy")
+                any_loaded = True
+            elif path is None:
                 print(f"Player {player} using random policy")
             elif load_network_for_players(ctx, path, [player]):
                 print(f"Player {player} loaded: {os.path.basename(path)}")
@@ -254,6 +283,10 @@ def select_network_interactive(ctx):
     else:
         # Same network for both
         path = select_run_and_checkpoint(variants)
+        if path == "playout":
+            load_network_for_players(ctx, "playout", [0, 1])
+            print("Using playout policy for both players")
+            return True
         if path is None:
             print("Using random policy for both players")
             return False
@@ -421,6 +454,7 @@ class PlayerConfig:
         self.is_ai = False
         self.network_path = None  # None means random
         self.network = None       # Loaded network wrapper
+        self.eval_type = "random"  # "random", "playout", or "network"
         self.think_time = None    # Seconds, or None for no time limit
         self.node_limit = DEFAULT_NODE_LIMIT  # Max nodes, or None for no limit
         self.temperature = DEFAULT_TEMPERATURE
@@ -431,7 +465,12 @@ class PlayerConfig:
         if not self.is_ai:
             hints_str = ", hints=on" if self.show_hints else ""
             return f"Human{hints_str}"
-        net_str = os.path.basename(self.network_path) if self.network_path else "random"
+        if self.eval_type == "playout":
+            net_str = "playout"
+        elif self.network_path:
+            net_str = os.path.basename(self.network_path)
+        else:
+            net_str = "random"
         time_str = f"{self.think_time}s" if self.think_time else "unlimited"
         node_str = str(self.node_limit) if self.node_limit else "unlimited"
         return f"AI(net={net_str}, time={time_str}, nodes={node_str}, temp={self.temperature})"
@@ -476,7 +515,7 @@ def apply_temperature(probs, temperature):
         return scaled / scaled.sum()
 
 
-def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None):
+def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None, eval_type="random"):
     """
     Run MCTS search with time or node limit.
     Returns (visit_counts, num_simulations, wld).
@@ -497,7 +536,11 @@ def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None):
 
         # Expand one node
         leaf = mcts.find_leaf(gs)
-        if agent is None:
+        if eval_type == "playout":
+            v, pi = alphazero.playout_eval(leaf)
+            v = np.array(v)
+            pi = np.array(pi)
+        elif agent is None:
             # Random policy
             v = np.zeros(gs.NUM_PLAYERS() + 1)
             v[-1] = 1.0  # Uniform draw assumption
@@ -533,12 +576,13 @@ def get_ai_probs(ctx, player_idx, valids):
     should_search = (pcfg.think_time is not None and pcfg.think_time > 0) or \
                    (pcfg.node_limit is not None and pcfg.node_limit > 0)
 
-    if should_search and (pcfg.network is not None or TORCH_AVAILABLE):
+    if should_search and (pcfg.network is not None or pcfg.eval_type == "playout" or TORCH_AVAILABLE):
         # Run MCTS search
         counts, sims, wld = run_mcts_search(
             ctx.game, pcfg.network, pcfg.mcts,
             time_limit=pcfg.think_time,
-            node_limit=pcfg.node_limit
+            node_limit=pcfg.node_limit,
+            eval_type=pcfg.eval_type,
         )
 
         # Convert counts to probabilities
@@ -549,9 +593,13 @@ def get_ai_probs(ctx, player_idx, valids):
 
         source = f"MCTS ({sims} sims)"
     else:
-        # Use raw policy network (or uniform for random)
+        # Use raw policy network (or uniform for random/playout)
         sims = 0
-        if pcfg.network is not None:
+        if pcfg.eval_type == "playout":
+            v, pi = alphazero.playout_eval(ctx.game)
+            probs = np.array(pi)
+            source = "playout (single rollout)"
+        elif pcfg.network is not None:
             canonical = torch.from_numpy(np.array(ctx.game.canonicalized()))
             _, pi = pcfg.network.predict(canonical)
             probs = pi.cpu().numpy().flatten()

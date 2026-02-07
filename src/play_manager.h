@@ -96,6 +96,7 @@ class DLLEXPORT PlayManager {
     return games_completed_;
   }
   void dumb_inference(const uint8_t player);
+  void playout_inference(const uint8_t player);
 
   [[nodiscard]] std::optional<uint32_t> pop_game(uint32_t player) noexcept {
     return awaiting_inference_[player]->pop(MAX_WAIT);

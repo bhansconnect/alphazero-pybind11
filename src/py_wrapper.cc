@@ -291,6 +291,8 @@ PYBIND11_MODULE(alphazero, m) {
             return current;
           },
           py::call_guard<py::gil_scoped_release>())
+      .def("playout_inference", &PlayManager::playout_inference,
+           py::call_guard<py::gil_scoped_release>())
       .def(
           "build_batch",
           [](PlayManager& pm, uint32_t player, py::array_t<float>& batch,
@@ -488,6 +490,16 @@ PYBIND11_MODULE(alphazero, m) {
                   [] { return photosynthesis_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return PhotosynthesisGS<4>::CANONICAL_SHAPE; });
+
+  m.def("playout_eval", [](const GameState& gs) {
+    Vector<float> v;
+    Vector<float> pi;
+    {
+      py::gil_scoped_release release;
+      std::tie(v, pi) = playout_eval(gs);
+    }
+    return py::make_tuple(v, pi);
+  });
 
   // Tracy profiler bindings
 #ifdef TRACY_ENABLE

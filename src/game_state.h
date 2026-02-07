@@ -108,7 +108,7 @@ inline bool operator==(const GameStateKeyWrapper& lhs,
 
 // A sample evaluation function for testing.
 // It just returns even probablity.
-[[nodiscard]] std::tuple<Vector<float>, Vector<float>> dumb_eval(
+[[nodiscard]] inline std::tuple<Vector<float>, Vector<float>> dumb_eval(
     const GameState& gs) {
   auto valids = gs.valid_moves();
   auto values = Vector<float>{gs.num_players() + 1};
@@ -122,5 +122,10 @@ inline bool operator==(const GameStateKeyWrapper& lhs,
   policy = valids.cast<float>() / sum;
   return {values, policy};
 }
+
+// Playout (rollout) evaluation: plays random moves to terminal, returns
+// game outcome as value and uniform-over-legal-moves as policy.
+[[nodiscard]] std::tuple<Vector<float>, Vector<float>> playout_eval(
+    const GameState& gs);
 
 }  // namespace alphazero

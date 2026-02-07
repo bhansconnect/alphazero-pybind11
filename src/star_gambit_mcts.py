@@ -18,7 +18,7 @@ import tqdm
 import alphazero
 import neural_net
 from game_runner import (
-    GameRunner, GRArgs, RandPlayer, base_params, elo_prob,
+    GameRunner, GRArgs, RandPlayer, PlayoutPlayer, base_params, elo_prob,
     CPUCT, FPU_REDUCTION, EVAL_TEMP, FINAL_TEMP, TEMP_DECAY_HALF_LIFE,
 )
 from monrad import pit_agents, calc_elo
@@ -155,8 +155,14 @@ def interactive_config():
 
     checkpoints = runs[selected_run]
     network_path = select_checkpoint_from_run(checkpoints)
+    use_playout = False
     if network_path is None:
-        print("  -> Random policy (uniform)\n")
+        playout_choice = input("Use playout (rollout) evaluation instead of uniform random? (y/n) [n]: ").strip().lower()
+        if playout_choice == 'y':
+            use_playout = True
+            print("  -> Playout policy (random rollout)\n")
+        else:
+            print("  -> Random policy (uniform)\n")
     else:
         print(f"  -> {os.path.basename(network_path)}\n")
 
@@ -184,12 +190,12 @@ def interactive_config():
         phases = {"tournament", "analysis"}
     print(f"  -> {phases}\n")
 
-    return Game, network_path, visit_counts, phases
+    return Game, network_path, visit_counts, phases, use_playout
 
 
 # --- Phase 2: Elo Tournament (Round-Robin) ---
 
-def run_tournament(Game, network_path, visit_counts):
+def run_tournament(Game, network_path, visit_counts, use_playout=False):
     """Run round-robin Elo tournament between visit count configs.
 
     Returns (elo_ratings, win_matrix) indexed by visit_counts order.
@@ -203,7 +209,10 @@ def run_tournament(Game, network_path, visit_counts):
     # Load network (shared across players)
     num_players = Game.NUM_PLAYERS()
     if network_path is None:
-        agent = RandPlayer(Game, TOURNAMENT_BATCH_SIZE)
+        if use_playout:
+            agent = PlayoutPlayer(Game)
+        else:
+            agent = RandPlayer(Game, TOURNAMENT_BATCH_SIZE)
         def make_players():
             return [agent] * num_players
     else:
@@ -251,7 +260,7 @@ def run_tournament(Game, network_path, visit_counts):
 
 # --- Phase 3: Policy & Value Analysis ---
 
-def run_analysis(Game, network_path, visit_counts):
+def run_analysis(Game, network_path, visit_counts, use_playout=False):
     """Run policy & value convergence analysis with batched inference.
 
     Plays ANALYSIS_GAMES concurrently, batching all NN inference calls across
@@ -263,7 +272,9 @@ def run_analysis(Game, network_path, visit_counts):
     print("Phase: Policy & Value Analysis")
     print("=" * 60)
 
-    if network_path is None:
+    if network_path is None and use_playout:
+        agent = None  # Will use playout_eval per-leaf below
+    elif network_path is None:
         agent = RandPlayer(Game, ANALYSIS_GAMES)
     else:
         net_dir = os.path.dirname(network_path)
@@ -310,14 +321,26 @@ def run_analysis(Game, network_path, visit_counts):
                 for i in range(n)
             ]
 
-            # Stack canonicals into batch tensor
-            canonicals = [np.array(leaf.canonicalized()) for leaf in leaves]
-            batch = torch.from_numpy(np.stack(canonicals))
+            # Evaluate leaves
+            if agent is None:
+                # Playout evaluation: call C++ playout_eval per leaf
+                v_list = []
+                pi_list = []
+                for leaf in leaves:
+                    v, pi = alphazero.playout_eval(leaf)
+                    v_list.append(np.array(v))
+                    pi_list.append(np.array(pi))
+                v_np = np.stack(v_list)
+                pi_np = np.stack(pi_list)
+            else:
+                # Stack canonicals into batch tensor
+                canonicals = [np.array(leaf.canonicalized()) for leaf in leaves]
+                batch = torch.from_numpy(np.stack(canonicals))
 
-            # Single batched GPU inference
-            v_batch, pi_batch = agent.process(batch)
-            v_np = v_batch.cpu().numpy()
-            pi_np = pi_batch.cpu().numpy()
+                # Single batched GPU inference
+                v_batch, pi_batch = agent.process(batch)
+                v_np = v_batch.cpu().numpy()
+                pi_np = pi_batch.cpu().numpy()
 
             # process_result for each active game
             for i in range(n):
@@ -820,17 +843,17 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
 
 
 def main():
-    Game, network_path, visit_counts, phases = interactive_config()
+    Game, network_path, visit_counts, phases, use_playout = interactive_config()
 
     elo = None
     win_matrix = None
     metrics = None
 
     if "tournament" in phases:
-        elo, win_matrix = run_tournament(Game, network_path, visit_counts)
+        elo, win_matrix = run_tournament(Game, network_path, visit_counts, use_playout)
 
     if "analysis" in phases:
-        metrics = run_analysis(Game, network_path, visit_counts)
+        metrics = run_analysis(Game, network_path, visit_counts, use_playout)
 
     visualize_and_save(visit_counts, elo=elo, win_matrix=win_matrix, metrics=metrics)
 

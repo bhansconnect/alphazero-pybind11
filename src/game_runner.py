@@ -274,7 +274,8 @@ class GameRunner:
                 batch_index % self.num_players, batch, self.batch_workers
             )
             out = batch[: len(game_indices)]
-            out = out.contiguous().to(self.device, non_blocking=True)
+            if not isinstance(self.players[player], RandPlayer):
+                out = out.contiguous().to(self.device, non_blocking=True)
             self.batch_queue.put((out, batch_index, game_indices))
 
     def player_executor(self):

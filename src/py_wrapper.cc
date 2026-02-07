@@ -169,6 +169,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def("process_result", &MCTS::process_result)
       .def("root_value", &MCTS::root_value)
       .def("counts", &MCTS::counts)
+      .def("root_q_values", &MCTS::root_q_values)
       .def("probs", &MCTS::probs)
       .def("depth", &MCTS::depth)
       .def_static("pick_move", &MCTS::pick_move);

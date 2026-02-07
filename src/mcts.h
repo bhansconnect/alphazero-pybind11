@@ -66,6 +66,7 @@ class DLLEXPORT MCTS {
     return wld;
   }
   [[nodiscard]] Vector<uint32_t> counts() const noexcept;
+  [[nodiscard]] Vector<float> root_q_values() const noexcept;
   [[nodiscard]] Vector<float> probs(float temp) const noexcept;
   [[nodiscard]] uint32_t depth() const noexcept { return depth_; };
   [[nodiscard]] float avg_leaf_depth() const noexcept {

@@ -293,6 +293,8 @@ PYBIND11_MODULE(alphazero, m) {
           py::call_guard<py::gil_scoped_release>())
       .def("playout_inference", &PlayManager::playout_inference,
            py::call_guard<py::gil_scoped_release>())
+      .def("dumb_inference", &PlayManager::dumb_inference,
+           py::call_guard<py::gil_scoped_release>())
       .def(
           "build_batch",
           [](PlayManager& pm, uint32_t player, py::array_t<float>& batch,

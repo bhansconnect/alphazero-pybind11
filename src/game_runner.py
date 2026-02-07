@@ -185,23 +185,33 @@ class GameRunner:
 
     @tracy_zone
     def run(self):
-        # Identify which players use playout (C++ rollout inference).
+        # Identify which players use C++ inference (bypass Python batch pipeline).
         playout_players = set()
+        rand_players = set()
         for i in range(self.num_players):
             if isinstance(self.players[i], PlayoutPlayer):
                 playout_players.add(i)
+            elif isinstance(self.players[i], RandPlayer):
+                rand_players.add(i)
 
         batch_workers = []
-        playout_workers = []
+        cpp_inference_workers = []
         for i in range(self.batch_workers):
             player = i % self.num_players
             if player in playout_players:
-                playout_workers.append(
+                cpp_inference_workers.append(
                     threading.Thread(
                         target=self.pm.playout_inference, args=(player,)
                     )
                 )
-                playout_workers[-1].start()
+                cpp_inference_workers[-1].start()
+            elif player in rand_players:
+                cpp_inference_workers.append(
+                    threading.Thread(
+                        target=self.pm.dumb_inference, args=(player,)
+                    )
+                )
+                cpp_inference_workers[-1].start()
             else:
                 batch_workers.append(
                     threading.Thread(
@@ -230,8 +240,8 @@ class GameRunner:
 
         for bw in batch_workers:
             bw.join()
-        for pw in playout_workers:
-            pw.join()
+        for cw in cpp_inference_workers:
+            cw.join()
         for rw in result_workers:
             rw.join()
         for pw in player_workers:

@@ -3124,11 +3124,10 @@ uint64_t StarGambitUnifiedGS::compute_position_hash() const {
     if (!unit.is_alive()) continue;
     uint64_t unit_hash = static_cast<uint64_t>(unit.type) ^
                          (static_cast<uint64_t>(unit.player) << 8) ^
-                         (static_cast<uint64_t>(unit.slot) << 12) ^
-                         (static_cast<uint64_t>(unit.hp) << 16) ^
-                         (static_cast<uint64_t>(unit.facing) << 24) ^
-                         (static_cast<uint64_t>(unit.anchor_q + 10) << 32) ^
-                         (static_cast<uint64_t>(unit.anchor_r + 10) << 40);
+                         (static_cast<uint64_t>(unit.hp) << 12) ^
+                         (static_cast<uint64_t>(unit.facing) << 20) ^
+                         (static_cast<uint64_t>(unit.anchor_q + 10) << 28) ^
+                         (static_cast<uint64_t>(unit.anchor_r + 10) << 36);
     hash ^= unit_hash * 0x517cc1b727220a95ULL;
   }
 

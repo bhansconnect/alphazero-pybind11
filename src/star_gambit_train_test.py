@@ -172,7 +172,6 @@ def test_self_play_with_history():
     params.history_enabled = True
     params.max_cache_size = 100000
     params.cache_shards = 4
-    params.tree_reuse = False
     params.add_noise = True
     params.playout_cap_randomization = False
     params.resign_percent = 0.0
@@ -314,7 +313,6 @@ def test_full_e2e():
     params.history_enabled = True
     params.max_cache_size = 50000
     params.cache_shards = 4
-    params.tree_reuse = False
     params.add_noise = True
     params.playout_cap_randomization = False
     params.resign_percent = 0.0

@@ -196,6 +196,15 @@ void PlayManager::play() {
                      base_gs_->num_moves(),  params_.epsilon,
                      params_.mcts_root_temp, params_.fpu_reduction};
           }
+        } else {
+          // Re-apply root policy temperature and noise on the reused subtree.
+          auto& next_mcts = game.mcts[game.gs->current_player()];
+          if (next_mcts.root_n() > 0) {
+            next_mcts.apply_root_policy_temp();
+            if (params_.add_noise && !game.capped) {
+              next_mcts.add_root_noise();
+            }
+          }
         }
       }
     } else {

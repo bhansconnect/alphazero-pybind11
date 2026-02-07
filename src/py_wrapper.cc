@@ -245,6 +245,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def("avg_game_length", &PlayManager::avg_game_length)
       .def("avg_leaf_depth", &PlayManager::avg_leaf_depth)
       .def("avg_search_entropy", &PlayManager::avg_search_entropy)
+      .def("fast_avg_leaf_depth", &PlayManager::fast_avg_leaf_depth)
+      .def("fast_avg_search_entropy", &PlayManager::fast_avg_search_entropy)
       .def("avg_moves_per_turn", &PlayManager::avg_moves_per_turn)
       .def("avg_valid_moves", &PlayManager::avg_valid_moves)
       .def("play", &PlayManager::play, py::call_guard<py::gil_scoped_release>())

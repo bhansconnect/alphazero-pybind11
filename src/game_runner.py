@@ -782,10 +782,12 @@ if __name__ == "__main__":
         agl = pm.avg_game_length()
         avg_depth = pm.avg_leaf_depth()
         avg_entropy = pm.avg_search_entropy()
+        fast_avg_depth = pm.fast_avg_leaf_depth()
+        fast_avg_entropy = pm.fast_avg_search_entropy()
         avg_mpt = pm.avg_moves_per_turn()
         avg_vm = pm.avg_valid_moves()
         del pm, nn
-        return win_rates, hr, agl, resign_win_rates, resign_rate, avg_depth, avg_entropy, avg_mpt, avg_vm
+        return win_rates, hr, agl, resign_win_rates, resign_rate, avg_depth, avg_entropy, fast_avg_depth, fast_avg_entropy, avg_mpt, avg_vm
 
     @tracy_zone
     def play_past(Game, depth, iteration, past_iter):
@@ -1100,14 +1102,14 @@ if __name__ == "__main__":
                         name="avg_leaf_depth",
                         epoch=i,
                         step=total_train_steps,
-                        context={"vs": f"-{compare_past}"},
+                        context={"vs": f"-{compare_past}", "search": "full"},
                     )
                     run.track(
                         bench_entropy,
                         name="search_entropy",
                         epoch=i,
                         step=total_train_steps,
-                        context={"vs": f"-{compare_past}"},
+                        context={"vs": f"-{compare_past}", "search": "full"},
                     )
                     run.track(
                         bench_mpt,
@@ -1153,7 +1155,7 @@ if __name__ == "__main__":
 
             stage_start = time.time()
             with TracyZone("stage_selfplay"):
-                win_rates, hit_rate, game_length, resign_win_rates, resignation_rate, selfplay_depth, selfplay_entropy, selfplay_mpt, selfplay_vm = (
+                win_rates, hit_rate, game_length, resign_win_rates, resignation_rate, selfplay_depth, selfplay_entropy, fast_selfplay_depth, fast_selfplay_entropy, selfplay_mpt, selfplay_vm = (
                     self_play(
                         Game,
                         current_best,
@@ -1218,15 +1220,31 @@ if __name__ == "__main__":
                     name="avg_leaf_depth",
                     epoch=i,
                     step=total_train_steps,
-                    context={"vs": "self"},
+                    context={"vs": "self", "search": "full"},
                 )
                 run.track(
                     selfplay_entropy,
                     name="search_entropy",
                     epoch=i,
                     step=total_train_steps,
-                    context={"vs": "self"},
+                    context={"vs": "self", "search": "full"},
                 )
+                if fast_selfplay_depth > 0:
+                    run.track(
+                        fast_selfplay_depth,
+                        name="avg_leaf_depth",
+                        epoch=i,
+                        step=total_train_steps,
+                        context={"vs": "self", "search": "fast"},
+                    )
+                if fast_selfplay_entropy > 0:
+                    run.track(
+                        fast_selfplay_entropy,
+                        name="search_entropy",
+                        epoch=i,
+                        step=total_train_steps,
+                        context={"vs": "self", "search": "fast"},
+                    )
                 run.track(
                     selfplay_mpt,
                     name="moves_per_turn",
@@ -1330,14 +1348,14 @@ if __name__ == "__main__":
                             name="avg_leaf_depth",
                             epoch=next_net,
                             step=total_train_steps,
-                            context={"vs": "best"},
+                            context={"vs": "best", "search": "full"},
                         )
                         run.track(
                             gate_entropy,
                             name="search_entropy",
                             epoch=next_net,
                             step=total_train_steps,
-                            context={"vs": "best"},
+                            context={"vs": "best", "search": "full"},
                         )
                         run.track(
                             gate_mpt,

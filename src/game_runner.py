@@ -391,8 +391,16 @@ def base_params(Game, start_temp, bs, cb):
     return params
 
 
+_ELO_ALPHA = math.log(10) / 400.0
+
 def elo_prob(r1, r2):
-    return 1.0 / (1 + 1.0 * math.pow(10, 1.0 * (r1 - r2) / 400))
+    x = _ELO_ALPHA * (r2 - r1)
+    if x >= 0:
+        z = math.exp(-x)
+        return 1.0 / (1.0 + z)
+    else:
+        z = math.exp(x)
+        return z / (1.0 + z)
 
 
 @tracy_zone

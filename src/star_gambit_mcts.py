@@ -30,7 +30,7 @@ np.set_printoptions(precision=3, suppress=True)
 DEFAULT_VISIT_COUNTS = [1, 25, 50, 100, 200, 400, 800]
 TOURNAMENT_BATCH_SIZE = 64
 TOURNAMENT_CONCURRENT_BATCHES = 2
-ANALYSIS_GAMES = 50
+ANALYSIS_GAMES = 64
 
 
 def calc_temp(turn):
@@ -201,81 +201,11 @@ def run_tournament(Game, network_path, visit_counts):
 
 # --- Phase 3: Policy & Value Analysis ---
 
-def mcts_snapshots(gs, agent, visit_counts, max_visits):
-    """Run MCTS to max_visits, capturing policy/value snapshots at each target count.
-
-    For visit_count=1: raw network output masked to valid moves.
-    Returns: (policies, values)
-      policies: {vc: np.array} probability distributions
-      values: {vc: float} win probability for current player
-    """
-    policies = {}
-    values = {}
-    valids = np.array(gs.valid_moves())
-
-    # Visit count 1: raw network output
-    if 1 in visit_counts:
-        canonical = torch.from_numpy(np.array(gs.canonicalized()))
-        v_raw, pi_raw = agent.predict(canonical)
-        pi_np = pi_raw.cpu().numpy().flatten()
-        v_np = v_raw.cpu().numpy().flatten()
-
-        # Mask to valid moves and renormalize
-        pi_np = pi_np * valids
-        pi_sum = pi_np.sum()
-        if pi_sum > 0:
-            pi_np /= pi_sum
-        else:
-            valid_count = valids.sum()
-            if valid_count > 0:
-                pi_np = valids / valid_count
-
-        policies[1] = pi_np
-        # Win probability: v_np is [w, l, d] from current player perspective
-        values[1] = float(v_np[0])
-
-    # Run MCTS incrementally
-    mcts = alphazero.MCTS(
-        CPUCT, gs.num_players(), gs.num_moves(),
-        0.0,  # No Dirichlet noise for analysis
-        1.4,  # alpha (unused when epsilon=0)
-        FPU_REDUCTION,
-    )
-
-    # Sort non-1 visit counts
-    target_vcs = sorted(vc for vc in visit_counts if vc > 1)
-    if not target_vcs:
-        return policies, values
-
-    sims_done = 0
-    vc_idx = 0
-
-    for sim in range(max_visits):
-        leaf = mcts.find_leaf(gs)
-        v, pi = agent.predict(torch.from_numpy(np.array(leaf.canonicalized())))
-        v_np = v.cpu().numpy().flatten()
-        pi_np = pi.cpu().numpy().flatten()
-        mcts.process_result(gs, v_np, pi_np, False)
-        sims_done += 1
-
-        # Check if we've hit a target visit count
-        while vc_idx < len(target_vcs) and sims_done >= target_vcs[vc_idx]:
-            vc = target_vcs[vc_idx]
-            probs = np.array(mcts.probs(1.0))
-            policies[vc] = probs
-
-            wld = np.array(mcts.root_value())
-            values[vc] = float(wld[0])  # win probability
-            vc_idx += 1
-
-        if vc_idx >= len(target_vcs):
-            break
-
-    return policies, values
-
-
 def run_analysis(Game, network_path, visit_counts):
-    """Run policy & value convergence analysis.
+    """Run policy & value convergence analysis with batched inference.
+
+    Plays ANALYSIS_GAMES concurrently, batching all NN inference calls across
+    games for ~25x speedup over sequential single-sample inference.
 
     Returns dict with all collected metrics.
     """
@@ -287,81 +217,147 @@ def run_analysis(Game, network_path, visit_counts):
     net_file = os.path.basename(network_path)
     agent = neural_net.NNWrapper.load_checkpoint(Game, net_dir, net_file)
 
+    num_players = Game.NUM_PLAYERS()
+    num_moves = Game.NUM_MOVES()
     max_visits = max(visit_counts)
+    target_vcs = sorted(vc for vc in visit_counts if vc > 1)
+    has_vc1 = 1 in visit_counts
 
-    # Storage for per-position metrics
-    all_kl = {vc: [] for vc in visit_counts if vc != max_visits}
-    all_value_vs_max = {vc: [] for vc in visit_counts}
-    all_value_vs_outcome = {vc: [] for vc in visit_counts}
-    game_outcomes = []  # (position_index, current_player, game_result)
-
-    position_values = {vc: [] for vc in visit_counts}  # raw win probs for correlation
-    position_max_values = []  # max-visits values
-    position_outcomes = []  # actual game outcomes (1=win, 0=loss, 0.5=draw for current player)
+    # Per-game state
+    game_states = [Game() for _ in range(ANALYSIS_GAMES)]
+    # Per-game accumulated data: list of (current_player, {vc: value}, {vc: policy})
+    game_positions = [[] for _ in range(ANALYSIS_GAMES)]
+    active = list(range(ANALYSIS_GAMES))
+    game_scores = [None] * ANALYSIS_GAMES  # final scores per game
 
     print(f"Playing {ANALYSIS_GAMES} games with max {max_visits} visits per position...")
 
     total_positions = 0
+    pbar = tqdm.tqdm(desc="Positions", unit="pos")
 
-    for game_idx in tqdm.trange(ANALYSIS_GAMES, desc="Analysis games"):
-        gs = Game()
-        game_positions = []  # (current_player, {vc: value})
+    while active:
+        n = len(active)
 
-        # Play game to completion, collecting snapshots at each position
-        while gs.scores() is None:
-            policies, values_at_pos = mcts_snapshots(gs, agent, visit_counts, max_visits)
+        # Create fresh MCTS for each active game's current position
+        mcts_list = [
+            alphazero.MCTS(CPUCT, num_players, num_moves, 0.0, 1.4, FPU_REDUCTION)
+            for _ in range(n)
+        ]
 
-            # Store per-position data
-            current_player = gs.current_player()
-            game_positions.append((current_player, values_at_pos))
+        # Per-position snapshot storage (indexed by slot in active list)
+        pos_policies = [{} for _ in range(n)]
+        pos_values = [{} for _ in range(n)]
 
-            # Policy KL divergence vs max visits
-            if max_visits in policies:
-                max_policy = policies[max_visits]
-                for vc in visit_counts:
-                    if vc != max_visits and vc in policies:
-                        kl = kl_divergence(max_policy, policies[vc])
-                        all_kl[vc].append(kl)
+        # Run MCTS simulations in lockstep
+        for sim in range(max_visits):
+            # find_leaf for each active game
+            leaves = [
+                mcts_list[i].find_leaf(game_states[active[i]])
+                for i in range(n)
+            ]
 
-            # Store values for later correlation
-            for vc in visit_counts:
-                if vc in values_at_pos:
-                    position_values[vc].append(values_at_pos[vc])
-            if max_visits in values_at_pos:
-                position_max_values.append(values_at_pos[max_visits])
+            # Stack canonicals into batch tensor
+            canonicals = [np.array(leaf.canonicalized()) for leaf in leaves]
+            batch = torch.from_numpy(np.stack(canonicals))
 
-            # Select move using max-visits policy with temperature
-            if max_visits in policies:
-                probs = policies[max_visits].copy()
+            # Single batched GPU inference
+            v_batch, pi_batch = agent.process(batch)
+            v_np = v_batch.cpu().numpy()
+            pi_np = pi_batch.cpu().numpy()
+
+            # process_result for each active game
+            for i in range(n):
+                mcts_list[i].process_result(
+                    game_states[active[i]], v_np[i], pi_np[i], False
+                )
+
+            sims_done = sim + 1
+
+            # Capture vc=1 snapshot from the first simulation
+            if sims_done == 1 and has_vc1:
+                for i in range(n):
+                    # probs(1.0) after 1 sim returns the prior policy
+                    probs_arr = np.array(mcts_list[i].probs(1.0))
+                    pos_policies[i][1] = probs_arr
+                    # Value from NN output of sim 1 (root was the leaf)
+                    pos_values[i][1] = float(v_np[i][0])
+
+            # Check if we hit any target visit count
+            for vc in target_vcs:
+                if sims_done == vc:
+                    for i in range(n):
+                        pos_policies[i][vc] = np.array(mcts_list[i].probs(1.0))
+                        wld = np.array(mcts_list[i].root_value())
+                        pos_values[i][vc] = float(wld[0])
+
+        # Record position data and advance games
+        next_active = []
+        for slot, gid in enumerate(active):
+            gs = game_states[gid]
+            game_positions[gid].append(
+                (gs.current_player(), pos_values[slot], pos_policies[slot])
+            )
+            total_positions += 1
+            pbar.update(1)
+
+            # Select move from max-visits policy with temperature
+            if max_visits in pos_policies[slot]:
+                probs = pos_policies[slot][max_visits].copy()
                 temp = calc_temp(gs.current_turn())
                 if temp > 0 and temp != 1.0:
                     probs = np.power(probs + 1e-10, 1.0 / temp)
                     probs /= probs.sum()
                 move = np.random.choice(len(probs), p=probs)
             else:
-                # Fallback: random valid move
                 valids = np.array(gs.valid_moves())
                 valid_indices = np.where(valids == 1)[0]
                 move = np.random.choice(valid_indices)
 
             gs.play_move(move)
-            total_positions += 1
 
-        # Game over - determine outcomes
-        scores = np.array(gs.scores())
-        # scores[player] = 1 for win, scores[-1] = 1 for draw
-        for current_player, values_at_pos in game_positions:
-            if scores[current_player] == 1:
-                outcome = 1.0  # win
-            elif scores[-1] == 1:
-                outcome = 0.5  # draw
+            if gs.scores() is not None:
+                game_scores[gid] = np.array(gs.scores())
             else:
-                outcome = 0.0  # loss
-            position_outcomes.append(outcome)
+                next_active.append(gid)
 
+        active = next_active
+
+    pbar.close()
     print(f"Collected {total_positions} positions across {ANALYSIS_GAMES} games")
 
-    # Compute aggregated metrics
+    # Aggregate metrics from all games
+    all_kl = {vc: [] for vc in visit_counts if vc != max_visits}
+    position_values = {vc: [] for vc in visit_counts}
+    position_max_values = []
+    position_outcomes = []
+
+    for gid in range(ANALYSIS_GAMES):
+        scores = game_scores[gid]
+        for current_player, values_at_pos, policies_at_pos in game_positions[gid]:
+            # Outcome for current player
+            if scores[current_player] == 1:
+                outcome = 1.0
+            elif scores[-1] == 1:
+                outcome = 0.5
+            else:
+                outcome = 0.0
+            position_outcomes.append(outcome)
+
+            # Policy KL divergence vs max visits
+            if max_visits in policies_at_pos:
+                max_policy = policies_at_pos[max_visits]
+                for vc in visit_counts:
+                    if vc != max_visits and vc in policies_at_pos:
+                        kl = kl_divergence(max_policy, policies_at_pos[vc])
+                        all_kl[vc].append(kl)
+
+            # Store values
+            for vc in visit_counts:
+                if vc in values_at_pos:
+                    position_values[vc].append(values_at_pos[vc])
+            if max_visits in values_at_pos:
+                position_max_values.append(values_at_pos[max_visits])
+
     position_outcomes = np.array(position_outcomes)
     position_max_values = np.array(position_max_values)
 

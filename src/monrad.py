@@ -37,7 +37,7 @@ def calc_elo(past_elo, win_rates):
 
 
 @tracy_zone
-def pit_agents(Game, players, mcts_depths, bs, name):
+def pit_agents(Game, players, mcts_depths, bs, name, tree_reuse=True):
     np = Game.NUM_PLAYERS()
     win_rates = [0] * np
     for i in tqdm.trange(np, leave=False, desc=name):
@@ -52,6 +52,7 @@ def pit_agents(Game, players, mcts_depths, bs, name):
         params = base_params(Game, 0.5, bs, cb)
         # Disable the cache because it does not work well in arena.
         params.max_cache_size = 0
+        params.tree_reuse = tree_reuse
         params.games_to_play = n
         params.mcts_depth = ordered_depths
         pm = alphazero.PlayManager(Game(), params)

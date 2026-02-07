@@ -178,6 +178,7 @@ def run_tournament(Game, network_path, visit_counts):
                 win_rates = pit_agents(
                     Game, players, depths,
                     TOURNAMENT_BATCH_SIZE, name,
+                    tree_reuse=False,
                 )
                 win_matrix[i, j] = win_rates[0]
                 win_matrix[j, i] = win_rates[1]

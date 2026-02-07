@@ -5,6 +5,12 @@ import os
 import sys
 import gc
 import shutil
+import functools
+
+import threading
+
+# Force unbuffered output so prints are visible immediately
+print = functools.partial(print, flush=True)
 
 import alphazero
 from neural_net import NNWrapper, NNArgs, get_device
@@ -87,6 +93,20 @@ def test_game_canonical():
     return True
 
 
+def _inference_worker(pm, player_id, processor, device, batch_size, cs):
+    """Worker thread that builds batches and runs inference for one player."""
+    batch = torch.zeros((batch_size, cs[0], cs[1], cs[2]))
+    while pm.remaining_games() > 0:
+        game_indices = pm.build_batch(player_id, batch, 2)
+        if len(game_indices) > 0:
+            out = batch[: len(game_indices)]
+            out = out.contiguous().to(device, non_blocking=True)
+            v, pi = processor(out)
+            v_np = v.cpu().numpy()
+            pi_np = pi.cpu().numpy()
+            pm.update_inferences(player_id, game_indices, v_np, pi_np)
+
+
 def test_play_manager_basic():
     """Test basic PlayManager functionality."""
     print("=" * 60)
@@ -111,24 +131,25 @@ def test_play_manager_basic():
 
     player = RandPlayer(Game, 2)
     device = get_device()
-
-    # Simple game loop
     cs = Game.CANONICAL_SHAPE()
-    batch = torch.zeros((2, cs[0], cs[1], cs[2]))
 
-    games_played = 0
-    while pm.remaining_games() > 0:
-        # Build batch for both players alternating
-        for p in range(2):
-            game_indices = pm.build_batch(p, batch, 2)
-            if len(game_indices) > 0:
-                out = batch[: len(game_indices)]
-                out = out.contiguous().to(device, non_blocking=True)
-                v, pi = player.process(out)
-                v_np = v.cpu().numpy()
-                pi_np = pi.cpu().numpy()
-                pm.update_inferences(p, game_indices, v_np, pi_np)
-        pm.play()
+    # Start play() on background thread
+    mcts_worker = threading.Thread(target=pm.play)
+    mcts_worker.start()
+
+    # Each player gets its own inference thread (build_batch blocks per-player)
+    inf_workers = []
+    for p in range(2):
+        w = threading.Thread(
+            target=_inference_worker,
+            args=(pm, p, player.process, device, 2, cs),
+        )
+        w.start()
+        inf_workers.append(w)
+
+    for w in inf_workers:
+        w.join()
+    mcts_worker.join()
 
     scores = pm.scores()
     print(f"  Games completed: {pm.games_completed()}")
@@ -167,40 +188,41 @@ def test_self_play_with_history():
 
     player = RandPlayer(Game, BATCH_SIZE)
     device = get_device()
-
     cs = Game.CANONICAL_SHAPE()
-    batch = torch.zeros((BATCH_SIZE, cs[0], cs[1], cs[2]))
 
-    # History collection tensors
+    # Start play() on background thread
+    mcts_worker = threading.Thread(target=pm.play)
+    mcts_worker.start()
+
+    # Each player gets its own inference thread
+    inf_workers = []
+    for p in range(2):
+        w = threading.Thread(
+            target=_inference_worker,
+            args=(pm, p, player.process, device, BATCH_SIZE, cs),
+        )
+        w.start()
+        inf_workers.append(w)
+
+    # Collect history on main thread while games run
     hist_canonical = torch.zeros(5000, cs[0], cs[1], cs[2])
     hist_v = torch.zeros(5000, Game.NUM_PLAYERS() + 1)
     hist_pi = torch.zeros(5000, Game.NUM_MOVES())
-
     total_samples = 0
     last_completed = 0
 
     while pm.remaining_games() > 0:
-        # Build batch for both players
-        for p in range(2):
-            game_indices = pm.build_batch(p, batch, 2)
-            if len(game_indices) > 0:
-                out = batch[: len(game_indices)]
-                out = out.contiguous().to(device, non_blocking=True)
-                v, pi = player.process(out)
-                v_np = v.cpu().numpy()
-                pi_np = pi.cpu().numpy()
-                pm.update_inferences(p, game_indices, v_np, pi_np)
-        pm.play()
-
-        # Collect history periodically
         size = pm.build_history_batch(hist_canonical, hist_v, hist_pi)
         if size > 0:
             total_samples += size
-
         completed = pm.games_completed()
         if completed > last_completed:
             print(f"    Completed: {completed}/{params.games_to_play}")
             last_completed = completed
+
+    for w in inf_workers:
+        w.join()
+    mcts_worker.join()
 
     # Collect remaining history
     while pm.hist_count() > 0:
@@ -306,9 +328,22 @@ def test_full_e2e():
     pm = alphazero.PlayManager(new_game(), params)
     device = get_device()
     cs = Game.CANONICAL_SHAPE()
-    batch = torch.zeros((8, cs[0], cs[1], cs[2]))
 
-    # History collection
+    # Start play() on background thread
+    mcts_worker = threading.Thread(target=pm.play)
+    mcts_worker.start()
+
+    # Each player gets its own inference thread
+    inf_workers = []
+    for p in range(2):
+        w = threading.Thread(
+            target=_inference_worker,
+            args=(pm, p, nn.process, device, 8, cs),
+        )
+        w.start()
+        inf_workers.append(w)
+
+    # Collect history on main thread
     hist_canonical = torch.zeros(3000, cs[0], cs[1], cs[2])
     hist_v = torch.zeros(3000, Game.NUM_PLAYERS() + 1)
     hist_pi = torch.zeros(3000, Game.NUM_MOVES())
@@ -316,25 +351,22 @@ def test_full_e2e():
     all_canonical = []
     all_v = []
     all_pi = []
+    last_completed_e2e = 0
 
     while pm.remaining_games() > 0:
-        for p in range(2):
-            game_indices = pm.build_batch(p, batch, 2)
-            if len(game_indices) > 0:
-                out = batch[: len(game_indices)]
-                out = out.contiguous().to(device, non_blocking=True)
-                v, pi = nn.process(out)
-                v_np = v.cpu().numpy()
-                pi_np = pi.cpu().numpy()
-                pm.update_inferences(p, game_indices, v_np, pi_np)
-        pm.play()
-
-        # Collect history
         size = pm.build_history_batch(hist_canonical, hist_v, hist_pi)
         if size > 0:
             all_canonical.append(hist_canonical[:size].clone())
             all_v.append(hist_v[:size].clone())
             all_pi.append(hist_pi[:size].clone())
+        completed = pm.games_completed()
+        if completed > last_completed_e2e:
+            print(f"   [e2e] Completed: {completed}/{params.games_to_play}")
+            last_completed_e2e = completed
+
+    for w in inf_workers:
+        w.join()
+    mcts_worker.join()
 
     # Remaining history
     while pm.hist_count() > 0:

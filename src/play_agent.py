@@ -27,6 +27,9 @@ def calc_temp(turn):
     return temp
 
 
+USE_PLAYOUT = False
+
+
 @tracy_zone
 def eval_position(gs, agent):
     mcts = alphazero.MCTS(CPUCT, gs.num_players(), gs.num_moves(), 0, 1.4, 0.25)
@@ -39,17 +42,27 @@ def eval_position(gs, agent):
     while time.time() - start < THINK_TIME:
         # for _ in range(200):
         leaf = mcts.find_leaf(gs)
-        v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
-        v = v.cpu().numpy()
-        pi = pi.cpu().numpy()
+        if USE_PLAYOUT:
+            v, pi = alphazero.playout_eval(leaf)
+            v = np.array(v)
+            pi = np.array(pi)
+        else:
+            v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
+            v = v.cpu().numpy()
+            pi = pi.cpu().numpy()
         mcts.process_result(gs, v, pi, False)
         sims += 1
     print(f"\tRan {sims} simulations in {round(time.time() - start, 3)} seconds")
     # print('Press enter for ai analysis')
     # input()
-    v, pi = agent.predict(torch.from_numpy(gs.canonicalized()))
-    v = v.cpu().numpy()
-    pi = pi.cpu().numpy()
+    if USE_PLAYOUT:
+        v, pi = alphazero.playout_eval(gs)
+        v = np.array(v)
+        pi = np.array(pi)
+    else:
+        v, pi = agent.predict(torch.from_numpy(gs.canonicalized()))
+        v = v.cpu().numpy()
+        pi = pi.cpu().numpy()
     print(f"\tRaw Score: {v}")
     thing = {x: round(100 * pi[x], 1) for x in reversed(np.argsort(pi)[-10:])}
     print(f"\tRaw Top Probs: {thing}")

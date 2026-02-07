@@ -1,6 +1,6 @@
 import alphazero
 import neural_net
-from game_runner import GameRunner, GRArgs, RandPlayer, base_params, elo_prob
+from game_runner import GameRunner, GRArgs, RandPlayer, PlayoutPlayer, base_params, elo_prob
 import glob
 import os
 import math
@@ -91,10 +91,11 @@ if __name__ == "__main__":
         print(f"No checkpoints found in {model_path}")
         exit(1)
 
-    nn_agents, mcts_visits, num_random = interactive_select(runs, default_mcts=200)
+    nn_agents, mcts_visits, num_random, num_playout = interactive_select(runs, default_mcts=200)
 
     rand_agents = [mcts_visits] * num_random
-    agents = rand_agents + nn_agents
+    playout_agents = ["playout"] * num_playout
+    agents = rand_agents + playout_agents + nn_agents
 
     Game = alphazero.Connect4GS
     bs = 64
@@ -158,7 +159,10 @@ if __name__ == "__main__":
                     win_matrix[j, i] = 0.0
                     continue
 
-                if agents[i] in rand_agents:
+                if agents[i] == "playout":
+                    p1 = PlayoutPlayer(Game)
+                    d1 = mcts_visits
+                elif agents[i] in rand_agents:
                     p1 = RandPlayer(Game, bs)
                     d1 = agents[i]
                 else:
@@ -166,7 +170,10 @@ if __name__ == "__main__":
                         Game, model_path, agents[i]
                     )
                     d1 = mcts_visits
-                if agents[j] in rand_agents:
+                if agents[j] == "playout":
+                    p2 = PlayoutPlayer(Game)
+                    d2 = mcts_visits
+                elif agents[j] in rand_agents:
                     p2 = RandPlayer(Game, bs)
                     d2 = agents[j]
                 else:
@@ -220,6 +227,7 @@ if __name__ == "__main__":
         output_dir, agents, elo, win_matrix,
         mcts_visits=mcts_visits,
         num_random=num_random,
+        num_playout=num_playout,
         variant="connect4",
         fmt="monrad",
     )

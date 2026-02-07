@@ -283,4 +283,18 @@ void PlayManager::dumb_inference(const uint8_t player) {
   }
 }
 
+void PlayManager::playout_inference(const uint8_t player) {
+  AZ_SET_THREAD_NAME("playout_inference");
+  AZ_ZONE_SCOPED;
+  while (games_completed_ < params_.games_to_play) {
+    auto i = awaiting_inference_[player]->pop(MAX_WAIT);
+    if (!i.has_value()) {
+      continue;
+    }
+    auto& game = games_[i.value()];
+    std::tie(game.v, game.pi) = playout_eval(*game.gs);
+    awaiting_mcts_.push(i.value());
+  }
+}
+
 }  // namespace alphazero

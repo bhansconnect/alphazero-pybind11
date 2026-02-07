@@ -98,8 +98,8 @@ def parse_manual_iters(input_str: str, available: list[int]) -> list[int]:
 
 def interactive_select(
     runs: dict[str, RunInfo], default_mcts: int = 200
-) -> tuple[list[str], int, int]:
-    """Interactive flow for selecting networks. Returns (agent_filenames, mcts_visits, num_random)."""
+) -> tuple[list[str], int, int, int]:
+    """Interactive flow for selecting networks. Returns (agent_filenames, mcts_visits, num_random, num_playout)."""
     run_names = sorted(runs.keys())
 
     # --- Run selection ---
@@ -183,6 +183,10 @@ def interactive_select(
     rand_choice = input("\nInclude random agent? (y/n) [n]: ").strip().lower()
     num_random = 1 if rand_choice == 'y' else 0
 
+    # --- Playout agent ---
+    playout_choice = input("Include playout agent? (y/n) [n]: ").strip().lower()
+    num_playout = 1 if playout_choice == 'y' else 0
+
     # --- MCTS visits ---
     mcts_str = input(f"\nMCTS visits [{default_mcts}]: ").strip() or str(default_mcts)
     try:
@@ -191,7 +195,7 @@ def interactive_select(
         print(f"Invalid number, using {default_mcts}")
         mcts_visits = default_mcts
 
-    return nn_agents, mcts_visits, num_random
+    return nn_agents, mcts_visits, num_random, num_playout
 
 
 # --- Tournament output utilities ---
@@ -231,6 +235,7 @@ def save_tournament_results(
     win_matrix: np.ndarray,
     mcts_visits: int,
     num_random: int,
+    num_playout: int = 0,
     variant: str = "",
     fmt: str = "",
 ):
@@ -256,6 +261,7 @@ def save_tournament_results(
         f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"MCTS visits: {mcts_visits}\n")
         f.write(f"Random agents: {num_random}\n")
+        f.write(f"Playout agents: {num_playout}\n")
         f.write(f"Total agents: {len(agents)}\n\n")
         f.write("Leaderboard:\n")
         for rank, i in enumerate(reversed(rankings)):
@@ -270,11 +276,14 @@ def save_tournament_results(
     # Group agents by run for multi-line plots
     run_data: dict[str, list[tuple[int, int]]] = {}  # run_name -> [(iteration, agent_idx)]
     random_indices = []
+    playout_indices = []
     for idx, agent in enumerate(agents):
         info = _parse_agent_info(agent)
         if info:
             run_name, iteration = info
             run_data.setdefault(run_name, []).append((iteration, idx))
+        elif agent == "playout":
+            playout_indices.append(idx)
         elif agent != "dummy":
             random_indices.append(idx)
 
@@ -290,6 +299,9 @@ def save_tournament_results(
     for ri in random_indices:
         ax.axhline(y=elo[ri], linestyle='--', color='gray', alpha=0.7,
                     label=f"random ({elo[ri]:.0f})")
+    for pi in playout_indices:
+        ax.axhline(y=elo[pi], linestyle='-.', color='orange', alpha=0.7,
+                    label=f"playout ({elo[pi]:.0f})")
     ax.set_xlabel("Iteration")
     ax.set_ylabel("ELO Rating")
     ax.set_title("ELO vs Iteration")
@@ -308,6 +320,9 @@ def save_tournament_results(
     for ri in random_indices:
         ax2.axhline(y=points_arr[ri], linestyle='--', color='gray', alpha=0.7,
                      label=f"random ({points_arr[ri]:.1f})")
+    for pi in playout_indices:
+        ax2.axhline(y=points_arr[pi], linestyle='-.', color='orange', alpha=0.7,
+                     label=f"playout ({points_arr[pi]:.1f})")
     ax2.set_xlabel("Iteration")
     ax2.set_ylabel("Total Points (sum of win rates)")
     ax2.set_title("Points vs Iteration")

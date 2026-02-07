@@ -185,14 +185,30 @@ class GameRunner:
 
     @tracy_zone
     def run(self):
+        # Identify which players use playout (C++ rollout inference).
+        playout_players = set()
+        for i in range(self.num_players):
+            if isinstance(self.players[i], PlayoutPlayer):
+                playout_players.add(i)
+
         batch_workers = []
+        playout_workers = []
         for i in range(self.batch_workers):
-            batch_workers.append(
-                threading.Thread(
-                    target=self.batch_builder, args=(i % self.num_players,)
+            player = i % self.num_players
+            if player in playout_players:
+                playout_workers.append(
+                    threading.Thread(
+                        target=self.pm.playout_inference, args=(player,)
+                    )
                 )
-            )
-            batch_workers[i].start()
+                playout_workers[-1].start()
+            else:
+                batch_workers.append(
+                    threading.Thread(
+                        target=self.batch_builder, args=(player,)
+                    )
+                )
+                batch_workers[-1].start()
         result_workers = []
         for i in range(self.args.result_workers):
             result_workers.append(threading.Thread(target=self.result_processor))
@@ -214,6 +230,8 @@ class GameRunner:
 
         for bw in batch_workers:
             bw.join()
+        for pw in playout_workers:
+            pw.join()
         for rw in result_workers:
             rw.join()
         for pw in player_workers:
@@ -285,7 +303,7 @@ class GameRunner:
                 self.ready_queues[player].put(batch_index)
                 continue
             out = batch[: len(game_indices)]
-            if not isinstance(self.players[player], RandPlayer):
+            if not isinstance(self.players[player], (RandPlayer, PlayoutPlayer)):
                 out = out.contiguous().to(self.device, non_blocking=True)
             self.batch_queue.put((out, batch_index, game_indices))
 
@@ -375,6 +393,19 @@ class RandPlayer:
 
     def process(self, batch):
         return self.v[: batch.shape[0]].clone(), self.pi[: batch.shape[0]].clone()
+
+
+class PlayoutPlayer:
+    """Marker for rollout-based evaluation. Actual eval runs in C++."""
+
+    def __init__(self, game):
+        self.game = game
+
+    def predict(self, canonical):
+        raise RuntimeError("PlayoutPlayer.predict() should not be called via GameRunner path")
+
+    def process(self, batch):
+        raise RuntimeError("PlayoutPlayer.process() should not be called via GameRunner path")
 
 
 def base_params(Game, start_temp, bs, cb):

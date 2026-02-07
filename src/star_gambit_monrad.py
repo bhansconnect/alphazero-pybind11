@@ -23,7 +23,7 @@ import alphazero
 from monrad import calc_elo, pit_agents
 
 import neural_net
-from game_runner import RandPlayer
+from game_runner import RandPlayer, PlayoutPlayer
 from network_selector import (
     discover_runs, interactive_select, create_tournament_dir,
     save_tournament_results,
@@ -78,11 +78,12 @@ def main():
         print(f"No checkpoints found in {model_path}")
         return
 
-    nn_agents, mcts_visits, num_random = interactive_select(runs, default_mcts=200)
+    nn_agents, mcts_visits, num_random, num_playout = interactive_select(runs, default_mcts=200)
 
     # Build agent list
     rand_agents = [mcts_visits] * num_random
-    agents = rand_agents + nn_agents
+    playout_agents = ["playout"] * num_playout
+    agents = rand_agents + playout_agents + nn_agents
 
     if len(agents) < 2:
         print("Need at least 2 agents for a tournament")
@@ -172,7 +173,10 @@ def main():
                     continue
 
                 # Load players
-                if agents[i] in rand_agents:
+                if agents[i] == "playout":
+                    p1 = PlayoutPlayer(Game)
+                    d1 = mcts_visits
+                elif agents[i] in rand_agents:
                     p1 = RandPlayer(Game, BATCH_SIZE)
                     d1 = agents[i]
                 else:
@@ -181,7 +185,10 @@ def main():
                     )
                     d1 = mcts_visits
 
-                if agents[j] in rand_agents:
+                if agents[j] == "playout":
+                    p2 = PlayoutPlayer(Game)
+                    d2 = mcts_visits
+                elif agents[j] in rand_agents:
                     p2 = RandPlayer(Game, BATCH_SIZE)
                     d2 = agents[j]
                 else:
@@ -234,6 +241,7 @@ def main():
         output_dir, agents, elo, win_matrix,
         mcts_visits=mcts_visits,
         num_random=num_random,
+        num_playout=num_playout,
         variant=variant_name,
         fmt="monrad",
     )

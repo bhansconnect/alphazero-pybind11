@@ -136,11 +136,18 @@ mcts = library(
     cpp_args: lib_args,
 )
 
+game_state_lib = library(
+  'game_state',
+  'game_state.cc',
+  dependencies: [eigen_dep, absl_hash_dep],
+  cpp_args: lib_args,
+)
+
 mcts_test = executable(
   'mcts_test',
   'mcts_test.cc',
   dependencies: [gtest_dep, eigen_dep, absl_hash_dep],
-  link_with: [mcts, connect4_gs],
+  link_with: [mcts, connect4_gs, game_state_lib],
 )
 test('gtest tests', mcts_test)
 
@@ -164,7 +171,7 @@ play_manager = library(
   'play_manager',
   'play_manager.cc',
   dependencies: [eigen_dep, absl_container_dep, absl_hash_dep, thread_dep, tracy_dep],
-  link_with: [mcts],
+  link_with: [mcts, game_state_lib],
   cpp_args: lib_args,
 )
 
@@ -186,7 +193,7 @@ play_manager_bench = executable(
 py3_install.extension_module(
   'alphazero',
   sources: ['py_wrapper.cc'],
-  link_with: [connect4_gs, onitama_gs, brandubh_gs, opentafl_gs, tawlbwrdd_gs, star_gambit_gs, play_manager, mcts],
+  link_with: [connect4_gs, onitama_gs, brandubh_gs, opentafl_gs, tawlbwrdd_gs, star_gambit_gs, play_manager, mcts, game_state_lib],
   dependencies : [pybind11_dep, py3_dep, eigen_dep, absl_container_dep, absl_hash_dep, tracy_dep],
   cpp_args: lib_args,
   install: true,

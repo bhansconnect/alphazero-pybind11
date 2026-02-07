@@ -69,5 +69,57 @@ TEST(MCTS, Basic) {
   EXPECT_EQ(MCTS::pick_move(mcts.probs(0)), 2);
 }
 
+// NOLINTNEXTLINE
+TEST(PlayoutEval, Basic) {
+  auto gs = connect4_gs::Connect4GS{};
+  auto [value, policy] = playout_eval(gs);
+
+  // Value should have num_players + 1 entries (win for p0, win for p1, draw).
+  EXPECT_EQ(value.size(), gs.num_players() + 1);
+  // Value should sum to 1 (exactly one outcome).
+  float value_sum = value.sum();
+  EXPECT_NEAR(value_sum, 1.0, 1e-5);
+  // All values should be >= 0.
+  for (int i = 0; i < value.size(); ++i) {
+    EXPECT_GE(value[i], 0.0);
+  }
+
+  // Policy should have num_moves entries.
+  EXPECT_EQ(policy.size(), gs.num_moves());
+  // Policy should sum to ~1.
+  float policy_sum = policy.sum();
+  EXPECT_NEAR(policy_sum, 1.0, 1e-5);
+  // All policy values >= 0.
+  for (int i = 0; i < policy.size(); ++i) {
+    EXPECT_GE(policy[i], 0.0);
+  }
+}
+
+// NOLINTNEXTLINE
+TEST(MCTS, PlayoutEval) {
+  // Same position as the Basic MCTS test: set up a winning threat.
+  auto gs = connect4_gs::Connect4GS{};
+  gs.play_move(1);
+  gs.play_move(6);
+  gs.play_move(3);
+  gs.play_move(6);
+  auto mcts = MCTS{2, gs.num_players(), gs.num_moves()};
+  while (mcts.depth() < 800) {
+    auto leaf = mcts.find_leaf(gs);
+    auto [value, pi] = playout_eval(*leaf);
+    mcts.process_result(gs, value, pi);
+  }
+  auto counts = mcts.counts();
+  std::cout << "Playout MCTS counts: " << counts << std::endl;
+  // With playout eval and enough simulations, column 2 should be preferred
+  // (it creates a winning threat). Allow some variance since playouts are
+  // stochastic.
+  auto best = MCTS::pick_move(mcts.probs(0));
+  std::cout << "Playout MCTS best move: " << best << std::endl;
+  // Just verify it runs without crashing and produces a valid move.
+  EXPECT_GE(best, 0);
+  EXPECT_LT(best, gs.num_moves());
+}
+
 }  // namespace
 }  // namespace alphazero

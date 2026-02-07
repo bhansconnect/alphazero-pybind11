@@ -158,15 +158,6 @@ class GameRunner:
             )
         if len(self.players) != self.num_players:
             raise Exception("There must be a player for each player")
-        seen = {}
-        for i, p in enumerate(self.players):
-            if id(p) in seen and not getattr(p, '_concurrent_safe', False):
-                raise Exception(
-                    f"Player {i} is the same instance as player {seen[id(p)]}. "
-                    f"{type(p).__name__} is not safe for concurrent use — "
-                    f"create separate instances per player slot."
-                )
-            seen[id(p)] = i
         self.ready_queues = []
         for i in range(self.batch_workers):
             self.ready_queues.append(queue.SimpleQueue())
@@ -383,7 +374,7 @@ class RandPlayer:
         return v[0], pi[0]
 
     def process(self, batch):
-        return self.v[: batch.shape[0]], self.pi[: batch.shape[0]]
+        return self.v[: batch.shape[0]].clone(), self.pi[: batch.shape[0]].clone()
 
 
 def base_params(Game, start_temp, bs, cb):

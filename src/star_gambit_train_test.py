@@ -8,6 +8,7 @@ import shutil
 
 import alphazero
 from neural_net import NNWrapper, NNArgs, get_device
+from game_runner import RandPlayer
 import torch
 import numpy as np
 
@@ -44,21 +45,6 @@ def create_test_network():
     )
     return NNWrapper(Game, nnargs)
 
-
-class RandPlayer:
-    """Random player for initial self-play."""
-    def __init__(self, game, max_batch_size):
-        self.v = torch.full(
-            (max_batch_size, game.NUM_PLAYERS() + 1), 1.0 / (game.NUM_PLAYERS() + 1)
-        )
-        self.pi = torch.full((max_batch_size, game.NUM_MOVES()), 1.0 / game.NUM_MOVES())
-
-    def predict(self, canonical):
-        v, pi = self.process(canonical.unsqueeze(0))
-        return v[0], pi[0]
-
-    def process(self, batch):
-        return self.v[: batch.shape[0]], self.pi[: batch.shape[0]]
 
 
 def test_network_creation():

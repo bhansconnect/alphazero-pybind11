@@ -200,11 +200,12 @@ def run_tournament(Game, network_path, visit_counts):
 
     count = len(visit_counts)
 
-    # Load network (shared across players) or create per-player RandPlayers
+    # Load network (shared across players)
     num_players = Game.NUM_PLAYERS()
     if network_path is None:
+        agent = RandPlayer(Game, TOURNAMENT_BATCH_SIZE)
         def make_players():
-            return [RandPlayer(Game, TOURNAMENT_BATCH_SIZE) for _ in range(num_players)]
+            return [agent] * num_players
     else:
         net_dir = os.path.dirname(network_path)
         net_file = os.path.basename(network_path)

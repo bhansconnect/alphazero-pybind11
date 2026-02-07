@@ -35,10 +35,14 @@ struct GameData {
   bool initialized = false;
   bool capped = false;
   bool playthrough = false;
-  double total_avg_leaf_depth = 0;
-  double total_search_entropy = 0;
-  double total_valid_moves = 0;
-  uint32_t move_count = 0;
+  double total_avg_leaf_depth = 0;       // full searches only
+  double total_search_entropy = 0;       // full searches only
+  double fast_total_avg_leaf_depth = 0;  // fast searches only
+  double fast_total_search_entropy = 0;  // fast searches only
+  double total_valid_moves = 0;          // all moves
+  uint32_t move_count = 0;              // all moves
+  uint32_t full_move_count = 0;         // full searches only
+  uint32_t fast_move_count = 0;         // fast searches only
 };
 
 struct PlayParams {
@@ -114,12 +118,20 @@ class DLLEXPORT PlayManager {
            static_cast<float>(games_completed_);
   }
   float avg_leaf_depth() const noexcept {
-    if (total_move_count_ == 0) return 0;
-    return static_cast<float>(total_avg_leaf_depth_ / static_cast<double>(total_move_count_));
+    if (full_move_count_ == 0) return 0;
+    return static_cast<float>(total_avg_leaf_depth_ / static_cast<double>(full_move_count_));
   }
   float avg_search_entropy() const noexcept {
-    if (total_move_count_ == 0) return 0;
-    return static_cast<float>(total_search_entropy_ / static_cast<double>(total_move_count_));
+    if (full_move_count_ == 0) return 0;
+    return static_cast<float>(total_search_entropy_ / static_cast<double>(full_move_count_));
+  }
+  float fast_avg_leaf_depth() const noexcept {
+    if (fast_move_count_ == 0) return 0;
+    return static_cast<float>(fast_total_avg_leaf_depth_ / static_cast<double>(fast_move_count_));
+  }
+  float fast_avg_search_entropy() const noexcept {
+    if (fast_move_count_ == 0) return 0;
+    return static_cast<float>(fast_total_search_entropy_ / static_cast<double>(fast_move_count_));
   }
   float avg_moves_per_turn() const noexcept {
     if (game_length_ == 0) return 0;
@@ -169,10 +181,14 @@ class DLLEXPORT PlayManager {
   Vector<float> scores_;
   uint32_t games_started_;
   uint64_t game_length_ = 0;
-  double total_avg_leaf_depth_ = 0;
-  double total_search_entropy_ = 0;
+  double total_avg_leaf_depth_ = 0;       // full searches only
+  double total_search_entropy_ = 0;       // full searches only
+  double fast_total_avg_leaf_depth_ = 0;  // fast searches only
+  double fast_total_search_entropy_ = 0;  // fast searches only
   double total_valid_moves_ = 0;
   uint64_t total_move_count_ = 0;
+  uint64_t full_move_count_ = 0;
+  uint64_t fast_move_count_ = 0;
   std::atomic<uint32_t> games_completed_ = 0;
   Vector<float> resign_scores_;
 

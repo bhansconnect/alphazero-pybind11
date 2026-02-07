@@ -115,8 +115,15 @@ void PlayManager::play() {
           ph.v.setZero();
           game.partial_history.push_back(ph);
         }
-        game.total_avg_leaf_depth += mcts.avg_leaf_depth();
-        game.total_search_entropy += mcts.normalized_root_entropy();
+        if (!game.capped) {
+          game.total_avg_leaf_depth += mcts.avg_leaf_depth();
+          game.total_search_entropy += mcts.normalized_root_entropy();
+          ++game.full_move_count;
+        } else {
+          game.fast_total_avg_leaf_depth += mcts.avg_leaf_depth();
+          game.fast_total_search_entropy += mcts.normalized_root_entropy();
+          ++game.fast_move_count;
+        }
         game.total_valid_moves += mcts.num_root_children();
         ++game.move_count;
         for (auto& m : game.mcts) {
@@ -150,12 +157,20 @@ void PlayManager::play() {
             game_length_ += game.gs->current_turn();
             total_avg_leaf_depth_ += game.total_avg_leaf_depth;
             total_search_entropy_ += game.total_search_entropy;
+            fast_total_avg_leaf_depth_ += game.fast_total_avg_leaf_depth;
+            fast_total_search_entropy_ += game.fast_total_search_entropy;
             total_valid_moves_ += game.total_valid_moves;
             total_move_count_ += game.move_count;
+            full_move_count_ += game.full_move_count;
+            fast_move_count_ += game.fast_move_count;
             game.total_avg_leaf_depth = 0;
             game.total_search_entropy = 0;
+            game.fast_total_avg_leaf_depth = 0;
+            game.fast_total_search_entropy = 0;
             game.total_valid_moves = 0;
             game.move_count = 0;
+            game.full_move_count = 0;
+            game.fast_move_count = 0;
             // If we have started enough games just loop and complete games.
             if (games_started_ >= params_.games_to_play) {
               continue;

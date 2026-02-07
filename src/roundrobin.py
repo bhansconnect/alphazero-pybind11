@@ -52,20 +52,28 @@ def pit_agents(Game, players, mcts_depths, bs, name):
 
 
 if __name__ == "__main__":
+    from monrad import calc_elo
+    from network_selector import (
+        discover_runs, interactive_select, create_tournament_dir,
+        save_tournament_results,
+    )
+
     model_path = os.path.join("data", "checkpoint")
     if os.path.isdir(os.path.join("data", "bench")):
         model_path = os.path.join("data", "bench")
-    nn_agents = [
-        os.path.basename(x)
-        for x in sorted(glob.glob(os.path.join(model_path, "*.pt")), reverse=False)
-    ]
-    # rand_agents = [5000]
-    rand_agents = []
+
+    runs = discover_runs(model_path)
+    if not runs:
+        print(f"No checkpoints found in {model_path}")
+        exit(1)
+
+    nn_agents, mcts_visits, num_random = interactive_select(runs, default_mcts=200)
+
+    rand_agents = [mcts_visits] * num_random
     agents = rand_agents + nn_agents
 
     Game = alphazero.Connect4GS
     bs = 64
-    nn_mtcs_depth = 200
 
     count = len(agents)
     print(agents)
@@ -79,7 +87,7 @@ if __name__ == "__main__":
                 d1 = agents[i]
             else:
                 p1 = neural_net.NNWrapper.load_checkpoint(Game, model_path, agents[i])
-                d1 = nn_mtcs_depth
+                d1 = mcts_visits
             for j in range(i + 1, count):
                 p2 = None
                 d2 = 0
@@ -90,7 +98,7 @@ if __name__ == "__main__":
                     p2 = neural_net.NNWrapper.load_checkpoint(
                         Game, model_path, agents[j]
                     )
-                    d2 = nn_mtcs_depth
+                    d2 = mcts_visits
                 players = [p2] * Game.NUM_PLAYERS()
                 depths = [d2] * Game.NUM_PLAYERS()
                 players[0] = p1
@@ -125,9 +133,13 @@ if __name__ == "__main__":
     print(win_matrix)
     print()
     print(agents)
-    np.savetxt(
-        os.path.join("data", "roundrobin_wr.csv"),
-        win_matrix,
-        delimiter=",",
-        header=",".join([str(a) for a in agents]),
+
+    elo = calc_elo(np.zeros(count), win_matrix)
+    output_dir = create_tournament_dir(".", "connect4", "roundrobin")
+    save_tournament_results(
+        output_dir, agents, elo, win_matrix,
+        mcts_visits=mcts_visits,
+        num_random=num_random,
+        variant="connect4",
+        fmt="roundrobin",
     )

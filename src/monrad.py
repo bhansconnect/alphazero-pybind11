@@ -77,20 +77,27 @@ def pit_agents(Game, players, mcts_depths, bs, name, tree_reuse=True):
 
 
 if __name__ == "__main__":
+    from network_selector import (
+        discover_runs, interactive_select, create_tournament_dir,
+        save_tournament_results,
+    )
+
     model_path = os.path.join("data", "checkpoint")
     if os.path.isdir(os.path.join("data", "bench")):
         model_path = os.path.join("data", "bench")
-    nn_agents = [
-        os.path.basename(x)
-        for x in sorted(glob.glob(os.path.join(model_path, "*.pt")), reverse=False)
-    ]
-    # rand_agents = [5000]
-    rand_agents = []
+
+    runs = discover_runs(model_path)
+    if not runs:
+        print(f"No checkpoints found in {model_path}")
+        exit(1)
+
+    nn_agents, mcts_visits, num_random = interactive_select(runs, default_mcts=200)
+
+    rand_agents = [mcts_visits] * num_random
     agents = rand_agents + nn_agents
 
     Game = alphazero.Connect4GS
     bs = 64
-    nn_mtcs_depth = 200
 
     if len(agents) % 2 == 1:
         agents.insert(0, "dummy")
@@ -142,7 +149,6 @@ if __name__ == "__main__":
 
                 i = rankings[current]
                 j = rankings[current - offset]
-                # print(f'Pairing {current} vs {current-offset} -> {i} vs {j}')
                 if agents[i] == "dummy":
                     win_matrix[i, j] = 0.0
                     win_matrix[j, i] = 1.0
@@ -159,7 +165,7 @@ if __name__ == "__main__":
                     p1 = neural_net.NNWrapper.load_checkpoint(
                         Game, model_path, agents[i]
                     )
-                    d1 = nn_mtcs_depth
+                    d1 = mcts_visits
                 if agents[j] in rand_agents:
                     p2 = RandPlayer(Game, bs)
                     d2 = agents[j]
@@ -167,7 +173,7 @@ if __name__ == "__main__":
                     p2 = neural_net.NNWrapper.load_checkpoint(
                         Game, model_path, agents[j]
                     )
-                    d2 = nn_mtcs_depth
+                    d2 = mcts_visits
 
                 players = [p2] * Game.NUM_PLAYERS()
                 depths = [d2] * Game.NUM_PLAYERS()
@@ -179,7 +185,6 @@ if __name__ == "__main__":
                 if Game.NUM_PLAYERS() == 2:
                     win_matrix[i, j] = win_rates[0]
                     win_matrix[j, i] = win_rates[1]
-                    # print(win_matrix[i, j])
                     pbar.update()
                     continue
                 players = [p1] * Game.NUM_PLAYERS()
@@ -196,7 +201,6 @@ if __name__ == "__main__":
                     wr2 += win_rates[i]
                 win_matrix[i, j] = wr1 / 2
                 win_matrix[j, i] = wr2 / 2
-                # print(win_matrix[i, j])
                 pbar.update()
         # Update elo and rankings.
         elo = calc_elo(elo, win_matrix)
@@ -210,9 +214,12 @@ if __name__ == "__main__":
     print(agents)
     print(elo)
     print(rankings)
-    np.savetxt(
-        os.path.join("data", "monrad_wr.csv"),
-        win_matrix,
-        delimiter=",",
-        header=",".join([str(a) for a in agents]),
+
+    output_dir = create_tournament_dir(".", "connect4", "monrad")
+    save_tournament_results(
+        output_dir, agents, elo, win_matrix,
+        mcts_visits=mcts_visits,
+        num_random=num_random,
+        variant="connect4",
+        fmt="monrad",
     )

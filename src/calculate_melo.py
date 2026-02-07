@@ -25,7 +25,13 @@ if __name__ == "__main__":
     alpha = math.log(10) / 400
 
     def sig(x):
-        return 1.0 / (1.0 + math.exp(-alpha * x))
+        ax = alpha * x
+        if ax >= 0:
+            z = math.exp(-ax)
+            return 1.0 / (1.0 + z)
+        else:
+            z = math.exp(ax)
+            return z / (1.0 + z)
 
     def melo2_update(K, i, j, p_ij, r, c):
         p_hat_ij = sig(r[i] - r[j] + c[i, 0] * c[j, 1] - c[j, 0] * c[i, 1])

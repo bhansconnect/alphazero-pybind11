@@ -359,12 +359,12 @@ def run_analysis(Game, network_path, visit_counts):
     print(f"Collected {total_positions} positions across {ANALYSIS_GAMES} games")
 
     # Aggregate metrics from all games
-    all_kl = {vc: [] for vc in visit_counts if vc != max_visits}
+    all_kl = {vc: [] for vc in visit_counts}
     position_values = {vc: [] for vc in visit_counts}
     position_max_values = []
     position_outcomes = []
-    # Expected reward: V(pi_vc) = sum(pi_vc * Q_max) for vc > 1
-    expected_reward = {vc: [] for vc in visit_counts if vc > 1}
+    # Expected reward: V(pi_vc) = sum(pi_vc * Q_max)
+    expected_reward = {vc: [] for vc in visit_counts}
 
     for gid in range(ANALYSIS_GAMES):
         scores = game_scores[gid]
@@ -382,7 +382,7 @@ def run_analysis(Game, network_path, visit_counts):
             if max_visits in policies_at_pos:
                 max_policy = policies_at_pos[max_visits]
                 for vc in visit_counts:
-                    if vc != max_visits and vc in policies_at_pos:
+                    if vc in policies_at_pos:
                         kl = kl_divergence(max_policy, policies_at_pos[vc])
                         all_kl[vc].append(kl)
 
@@ -395,7 +395,7 @@ def run_analysis(Game, network_path, visit_counts):
 
             # Expected reward using Q-values from max-visits tree
             for vc in visit_counts:
-                if vc > 1 and vc in policies_at_pos:
+                if vc in policies_at_pos:
                     v_pi = float(np.sum(policies_at_pos[vc] * q_values))
                     expected_reward[vc].append(v_pi)
 
@@ -436,11 +436,10 @@ def run_analysis(Game, network_path, visit_counts):
         outcomes = position_outcomes[:n]
 
         # vs max-visits
-        if vc != max_visits:
-            corr = np.corrcoef(vals, max_vals)[0, 1] if np.std(vals) > 1e-9 and np.std(max_vals) > 1e-9 else 0.0
-            mae = float(np.mean(np.abs(vals - max_vals)))
-            value_corr_vs_max[vc] = float(corr)
-            value_mae_vs_max[vc] = mae
+        corr = np.corrcoef(vals, max_vals)[0, 1] if np.std(vals) > 1e-9 and np.std(max_vals) > 1e-9 else 0.0
+        mae = float(np.mean(np.abs(vals - max_vals)))
+        value_corr_vs_max[vc] = float(corr)
+        value_mae_vs_max[vc] = mae
 
         # vs game outcome
         corr = np.corrcoef(vals, outcomes)[0, 1] if np.std(vals) > 1e-9 and np.std(outcomes) > 1e-9 else 0.0
@@ -453,13 +452,13 @@ def run_analysis(Game, network_path, visit_counts):
     metrics["value_corr_vs_outcome"] = value_corr_vs_outcome
     metrics["value_mae_vs_outcome"] = value_mae_vs_outcome
 
-    # Expected reward and regret metrics (vc > 1 only)
+    # Expected reward and regret metrics
     reward_means = {}
     reward_all = {}
     regret_means = {}
     regret_all = {}
     for vc in visit_counts:
-        if vc > 1 and vc in expected_reward and len(expected_reward[vc]) > 0:
+        if vc in expected_reward and len(expected_reward[vc]) > 0:
             arr = np.array(expected_reward[vc])
             reward_means[vc] = float(np.mean(arr))
             reward_all[vc] = arr
@@ -467,7 +466,7 @@ def run_analysis(Game, network_path, visit_counts):
     if max_visits in reward_all:
         max_reward = reward_all[max_visits]
         for vc in visit_counts:
-            if vc > 1 and vc != max_visits and vc in reward_all:
+            if vc in reward_all:
                 reg = max_reward[:len(reward_all[vc])] - reward_all[vc]
                 regret_means[vc] = float(np.mean(reg))
                 regret_all[vc] = reg
@@ -493,7 +492,7 @@ def run_analysis(Game, network_path, visit_counts):
         print(f"{vc:>8d} {value_corr_vs_outcome[vc]:>8.4f} {value_mae_vs_outcome[vc]:>8.4f}")
 
     if reward_means:
-        print("\n--- Expected Reward (V(pi) = sum(pi * Q_max), vc > 1) ---")
+        print("\n--- Expected Reward (V(pi) = sum(pi * Q_max)) ---")
         print(f"{'Visits':>8s} {'E[reward]':>10s}")
         for vc in sorted(reward_means.keys()):
             print(f"{vc:>8d} {reward_means[vc]:>10.4f}")

@@ -86,6 +86,20 @@ void MCTS::add_root_noise() {
   }
 }
 
+void MCTS::apply_root_policy_temp() {
+  if (root_policy_temp_ == 1.0f) return;
+  float sum = 0.0f;
+  for (auto& c : root_.children) {
+    c.policy = std::pow(c.policy, 1.0f / root_policy_temp_);
+    sum += c.policy;
+  }
+  if (sum > 0.0f) {
+    for (auto& c : root_.children) {
+      c.policy /= sum;
+    }
+  }
+}
+
 std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
   current_ = &root_;
   auto leaf = gs.copy();

@@ -438,8 +438,19 @@ def run_analysis(Game, network_path, visit_counts):
 
 # --- Phase 4: Visualization & Data Save ---
 
+def _has_display():
+    """Check if a graphical display is available."""
+    if os.environ.get('SSH_TTY') and not os.environ.get('DISPLAY'):
+        return False
+    import matplotlib
+    return matplotlib.get_backend().lower() != 'agg'
+
+
 def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
     """Generate plots and save raw data."""
+    if not _has_display():
+        import matplotlib
+        matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
     save_dir = os.path.join("data", "threshold_analysis")
@@ -463,7 +474,9 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
         ax.set_xticklabels([str(v) for v in visit_counts])
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
-        fig.savefig(os.path.join(save_dir, "elo_vs_visits.png"), dpi=150)
+        path = os.path.join(save_dir, "elo_vs_visits.png")
+        fig.savefig(path, dpi=150)
+        print(f"Saved: {path}")
         fig_num += 1
 
     # Figure 2: Policy KL divergence
@@ -496,7 +509,9 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
         ax2.grid(True, alpha=0.3)
 
         fig.tight_layout()
-        fig.savefig(os.path.join(save_dir, "policy_kl.png"), dpi=150)
+        path = os.path.join(save_dir, "policy_kl.png")
+        fig.savefig(path, dpi=150)
+        print(f"Saved: {path}")
         fig_num += 1
 
     # Figure 3: Value analysis (2x2)
@@ -557,7 +572,9 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
         axes[1, 1].grid(True, alpha=0.3)
 
         fig.tight_layout()
-        fig.savefig(os.path.join(save_dir, "value_analysis.png"), dpi=150)
+        path = os.path.join(save_dir, "value_analysis.png")
+        fig.savefig(path, dpi=150)
+        print(f"Saved: {path}")
 
     # Save raw data
     save_data = {"visit_counts": np.array(visit_counts)}
@@ -584,10 +601,12 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
 
     npz_path = os.path.join(save_dir, "threshold_data.npz")
     np.savez(npz_path, **save_data)
-    print(f"\nRaw data saved to {npz_path}")
-    print(f"Plots saved to {save_dir}/")
+    print(f"Saved: {npz_path}")
 
-    plt.show()
+    if _has_display():
+        plt.show()
+    else:
+        print("No display detected, skipping interactive display")
 
 
 def main():

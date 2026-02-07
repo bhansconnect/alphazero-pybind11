@@ -37,6 +37,7 @@ struct GameData {
   bool playthrough = false;
   double total_avg_leaf_depth = 0;
   double total_search_entropy = 0;
+  double total_valid_moves = 0;
   uint32_t move_count = 0;
 };
 
@@ -124,6 +125,10 @@ class DLLEXPORT PlayManager {
     if (game_length_ == 0) return 0;
     return static_cast<float>(total_move_count_) / static_cast<float>(game_length_);
   }
+  float avg_valid_moves() const noexcept {
+    if (total_move_count_ == 0) return 0;
+    return static_cast<float>(total_valid_moves_ / static_cast<double>(total_move_count_));
+  }
   size_t awaiting_mcts_count() const noexcept { return awaiting_mcts_.size(); }
   size_t awaiting_inference_count() const noexcept {
     auto out = 0;
@@ -166,6 +171,7 @@ class DLLEXPORT PlayManager {
   uint64_t game_length_ = 0;
   double total_avg_leaf_depth_ = 0;
   double total_search_entropy_ = 0;
+  double total_valid_moves_ = 0;
   uint64_t total_move_count_ = 0;
   std::atomic<uint32_t> games_completed_ = 0;
   Vector<float> resign_scores_;

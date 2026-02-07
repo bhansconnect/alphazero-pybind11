@@ -72,6 +72,7 @@ class DLLEXPORT MCTS {
       return depth_ == 0 ? 0.0f : static_cast<float>(total_leaf_depth_) / static_cast<float>(depth_);
   };
   [[nodiscard]] float normalized_root_entropy() const noexcept;
+  [[nodiscard]] uint32_t num_root_children() const noexcept { return root_.children.size(); }
 
   [[nodiscard]] static uint32_t pick_move(const Vector<float>& p);
 

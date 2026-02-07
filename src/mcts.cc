@@ -164,6 +164,21 @@ Vector<float> MCTS::probs(const float temp) const noexcept {
   auto counts = this->counts();
   auto probs = Vector<float>{num_moves_};
 
+  // When no visits have been made, return the prior policy from the root node.
+  // This enables mcts_depth=1 as a "raw policy" mode.
+  auto count_sum = counts.cast<float>().sum();
+  if (count_sum == 0) {
+    probs.setZero();
+    for (const auto& c : root_.children) {
+      probs(c.move) = c.policy;
+    }
+    if (temp != 0.0f) {
+      probs = probs.array().pow(1.0f / temp);
+    }
+    probs /= probs.sum();
+    return probs;
+  }
+
   if (temp == 0) {
     auto best_moves = std::vector<int>{0};
     auto best_count = counts(0);

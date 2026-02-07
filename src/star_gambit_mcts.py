@@ -183,13 +183,17 @@ def run_tournament(Game, network_path, visit_counts):
 
     count = len(visit_counts)
 
-    # Load a single network (or random player), reuse for all configs
+    # Load network (shared across players) or create per-player RandPlayers
+    num_players = Game.NUM_PLAYERS()
     if network_path is None:
-        agent = RandPlayer(Game, TOURNAMENT_BATCH_SIZE)
+        def make_players():
+            return [RandPlayer(Game, TOURNAMENT_BATCH_SIZE) for _ in range(num_players)]
     else:
         net_dir = os.path.dirname(network_path)
         net_file = os.path.basename(network_path)
         agent = neural_net.NNWrapper.load_checkpoint(Game, net_dir, net_file)
+        def make_players():
+            return [agent] * num_players
 
     win_matrix = np.full((count, count), np.nan)
 
@@ -200,9 +204,8 @@ def run_tournament(Game, network_path, visit_counts):
                 d1 = visit_counts[i]
                 d2 = visit_counts[j]
 
-                players = [agent] * Game.NUM_PLAYERS()
-                depths = [d2] * Game.NUM_PLAYERS()
-                players[0] = agent
+                players = make_players()
+                depths = [d2] * num_players
                 depths[0] = d1
 
                 name = f"v{d1}-v{d2}"
@@ -225,7 +228,6 @@ def run_tournament(Game, network_path, visit_counts):
     for i, vc in enumerate(visit_counts):
         print(f"{vc:>8d} {elo[i]:>8.0f}")
 
-    del agent
     gc.collect()
     return elo, win_matrix
 

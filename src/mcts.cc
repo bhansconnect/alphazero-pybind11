@@ -160,6 +160,15 @@ Vector<uint32_t> MCTS::counts() const noexcept {
   return counts;
 }
 
+Vector<float> MCTS::root_q_values() const noexcept {
+  auto q_values = Vector<float>{num_moves_};
+  q_values.setZero();
+  for (const auto& c : root_.children) {
+    q_values(c.move) = c.q;
+  }
+  return q_values;
+}
+
 Vector<float> MCTS::probs(const float temp) const noexcept {
   auto counts = this->counts();
   auto probs = Vector<float>{num_moves_};

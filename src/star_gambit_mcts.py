@@ -275,6 +275,7 @@ def run_analysis(Game, network_path, visit_counts):
         # Per-position snapshot storage (indexed by slot in active list)
         pos_policies = [{} for _ in range(n)]
         pos_values = [{} for _ in range(n)]
+        pos_q_values = [None] * n
 
         # Run MCTS simulations in lockstep
         for sim in range(max_visits):
@@ -318,12 +319,16 @@ def run_analysis(Game, network_path, visit_counts):
                         wld = np.array(mcts_list[i].root_value())
                         pos_values[i][vc] = float(wld[0])
 
+        # Capture Q-values from the max-visits MCTS tree
+        for i in range(n):
+            pos_q_values[i] = np.array(mcts_list[i].root_q_values())
+
         # Record position data and advance games
         next_active = []
         for slot, gid in enumerate(active):
             gs = game_states[gid]
             game_positions[gid].append(
-                (gs.current_player(), pos_values[slot], pos_policies[slot])
+                (gs.current_player(), pos_values[slot], pos_policies[slot], pos_q_values[slot])
             )
             total_positions += 1
             pbar.update(1)
@@ -358,10 +363,12 @@ def run_analysis(Game, network_path, visit_counts):
     position_values = {vc: [] for vc in visit_counts}
     position_max_values = []
     position_outcomes = []
+    # Expected reward: V(pi_vc) = sum(pi_vc * Q_max) for vc > 1
+    expected_reward = {vc: [] for vc in visit_counts if vc > 1}
 
     for gid in range(ANALYSIS_GAMES):
         scores = game_scores[gid]
-        for current_player, values_at_pos, policies_at_pos in game_positions[gid]:
+        for current_player, values_at_pos, policies_at_pos, q_values in game_positions[gid]:
             # Outcome for current player
             if scores[current_player] == 1:
                 outcome = 1.0
@@ -385,6 +392,12 @@ def run_analysis(Game, network_path, visit_counts):
                     position_values[vc].append(values_at_pos[vc])
             if max_visits in values_at_pos:
                 position_max_values.append(values_at_pos[max_visits])
+
+            # Expected reward using Q-values from max-visits tree
+            for vc in visit_counts:
+                if vc > 1 and vc in policies_at_pos:
+                    v_pi = float(np.sum(policies_at_pos[vc] * q_values))
+                    expected_reward[vc].append(v_pi)
 
     position_outcomes = np.array(position_outcomes)
     position_max_values = np.array(position_max_values)
@@ -440,6 +453,29 @@ def run_analysis(Game, network_path, visit_counts):
     metrics["value_corr_vs_outcome"] = value_corr_vs_outcome
     metrics["value_mae_vs_outcome"] = value_mae_vs_outcome
 
+    # Expected reward and regret metrics (vc > 1 only)
+    reward_means = {}
+    reward_all = {}
+    regret_means = {}
+    regret_all = {}
+    for vc in visit_counts:
+        if vc > 1 and vc in expected_reward and len(expected_reward[vc]) > 0:
+            arr = np.array(expected_reward[vc])
+            reward_means[vc] = float(np.mean(arr))
+            reward_all[vc] = arr
+    # Regret = V(pi_max) - V(pi_vc)
+    if max_visits in reward_all:
+        max_reward = reward_all[max_visits]
+        for vc in visit_counts:
+            if vc > 1 and vc != max_visits and vc in reward_all:
+                reg = max_reward[:len(reward_all[vc])] - reward_all[vc]
+                regret_means[vc] = float(np.mean(reg))
+                regret_all[vc] = reg
+    metrics["reward_means"] = reward_means
+    metrics["reward_all"] = reward_all
+    metrics["regret_means"] = regret_means
+    metrics["regret_all"] = regret_all
+
     # Print summary
     print("\n--- Policy Analysis (KL divergence from max-visits policy) ---")
     print(f"{'Visits':>8s} {'Mean KL':>10s}")
@@ -455,6 +491,18 @@ def run_analysis(Game, network_path, visit_counts):
     print(f"{'Visits':>8s} {'Corr':>8s} {'MAE':>8s}")
     for vc in sorted(value_corr_vs_outcome.keys()):
         print(f"{vc:>8d} {value_corr_vs_outcome[vc]:>8.4f} {value_mae_vs_outcome[vc]:>8.4f}")
+
+    if reward_means:
+        print("\n--- Expected Reward (V(pi) = sum(pi * Q_max), vc > 1) ---")
+        print(f"{'Visits':>8s} {'E[reward]':>10s}")
+        for vc in sorted(reward_means.keys()):
+            print(f"{vc:>8d} {reward_means[vc]:>10.4f}")
+
+    if regret_means:
+        print("\n--- Policy Regret (V(pi_max) - V(pi_vc)) ---")
+        print(f"{'Visits':>8s} {'Regret':>10s}")
+        for vc in sorted(regret_means.keys()):
+            print(f"{vc:>8d} {regret_means[vc]:>10.4f}")
 
     del agent
     gc.collect()
@@ -601,6 +649,65 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
         fig.savefig(path, dpi=150)
         print(f"Saved: {path}")
 
+    # Figure 4: Expected reward & policy regret
+    if metrics and "reward_means" in metrics and metrics["reward_means"]:
+        reward_means = metrics["reward_means"]
+        reward_all = metrics["reward_all"]
+        regret_means = metrics.get("regret_means", {})
+        regret_all = metrics.get("regret_all", {})
+
+        n_panels = 1 + (1 if regret_means else 0) + (1 if regret_all else 0)
+        fig, axes = plt.subplots(1, n_panels, figsize=(6 * n_panels, 5))
+        if n_panels == 1:
+            axes = [axes]
+
+        panel = 0
+
+        # Left: expected reward curve
+        reward_vcs = sorted(reward_means.keys())
+        axes[panel].plot(reward_vcs, [reward_means[vc] for vc in reward_vcs],
+                         "o-", markersize=8, linewidth=2)
+        axes[panel].set_xscale("log")
+        axes[panel].set_xlabel("MCTS Visit Count")
+        axes[panel].set_ylabel("Expected Reward V(pi)")
+        axes[panel].set_title("Expected Reward vs Visit Count")
+        axes[panel].set_xticks(reward_vcs)
+        axes[panel].set_xticklabels([str(v) for v in reward_vcs])
+        axes[panel].grid(True, alpha=0.3)
+        panel += 1
+
+        # Center: mean regret curve
+        if regret_means:
+            regret_vcs = sorted(regret_means.keys())
+            axes[panel].plot(regret_vcs, [regret_means[vc] for vc in regret_vcs],
+                             "o-", markersize=8, linewidth=2, color="tab:red")
+            axes[panel].set_xscale("log")
+            axes[panel].set_xlabel("MCTS Visit Count")
+            axes[panel].set_ylabel("Regret")
+            axes[panel].set_title("Mean Policy Regret vs Visit Count")
+            axes[panel].set_xticks(regret_vcs)
+            axes[panel].set_xticklabels([str(v) for v in regret_vcs])
+            axes[panel].grid(True, alpha=0.3)
+            panel += 1
+
+        # Right: regret distribution box plot
+        if regret_all:
+            regret_vcs = sorted(regret_all.keys())
+            bp_data = [regret_all[vc] for vc in regret_vcs]
+            bp = axes[panel].boxplot(bp_data, labels=[str(v) for v in regret_vcs],
+                                     showfliers=False, patch_artist=True)
+            for patch in bp["boxes"]:
+                patch.set_facecolor("lightsalmon")
+            axes[panel].set_xlabel("MCTS Visit Count")
+            axes[panel].set_ylabel("Regret")
+            axes[panel].set_title("Policy Regret Distribution")
+            axes[panel].grid(True, alpha=0.3)
+
+        fig.tight_layout()
+        path = os.path.join(save_dir, "policy_regret.png")
+        fig.savefig(path, dpi=150)
+        print(f"Saved: {path}")
+
     # Save raw data
     save_data = {"visit_counts": np.array(visit_counts)}
     if elo is not None:
@@ -623,6 +730,15 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
             if prefix in metrics:
                 for vc, val in metrics[prefix].items():
                     save_data[f"{prefix}_{vc}"] = np.array(val)
+        # Expected reward and regret data
+        for prefix in ["reward_means", "regret_means"]:
+            if prefix in metrics:
+                for vc, val in metrics[prefix].items():
+                    save_data[f"{prefix}_{vc}"] = np.array(val)
+        for prefix in ["reward_all", "regret_all"]:
+            if prefix in metrics:
+                for vc, arr in metrics[prefix].items():
+                    save_data[f"{prefix}_{vc}"] = arr
 
     npz_path = os.path.join(save_dir, "threshold_data.npz")
     np.savez(npz_path, **save_data)

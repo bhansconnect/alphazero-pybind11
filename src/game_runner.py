@@ -185,40 +185,24 @@ class GameRunner:
 
     @tracy_zone
     def run(self):
-        # Identify which players use C++ inference (bypass Python batch pipeline).
-        playout_players = set()
-        rand_players = set()
+        # Identify which players need NN batch pipeline (non-NN players
+        # are handled inline in C++ play() threads via eval_type).
+        nn_players = set()
         for i in range(self.num_players):
-            if isinstance(self.players[i], PlayoutPlayer):
-                playout_players.add(i)
-            elif isinstance(self.players[i], RandPlayer):
-                rand_players.add(i)
+            if not isinstance(self.players[i], (PlayoutPlayer, RandPlayer)):
+                nn_players.add(i)
 
         batch_workers = []
-        cpp_inference_workers = []
         for i in range(self.batch_workers):
             player = i % self.num_players
-            if player in playout_players:
-                cpp_inference_workers.append(
-                    threading.Thread(
-                        target=self.pm.playout_inference, args=(player,)
-                    )
+            if player not in nn_players:
+                continue
+            batch_workers.append(
+                threading.Thread(
+                    target=self.batch_builder, args=(player,)
                 )
-                cpp_inference_workers[-1].start()
-            elif player in rand_players:
-                cpp_inference_workers.append(
-                    threading.Thread(
-                        target=self.pm.dumb_inference, args=(player,)
-                    )
-                )
-                cpp_inference_workers[-1].start()
-            else:
-                batch_workers.append(
-                    threading.Thread(
-                        target=self.batch_builder, args=(player,)
-                    )
-                )
-                batch_workers[-1].start()
+            )
+            batch_workers[-1].start()
         result_workers = []
         for i in range(self.args.result_workers):
             result_workers.append(threading.Thread(target=self.result_processor))
@@ -240,8 +224,6 @@ class GameRunner:
 
         for bw in batch_workers:
             bw.join()
-        for cw in cpp_inference_workers:
-            cw.join()
         for rw in result_workers:
             rw.join()
         for pw in player_workers:
@@ -313,8 +295,7 @@ class GameRunner:
                 self.ready_queues[player].put(batch_index)
                 continue
             out = batch[: len(game_indices)]
-            if not isinstance(self.players[player], (RandPlayer, PlayoutPlayer)):
-                out = out.contiguous().to(self.device, non_blocking=True)
+            out = out.contiguous().to(self.device, non_blocking=True)
             self.batch_queue.put((out, batch_index, game_indices))
 
     @tracy_zone
@@ -391,31 +372,26 @@ class GameRunner:
 
 
 class RandPlayer:
-    def __init__(self, game, max_batch_size):
-        self.v = torch.full(
-            (max_batch_size, game.NUM_PLAYERS() + 1), 1.0 / (game.NUM_PLAYERS() + 1)
-        )
-        self.pi = torch.full((max_batch_size, game.NUM_MOVES()), 1.0 / game.NUM_MOVES())
-
-    def predict(self, canonical):
-        v, pi = self.process(canonical.unsqueeze(0))
-        return v[0], pi[0]
-
-    def process(self, batch):
-        return self.v[: batch.shape[0]].clone(), self.pi[: batch.shape[0]].clone()
+    """Marker for random evaluation. Actual eval runs inline in C++ MCTS threads."""
+    pass
 
 
 class PlayoutPlayer:
-    """Marker for rollout-based evaluation. Actual eval runs in C++."""
+    """Marker for rollout-based evaluation. Actual eval runs inline in C++ MCTS threads."""
+    pass
 
-    def __init__(self, game):
-        self.game = game
 
-    def predict(self, canonical):
-        raise RuntimeError("PlayoutPlayer.predict() should not be called via GameRunner path")
-
-    def process(self, batch):
-        raise RuntimeError("PlayoutPlayer.process() should not be called via GameRunner path")
+def set_eval_types(params, players):
+    """Set eval_type on params based on player types."""
+    eval_types = []
+    for p in players:
+        if isinstance(p, PlayoutPlayer):
+            eval_types.append(alphazero.EvalType.PLAYOUT)
+        elif isinstance(p, RandPlayer):
+            eval_types.append(alphazero.EvalType.RANDOM)
+        else:
+            eval_types.append(alphazero.EvalType.NN)
+    params.eval_type = eval_types
 
 
 def base_params(Game, start_temp, bs, cb):
@@ -788,12 +764,15 @@ if __name__ == "__main__":
         use_rand = best == 0
 
         if use_rand:
-            nn = RandPlayer(Game, bs)
+            nn = RandPlayer()
             params.max_cache_size = 0
         else:
             nn = neural_net.NNWrapper.load_checkpoint(
                 Game, CHECKPOINT_LOCATION, f"{best:04d}-{experiment_name}.pt"
             )
+
+        players = [nn] * Game.NUM_PLAYERS()
+        set_eval_types(params, players)
 
         pm = alphazero.PlayManager(new_game(), params)
         grargs = GRArgs(
@@ -804,10 +783,6 @@ if __name__ == "__main__":
             concurrent_batches=cb,
             result_workers=RESULT_WORKERS,
         )
-
-        players = []
-        for _ in range(Game.NUM_PLAYERS()):
-            players.append(nn)
 
         gr = GameRunner(players, pm, grargs)
         gr.run()
@@ -851,7 +826,7 @@ if __name__ == "__main__":
             Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{experiment_name}.pt"
         )
         if past_iter == 0:
-            nn_past = RandPlayer(Game, 64)
+            nn_past = RandPlayer()
         else:
             nn_past = neural_net.NNWrapper.load_checkpoint(
                 Game, CHECKPOINT_LOCATION, f"{past_iter:04d}-{experiment_name}.pt"
@@ -868,6 +843,9 @@ if __name__ == "__main__":
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
                 params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+                players = [nn_past] * Game.NUM_PLAYERS()
+                players[i] = nn
+                set_eval_types(params, players)
                 pm = alphazero.PlayManager(new_game(), params)
 
                 grargs = GRArgs(
@@ -878,10 +856,6 @@ if __name__ == "__main__":
                     concurrent_batches=cb,
                     result_workers=RESULT_WORKERS,
                 )
-                players = []
-                for _ in range(Game.NUM_PLAYERS()):
-                    players.append(nn_past)
-                players[i] = nn
                 gr = GameRunner(players, pm, grargs)
                 gr.run()
                 scores = pm.scores()
@@ -906,6 +880,9 @@ if __name__ == "__main__":
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
                 params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+                players = [nn] * Game.NUM_PLAYERS()
+                players[i] = nn_past
+                set_eval_types(params, players)
                 pm = alphazero.PlayManager(new_game(), params)
 
                 grargs = GRArgs(
@@ -916,10 +893,6 @@ if __name__ == "__main__":
                     concurrent_batches=cb,
                     result_workers=RESULT_WORKERS,
                 )
-                players = []
-                for _ in range(Game.NUM_PLAYERS()):
-                    players.append(nn)
-                players[i] = nn_past
                 gr = GameRunner(players, pm, grargs)
                 gr.run()
                 scores = pm.scores()
@@ -954,6 +927,9 @@ if __name__ == "__main__":
                 params = base_params(Game, EVAL_TEMP, bs, cb)
                 params.games_to_play = n
                 params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+                players = [nn_past] * Game.NUM_PLAYERS()
+                players[i] = nn
+                set_eval_types(params, players)
                 pm = alphazero.PlayManager(new_game(), params)
 
                 grargs = GRArgs(
@@ -964,10 +940,6 @@ if __name__ == "__main__":
                     concurrent_batches=cb,
                     result_workers=RESULT_WORKERS,
                 )
-                players = []
-                for _ in range(Game.NUM_PLAYERS()):
-                    players.append(nn_past)
-                players[i] = nn
                 gr = GameRunner(players, pm, grargs)
                 gr.run()
                 scores = pm.scores()

@@ -17,6 +17,8 @@
 
 namespace alphazero {
 
+enum class EvalType : uint8_t { NN = 0, RANDOM = 1, PLAYOUT = 2 };
+
 using Cache = ShardedLRUCache<GameStateKeyWrapper,
                               std::tuple<Vector<float>, Vector<float>>>;
 
@@ -68,6 +70,7 @@ struct PlayParams {
   float fpu_reduction = 0.0;
   float resign_percent = 0.0;
   float resign_playthrough_percent = 0.0;
+  std::vector<EvalType> eval_type{};  // per player, empty = all NN
 };
 
 // This is a multithread safe game play manager.
@@ -95,9 +98,6 @@ class DLLEXPORT PlayManager {
   [[nodiscard]] uint32_t games_completed() const noexcept {
     return games_completed_;
   }
-  void dumb_inference(const uint8_t player);
-  void playout_inference(const uint8_t player);
-
   [[nodiscard]] std::optional<uint32_t> pop_game(uint32_t player) noexcept {
     return awaiting_inference_[player]->pop(MAX_WAIT);
   }

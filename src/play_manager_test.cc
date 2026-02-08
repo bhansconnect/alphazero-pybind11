@@ -14,6 +14,7 @@ TEST(PlayManager, Basic) {
   params.games_to_play = 32;
   params.concurrent_games = 8;
   params.mcts_depth = {10, 10};
+  params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
   params.history_enabled = true;
   params.playout_cap_randomization = true;
   auto pm = PlayManager{std::make_unique<connect4_gs::Connect4GS>(), params};
@@ -24,23 +25,7 @@ TEST(PlayManager, Basic) {
       FAIL() << "Got an exception: " << e.what() << std::endl;
     }
   });
-  auto infer_p0 = std::async(std::launch::async, [&] {
-    try {
-      pm.dumb_inference(0);
-    } catch (const std::exception& e) {
-      FAIL() << "Got an exception: " << e.what() << std::endl;
-    }
-  });
-  auto infer_p1 = std::async(std::launch::async, [&] {
-    try {
-      pm.dumb_inference(1);
-    } catch (const std::exception& e) {
-      FAIL() << "Got an exception: " << e.what() << std::endl;
-    }
-  });
   play.wait();
-  infer_p0.wait();
-  infer_p1.wait();
 }
 
 TEST(PlayManager, MultiThreaded) {
@@ -51,6 +36,7 @@ TEST(PlayManager, MultiThreaded) {
   params.games_to_play = 32 * workers;
   params.concurrent_games = 8 * workers;
   params.mcts_depth = {10, 10};
+  params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
 
   auto pm = PlayManager{std::make_unique<connect4_gs::Connect4GS>(), params};
   auto play_workers = std::vector<std::future<void>>{workers};
@@ -63,25 +49,9 @@ TEST(PlayManager, MultiThreaded) {
       }
     });
   }
-  auto infer_p0 = std::async(std::launch::async, [&] {
-    try {
-      pm.dumb_inference(0);
-    } catch (const std::exception& e) {
-      FAIL() << "Got an exception: " << e.what() << std::endl;
-    }
-  });
-  auto infer_p1 = std::async(std::launch::async, [&] {
-    try {
-      pm.dumb_inference(1);
-    } catch (const std::exception& e) {
-      FAIL() << "Got an exception: " << e.what() << std::endl;
-    }
-  });
   for (auto& pw : play_workers) {
     pw.wait();
   }
-  infer_p0.wait();
-  infer_p1.wait();
   std::cout << "Scores: " << pm.scores() << std::endl;
 }
 

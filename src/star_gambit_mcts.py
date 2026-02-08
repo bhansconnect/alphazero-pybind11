@@ -19,7 +19,7 @@ import alphazero
 import neural_net
 from game_runner import (
     GameRunner, GRArgs, RandPlayer, PlayoutPlayer, base_params, elo_prob,
-    CPUCT, FPU_REDUCTION, EVAL_TEMP, FINAL_TEMP, TEMP_DECAY_HALF_LIFE,
+    set_eval_types, CPUCT, FPU_REDUCTION, EVAL_TEMP, FINAL_TEMP, TEMP_DECAY_HALF_LIFE,
 )
 from monrad import pit_agents, calc_elo
 from star_gambit_play import discover_networks, select_checkpoint_from_run
@@ -214,9 +214,9 @@ def run_tournament(Game, network_path, visit_counts, use_playout=False):
     num_players = Game.NUM_PLAYERS()
     if network_path is None:
         if use_playout:
-            agent = PlayoutPlayer(Game)
+            agent = PlayoutPlayer()
         else:
-            agent = RandPlayer(Game, TOURNAMENT_BATCH_SIZE)
+            agent = RandPlayer()
         def make_players():
             return [agent] * num_players
     else:
@@ -277,9 +277,9 @@ def run_analysis(Game, network_path, visit_counts, use_playout=False):
     print("=" * 60)
 
     if network_path is None and use_playout:
-        agent = None  # Will use playout_eval per-leaf below
+        agent = "playout"  # Will use playout_eval per-leaf below
     elif network_path is None:
-        agent = RandPlayer(Game, ANALYSIS_GAMES)
+        agent = "random"  # Will use dumb_eval per-leaf below
     else:
         net_dir = os.path.dirname(network_path)
         net_file = os.path.basename(network_path)
@@ -326,16 +326,18 @@ def run_analysis(Game, network_path, visit_counts, use_playout=False):
             ]
 
             # Evaluate leaves
-            if agent is None:
-                # Playout evaluation: call C++ playout_eval per leaf
-                v_list = []
-                pi_list = []
-                for leaf in leaves:
-                    v, pi = alphazero.playout_eval(leaf)
-                    v_list.append(np.array(v))
-                    pi_list.append(np.array(pi))
-                v_np = np.stack(v_list)
-                pi_np = np.stack(pi_list)
+            if agent == "playout":
+                # Playout evaluation: call C++ playout_eval per leaf (parallelized)
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=os.cpu_count()) as pool:
+                    results = list(pool.map(alphazero.playout_eval, leaves))
+                v_np = np.stack([np.array(r[0]) for r in results])
+                pi_np = np.stack([np.array(r[1]) for r in results])
+            elif agent == "random":
+                # Random evaluation: uniform policy, equal value
+                np_ = num_players
+                v_np = np.full((n, np_ + 1), 1.0 / (np_ + 1), dtype=np.float32)
+                pi_np = np.full((n, num_moves), 1.0 / num_moves, dtype=np.float32)
             else:
                 # Stack canonicals into batch tensor
                 canonicals = [np.array(leaf.canonicalized()) for leaf in leaves]

@@ -657,7 +657,7 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
             # Box plot with mean overlay
             if all_data:
                 bp_data = [all_data[vc] for vc in vcs]
-                bp = ax.boxplot(bp_data, labels=labels,
+                bp = ax.boxplot(bp_data, tick_labels=labels,
                                 showfliers=False, patch_artist=True)
                 for patch in bp["boxes"]:
                     patch.set_facecolor(color)
@@ -790,7 +790,7 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
         if regret_all:
             regret_vcs = sorted(regret_all.keys())
             bp_data = [regret_all[vc] for vc in regret_vcs]
-            bp = axes[panel].boxplot(bp_data, labels=[str(v) for v in regret_vcs],
+            bp = axes[panel].boxplot(bp_data, tick_labels=[str(v) for v in regret_vcs],
                                      showfliers=False, patch_artist=True)
             for patch in bp["boxes"]:
                 patch.set_facecolor("lightsalmon")

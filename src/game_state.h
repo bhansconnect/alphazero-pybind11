@@ -3,7 +3,9 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <tuple>
 #include <typeindex>
+#include <vector>
 
 #include "absl/hash/hash.h"
 #include "dll_export.h"
@@ -127,5 +129,10 @@ inline bool operator==(const GameStateKeyWrapper& lhs,
 // game outcome as value and uniform-over-legal-moves as policy.
 [[nodiscard]] std::tuple<Vector<float>, Vector<float>> playout_eval(
     const GameState& gs);
+
+// Batched playout evaluation using C++ threads (one per leaf).
+// Avoids Python threading / GIL issues that cause memory corruption.
+[[nodiscard]] std::tuple<std::vector<Vector<float>>, std::vector<Vector<float>>>
+playout_eval_batch(const std::vector<const GameState*>& states);
 
 }  // namespace alphazero

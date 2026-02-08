@@ -505,6 +505,42 @@ PYBIND11_MODULE(alphazero, m) {
     return py::make_tuple(v, pi);
   });
 
+  m.def("playout_eval_batch", [](py::list py_states) {
+    // Extract raw GameState pointers while we hold the GIL.
+    std::vector<const GameState*> states;
+    states.reserve(py::len(py_states));
+    for (auto& item : py_states) {
+      states.push_back(item.cast<const GameState*>());
+    }
+
+    // Release GIL and run all playouts in C++ threads.
+    std::vector<Vector<float>> values;
+    std::vector<Vector<float>> policies;
+    {
+      py::gil_scoped_release release;
+      std::tie(values, policies) = playout_eval_batch(states);
+    }
+
+    // Build 2D NumPy arrays from results.
+    const auto n = static_cast<py::ssize_t>(states.size());
+    const auto v_size = static_cast<py::ssize_t>(values[0].size());
+    const auto pi_size = static_cast<py::ssize_t>(policies[0].size());
+
+    py::array_t<float> v_out({n, v_size});
+    py::array_t<float> pi_out({n, pi_size});
+    auto rv = v_out.mutable_unchecked<2>();
+    auto rpi = pi_out.mutable_unchecked<2>();
+    for (py::ssize_t i = 0; i < n; ++i) {
+      for (py::ssize_t j = 0; j < v_size; ++j) {
+        rv(i, j) = values[i](j);
+      }
+      for (py::ssize_t j = 0; j < pi_size; ++j) {
+        rpi(i, j) = policies[i](j);
+      }
+    }
+    return py::make_tuple(v_out, pi_out);
+  });
+
   // Tracy profiler bindings
 #ifdef TRACY_ENABLE
   m.def("_tracy_zone_begin", &py_tracy_zone_begin,

@@ -327,12 +327,7 @@ def run_analysis(Game, network_path, visit_counts, use_playout=False):
 
             # Evaluate leaves
             if agent == "playout":
-                # Playout evaluation: call C++ playout_eval per leaf (parallelized)
-                from concurrent.futures import ThreadPoolExecutor
-                with ThreadPoolExecutor(max_workers=os.cpu_count()) as pool:
-                    results = list(pool.map(alphazero.playout_eval, leaves))
-                v_np = np.stack([np.array(r[0]) for r in results])
-                pi_np = np.stack([np.array(r[1]) for r in results])
+                v_np, pi_np = alphazero.playout_eval_batch(leaves)
             elif agent == "random":
                 # Random evaluation: uniform policy, equal value
                 np_ = num_players

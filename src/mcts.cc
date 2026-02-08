@@ -161,6 +161,12 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
     ++current_->n;
     current_ = parent;
   }
+  // On the first evaluation the root is the leaf and the backprop loop
+  // doesn't execute (path_ is empty). Set root_.v so FPU for unvisited
+  // children uses the actual evaluation rather than the default of 0.
+  if (root_.n == 0) {
+    root_.v = value(root_.player) + value(num_players_) / num_players_;
+  }
   ++depth_;
   ++root_.n;
 }

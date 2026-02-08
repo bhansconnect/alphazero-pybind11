@@ -91,6 +91,10 @@ GATING_PANEL_WIN_RATE = 0.52
 # Generally it is ok to be slightly worse than the best if you crush the panel. Especially in high draw games.
 GATING_BEST_WIN_RATE = 0.52
 
+# Batch sizes for evaluation games. Total games per position = batch_size * NUM_PLAYERS.
+PAST_COMPARE_BATCH_SIZE = 64
+GATE_COMPARE_BATCH_SIZE = 64
+
 # A win/loss/draw will happen if it has a lower percent than this to not happen.
 # EX: 0.02 means that if the chance to draw is greater than 98% it will automatically happen.
 # This must be zero if there are more than 2 players.
@@ -813,7 +817,7 @@ if __name__ == "__main__":
         return win_rates, hr, agl, resign_win_rates, resign_rate, avg_depth, avg_entropy, fast_avg_depth, fast_avg_entropy, avg_mpt, avg_vm
 
     @tracy_zone
-    def play_past(Game, depth, iteration, past_iter):
+    def play_past(Game, depth, iteration, past_iter, batch_size=64):
         nn_rate = 0
         draw_rate = 0
         hr = 0
@@ -833,7 +837,7 @@ if __name__ == "__main__":
             )
         cb = Game.NUM_PLAYERS()
         if Game.NUM_PLAYERS() > 2:
-            bs = 16
+            bs = batch_size
             n = bs * cb
             for i in tqdm.trange(
                 Game.NUM_PLAYERS(),
@@ -919,7 +923,7 @@ if __name__ == "__main__":
             avg_mpt /= 2 * Game.NUM_PLAYERS()
             avg_vm /= 2 * Game.NUM_PLAYERS()
         else:
-            bs = 64
+            bs = batch_size
             n = bs * cb
             for i in tqdm.trange(
                 Game.NUM_PLAYERS(), leave=False, desc="Bench new vs old"
@@ -1092,7 +1096,7 @@ if __name__ == "__main__":
                 past_iter = max(0, i - compare_past)
                 if past_iter != i and math.isnan(wr[i, past_iter]):
                     nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy, bench_mpt, bench_vm = play_past(
-                        Game, nn_compare_mcts_depth, i, past_iter
+                        Game, nn_compare_mcts_depth, i, past_iter, PAST_COMPARE_BATCH_SIZE
                     )
                     wr[i, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
                     wr[past_iter, i] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
@@ -1332,7 +1336,7 @@ if __name__ == "__main__":
                     panel, desc=f"Pitting against Panel {panel}", leave=False
                 ):
                     nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy, gate_mpt, gate_vm = play_past(
-                        Game, nn_compare_mcts_depth, next_net, gate_net
+                        Game, nn_compare_mcts_depth, next_net, gate_net, GATE_COMPARE_BATCH_SIZE
                     )
                     panel_nn_rate += nn_rate
                     panel_draw_rate += draw_rate

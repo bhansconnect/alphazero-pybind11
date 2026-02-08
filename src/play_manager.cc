@@ -292,7 +292,7 @@ void PlayManager::playout_inference(const uint8_t player) {
       continue;
     }
     auto& game = games_[i.value()];
-    std::tie(game.v, game.pi) = playout_eval(*game.gs);
+    std::tie(game.v, game.pi) = playout_eval(*game.leaf);
     awaiting_mcts_.push(i.value());
   }
 }

@@ -156,7 +156,11 @@ def interactive_config():
     checkpoints = runs[selected_run]
     network_path = select_checkpoint_from_run(checkpoints)
     use_playout = False
-    if network_path is None:
+    if network_path == "playout":
+        network_path = None
+        use_playout = True
+        print("  -> Playout policy (random rollout)\n")
+    elif network_path is None:
         playout_choice = input("Use playout (rollout) evaluation instead of uniform random? (y/n) [n]: ").strip().lower()
         if playout_choice == 'y':
             use_playout = True

@@ -121,5 +121,38 @@ TEST(MCTS, PlayoutEval) {
   EXPECT_LT(best, gs.num_moves());
 }
 
+// NOLINTNEXTLINE
+TEST(MCTS, RootValueSetOnFirstEval) {
+  auto gs = connect4_gs::Connect4GS{};
+  // Use non-zero FPU reduction so the bug would matter.
+  auto mcts = MCTS{2, gs.num_players(), gs.num_moves(), 0, 1.4, 0.25};
+
+  // Run one simulation to initialize root.
+  {
+    auto leaf = mcts.find_leaf(gs);
+    auto [value, pi] = dumb_eval(*leaf);
+    mcts.process_result(gs, value, pi);
+  }
+
+  // Run 30 more simulations.
+  while (mcts.depth() < 31) {
+    auto leaf = mcts.find_leaf(gs);
+    auto [value, pi] = dumb_eval(*leaf);
+    mcts.process_result(gs, value, pi);
+  }
+
+  // With root.v properly set, FPU shouldn't create a huge gap that
+  // concentrates all visits on a single child. Check that at least 3
+  // children have been visited.
+  auto counts = mcts.counts();
+  int visited = 0;
+  for (int i = 0; i < counts.size(); ++i) {
+    if (counts(i) > 0) ++visited;
+  }
+  EXPECT_GE(visited, 3)
+      << "With FPU reduction and proper root v, visits should be distributed. "
+         "counts: " << counts.transpose();
+}
+
 }  // namespace
 }  // namespace alphazero

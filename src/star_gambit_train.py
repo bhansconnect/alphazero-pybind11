@@ -90,6 +90,10 @@ GATING_PANEL_SIZE = 1
 GATING_PANEL_WIN_RATE = 0.52
 GATING_BEST_WIN_RATE = 0.52
 
+# === Eval Batch Sizes ===
+PAST_COMPARE_BATCH_SIZE = 64
+GATE_COMPARE_BATCH_SIZE = 64
+
 # === Resignation ===
 RESIGN_PERCENT = 0.02              # Resign if win prob < this
 RESIGN_PLAYTHROUGH_PERCENT = 0.20  # % of resignations played out anyway
@@ -167,6 +171,10 @@ def configure_game_runner():
     game_runner.GATING_PANEL_SIZE = GATING_PANEL_SIZE
     game_runner.GATING_PANEL_WIN_RATE = GATING_PANEL_WIN_RATE
     game_runner.GATING_BEST_WIN_RATE = GATING_BEST_WIN_RATE
+
+    # Eval batch sizes
+    game_runner.PAST_COMPARE_BATCH_SIZE = PAST_COMPARE_BATCH_SIZE
+    game_runner.GATE_COMPARE_BATCH_SIZE = GATE_COMPARE_BATCH_SIZE
 
     # Iterations
     game_runner.bootstrap_iters = bootstrap_iters

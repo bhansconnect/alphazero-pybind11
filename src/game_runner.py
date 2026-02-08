@@ -1299,7 +1299,9 @@ if __name__ == "__main__":
             stage_start = time.time()
             with TracyZone("stage_training"):
                 hist_size = calc_hist_size(i)
-                run.track(hist_size, name="history_size", epoch=i, step=total_train_steps)
+                oldest_iteration = max(0, i - hist_size)
+                run.track(hist_size, name="history", epoch=i, step=total_train_steps, context={"type": "window_size"})
+                run.track(oldest_iteration, name="history", epoch=i, step=total_train_steps, context={"type": "oldest_iteration"})
                 v_loss, pi_loss, total_train_steps = train(
                     Game, i, hist_size, run, total_train_steps
                 )

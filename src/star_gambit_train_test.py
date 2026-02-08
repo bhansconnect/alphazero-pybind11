@@ -14,7 +14,6 @@ print = functools.partial(print, flush=True)
 
 import alphazero
 from neural_net import NNWrapper, NNArgs, get_device
-from game_runner import RandPlayer
 import torch
 import numpy as np
 
@@ -125,30 +124,15 @@ def test_play_manager_basic():
     params.self_play = True
     params.history_enabled = False
     params.max_cache_size = 0
+    params.eval_type = [alphazero.EvalType.RANDOM, alphazero.EvalType.RANDOM]
 
     pm = alphazero.PlayManager(new_game(), params)
     print(f"  PlayManager created for {params.games_to_play} games")
 
-    player = RandPlayer(Game, 2)
-    device = get_device()
-    cs = Game.CANONICAL_SHAPE()
-
-    # Start play() on background thread
+    # Start play() on background thread (eval is inline, no inference threads needed)
     mcts_worker = threading.Thread(target=pm.play)
     mcts_worker.start()
 
-    # Each player gets its own inference thread (build_batch blocks per-player)
-    inf_workers = []
-    for p in range(2):
-        w = threading.Thread(
-            target=_inference_worker,
-            args=(pm, p, player.process, device, 2, cs),
-        )
-        w.start()
-        inf_workers.append(w)
-
-    for w in inf_workers:
-        w.join()
     mcts_worker.join()
 
     scores = pm.scores()
@@ -183,26 +167,16 @@ def test_self_play_with_history():
     params.playout_cap_randomization = False
     params.resign_percent = 0.0
 
+    params.eval_type = [alphazero.EvalType.RANDOM, alphazero.EvalType.RANDOM]
+
     pm = alphazero.PlayManager(new_game(), params)
     print(f"  Starting self-play for {params.games_to_play} games...")
 
-    player = RandPlayer(Game, BATCH_SIZE)
-    device = get_device()
     cs = Game.CANONICAL_SHAPE()
 
-    # Start play() on background thread
+    # Start play() on background thread (eval is inline, no inference threads needed)
     mcts_worker = threading.Thread(target=pm.play)
     mcts_worker.start()
-
-    # Each player gets its own inference thread
-    inf_workers = []
-    for p in range(2):
-        w = threading.Thread(
-            target=_inference_worker,
-            args=(pm, p, player.process, device, BATCH_SIZE, cs),
-        )
-        w.start()
-        inf_workers.append(w)
 
     # Collect history on main thread while games run
     hist_canonical = torch.zeros(5000, cs[0], cs[1], cs[2])
@@ -220,8 +194,6 @@ def test_self_play_with_history():
             print(f"    Completed: {completed}/{params.games_to_play}")
             last_completed = completed
 
-    for w in inf_workers:
-        w.join()
     mcts_worker.join()
 
     # Collect remaining history

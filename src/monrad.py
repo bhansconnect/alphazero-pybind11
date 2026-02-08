@@ -1,6 +1,6 @@
 import alphazero
 import neural_net
-from game_runner import GameRunner, GRArgs, RandPlayer, PlayoutPlayer, base_params, elo_prob
+from game_runner import GameRunner, GRArgs, RandPlayer, PlayoutPlayer, base_params, elo_prob, set_eval_types
 import glob
 import os
 import math
@@ -55,6 +55,7 @@ def pit_agents(Game, players, mcts_depths, bs, name, tree_reuse=True):
         params.tree_reuse = tree_reuse
         params.games_to_play = n
         params.mcts_depth = ordered_depths
+        set_eval_types(params, ordered_players)
         pm = alphazero.PlayManager(Game(), params)
 
         grargs = GRArgs(
@@ -160,10 +161,10 @@ if __name__ == "__main__":
                     continue
 
                 if agents[i] == "playout":
-                    p1 = PlayoutPlayer(Game)
+                    p1 = PlayoutPlayer()
                     d1 = mcts_visits
                 elif agents[i] in rand_agents:
-                    p1 = RandPlayer(Game, bs)
+                    p1 = RandPlayer()
                     d1 = agents[i]
                 else:
                     p1 = neural_net.NNWrapper.load_checkpoint(
@@ -171,10 +172,10 @@ if __name__ == "__main__":
                     )
                     d1 = mcts_visits
                 if agents[j] == "playout":
-                    p2 = PlayoutPlayer(Game)
+                    p2 = PlayoutPlayer()
                     d2 = mcts_visits
                 elif agents[j] in rand_agents:
-                    p2 = RandPlayer(Game, bs)
+                    p2 = RandPlayer()
                     d2 = agents[j]
                 else:
                     p2 = neural_net.NNWrapper.load_checkpoint(

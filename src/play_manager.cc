@@ -213,22 +213,36 @@ void PlayManager::play() {
                     (dist(re) < params_.playout_cap_percent);
     }
     // Find the next leaf to process and put it in the inference queue.
-    auto& mcts = game.mcts[game.gs->current_player()];
+    const auto cp = game.gs->current_player();
+    auto& mcts = game.mcts[cp];
     auto leaf = mcts.find_leaf(*game.gs);
+
+    // Non-NN players: evaluate inline before minimize_storage so that
+    // playout rollouts retain full game state (repetition history, etc.).
+    if (!params_.eval_type.empty() && params_.eval_type[cp] != EvalType::NN) {
+      if (params_.eval_type[cp] == EvalType::PLAYOUT) {
+        std::tie(game.v, game.pi) = playout_eval(*leaf);
+      } else {
+        std::tie(game.v, game.pi) = dumb_eval(*leaf);
+      }
+      awaiting_mcts_.push(i.value());
+      continue;
+    }
+
     game.canonical = leaf->canonicalized();
     // Minimize the storage of the leaf node. It is only used as a hash key and
     // network input.
     leaf->minimize_storage();
     game.leaf = std::move(leaf);
     if (params_.max_cache_size > 0) {
-      auto opt = caches_[game.gs->current_player()].find(game.leaf);
+      auto opt = caches_[cp].find(game.leaf);
       if (opt.has_value()) {
         std::tie(game.v, game.pi) = opt.value();
         awaiting_mcts_.push(i.value());
         continue;
       }
     }
-    awaiting_inference_[game.gs->current_player()]->push(i.value());
+    awaiting_inference_[cp]->push(i.value());
   }
 }
 
@@ -252,49 +266,6 @@ void PlayManager::update_inferences(const uint8_t player,
     caches_[player].insert_many(keys, values);
   }
   awaiting_mcts_.push_many(game_indices);
-}
-
-void PlayManager::dumb_inference(const uint8_t player) {
-  AZ_SET_THREAD_NAME("dumb_inference");
-  AZ_ZONE_SCOPED;
-  // int count = 0;
-  while (games_completed_ < params_.games_to_play) {
-    auto i = awaiting_inference_[player]->pop(MAX_WAIT);
-    if (!i.has_value()) {
-      continue;
-    }
-    // A basic model takes about 50ms per 1024 results.
-    // So this simulates waiting on the GPU.
-    // ++count;
-    // if (count % 1024 == 0) {
-    //   // Busy wait so that perf sees it clearly.
-    //   auto start = std::chrono::system_clock::now();
-    //   while (std::chrono::system_clock::now() - start <
-    //          std::chrono::milliseconds(50)) {
-    //   }
-    // }
-    auto& game = games_[i.value()];
-    std::tie(game.v, game.pi) = dumb_eval(*game.gs);
-    // if (params_.max_cache_size > 0) {
-    //   caches_[player]->insert(
-    //       game.leaf, {Vector<float>{game.v}, Vector<float>{game.pi}});
-    // }
-    awaiting_mcts_.push(i.value());
-  }
-}
-
-void PlayManager::playout_inference(const uint8_t player) {
-  AZ_SET_THREAD_NAME("playout_inference");
-  AZ_ZONE_SCOPED;
-  while (games_completed_ < params_.games_to_play) {
-    auto i = awaiting_inference_[player]->pop(MAX_WAIT);
-    if (!i.has_value()) {
-      continue;
-    }
-    auto& game = games_[i.value()];
-    std::tie(game.v, game.pi) = playout_eval(*game.leaf);
-    awaiting_mcts_.push(i.value());
-  }
 }
 
 }  // namespace alphazero

@@ -174,10 +174,10 @@ def main():
 
                 # Load players
                 if agents[i] == "playout":
-                    p1 = PlayoutPlayer(Game)
+                    p1 = PlayoutPlayer()
                     d1 = mcts_visits
                 elif agents[i] in rand_agents:
-                    p1 = RandPlayer(Game, BATCH_SIZE)
+                    p1 = RandPlayer()
                     d1 = agents[i]
                 else:
                     p1 = neural_net.NNWrapper.load_checkpoint(
@@ -186,10 +186,10 @@ def main():
                     d1 = mcts_visits
 
                 if agents[j] == "playout":
-                    p2 = PlayoutPlayer(Game)
+                    p2 = PlayoutPlayer()
                     d2 = mcts_visits
                 elif agents[j] in rand_agents:
-                    p2 = RandPlayer(Game, BATCH_SIZE)
+                    p2 = RandPlayer()
                     d2 = agents[j]
                 else:
                     p2 = neural_net.NNWrapper.load_checkpoint(

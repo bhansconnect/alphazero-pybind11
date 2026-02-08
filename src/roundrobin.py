@@ -1,5 +1,5 @@
 import neural_net
-from game_runner import GameRunner, GRArgs, RandPlayer, PlayoutPlayer, base_params, USE_CUDA
+from game_runner import GameRunner, GRArgs, RandPlayer, PlayoutPlayer, base_params, set_eval_types
 import glob
 import os
 import numpy as np
@@ -29,6 +29,7 @@ def pit_agents(Game, players, mcts_depths, bs, name):
         params.max_cache_size = 0
         params.games_to_play = n
         params.mcts_depth = ordered_depths
+        set_eval_types(params, ordered_players)
         pm = alphazero.PlayManager(Game(), params)
 
         grargs = GRArgs(
@@ -37,7 +38,6 @@ def pit_agents(Game, players, mcts_depths, bs, name):
             max_batch_size=bs,
             concurrent_batches=cb,
             result_workers=2,
-            cuda=USE_CUDA,
         )
         gr = GameRunner(ordered_players, pm, grargs)
         gr.run()
@@ -84,10 +84,10 @@ if __name__ == "__main__":
             p1 = None
             d1 = 0
             if agents[i] == "playout":
-                p1 = PlayoutPlayer(Game)
+                p1 = PlayoutPlayer()
                 d1 = mcts_visits
             elif agents[i] in rand_agents:
-                p1 = RandPlayer(Game, bs)
+                p1 = RandPlayer()
                 d1 = agents[i]
             else:
                 p1 = neural_net.NNWrapper.load_checkpoint(Game, model_path, agents[i])
@@ -96,10 +96,10 @@ if __name__ == "__main__":
                 p2 = None
                 d2 = 0
                 if agents[j] == "playout":
-                    p2 = PlayoutPlayer(Game)
+                    p2 = PlayoutPlayer()
                     d2 = mcts_visits
                 elif agents[j] in rand_agents:
-                    p2 = RandPlayer(Game, bs)
+                    p2 = RandPlayer()
                     d2 = agents[j]
                 else:
                     p2 = neural_net.NNWrapper.load_checkpoint(

@@ -199,6 +199,11 @@ PYBIND11_MODULE(alphazero, m) {
           },
           py::return_value_policy::reference_internal);
 
+  py::enum_<EvalType>(m, "EvalType")
+      .value("NN", EvalType::NN)
+      .value("RANDOM", EvalType::RANDOM)
+      .value("PLAYOUT", EvalType::PLAYOUT);
+
   py::class_<PlayParams>(m, "PlayParams")
       .def(py::init<>())
       .def_readwrite("games_to_play", &PlayParams::games_to_play)
@@ -223,7 +228,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("fpu_reduction", &PlayParams::fpu_reduction)
       .def_readwrite("resign_percent", &PlayParams::resign_percent)
       .def_readwrite("resign_playthrough_percent",
-                     &PlayParams::resign_playthrough_percent);
+                     &PlayParams::resign_playthrough_percent)
+      .def_readwrite("eval_type", &PlayParams::eval_type);
 
   py::class_<PlayManager>(m, "PlayManager")
       .def(py::init([](const GameState* gs, PlayParams params) {
@@ -291,10 +297,6 @@ PYBIND11_MODULE(alphazero, m) {
             return current;
           },
           py::call_guard<py::gil_scoped_release>())
-      .def("playout_inference", &PlayManager::playout_inference,
-           py::call_guard<py::gil_scoped_release>())
-      .def("dumb_inference", &PlayManager::dumb_inference,
-           py::call_guard<py::gil_scoped_release>())
       .def(
           "build_batch",
           [](PlayManager& pm, uint32_t player, py::array_t<float>& batch,

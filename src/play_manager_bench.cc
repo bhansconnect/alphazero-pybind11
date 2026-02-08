@@ -13,15 +13,12 @@ void PlayGameSingleThreaded() {
   params.games_to_play = 64;
   params.concurrent_games = 64;
   params.mcts_depth = {250, 250};
+  params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
   params.history_enabled = true;
   params.playout_cap_randomization = true;
   auto pm = PlayManager{std::make_unique<tawlbwrdd_gs::TawlbwrddGS>(), params};
   auto play = std::async(std::launch::async, [&] { pm.play(); });
-  auto infer_p0 = std::async(std::launch::async, [&] { pm.dumb_inference(0); });
-  auto infer_p1 = std::async(std::launch::async, [&] { pm.dumb_inference(1); });
   play.wait();
-  infer_p0.wait();
-  infer_p1.wait();
 }
 
 void PlayGameMultiThreaded() {
@@ -32,6 +29,7 @@ void PlayGameMultiThreaded() {
   params.games_to_play = 64;
   params.concurrent_games = 64;
   params.mcts_depth = {250, 250};
+  params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
   params.history_enabled = true;
   params.playout_cap_randomization = true;
   auto pm = PlayManager{std::make_unique<tawlbwrdd_gs::TawlbwrddGS>(), params};
@@ -39,13 +37,9 @@ void PlayGameMultiThreaded() {
   for (auto& pw : play_workers) {
     pw = std::async(std::launch::async, [&] { pm.play(); });
   }
-  auto infer_p0 = std::async(std::launch::async, [&] { pm.dumb_inference(0); });
-  auto infer_p1 = std::async(std::launch::async, [&] { pm.dumb_inference(1); });
   for (auto& pw : play_workers) {
     pw.wait();
   }
-  infer_p0.wait();
-  infer_p1.wait();
 }
 
 static void BM_PlayGameSingleThreaded(benchmark::State& state) {

@@ -1,10 +1,14 @@
 #include "game_state.h"
 
+#include <algorithm>
 #include <random>
+#include <thread>
 
 namespace alphazero {
 
-std::tuple<Vector<float>, Vector<float>> playout_eval(const GameState& gs) {
+// Core playout logic with an explicit RNG (no thread_local).
+static std::tuple<Vector<float>, Vector<float>> playout_eval_impl(
+    const GameState& gs, std::default_random_engine& re) {
   // Policy: uniform over legal moves of the original leaf state.
   auto valids = gs.valid_moves();
   auto policy = Vector<float>{gs.num_moves()};
@@ -15,7 +19,6 @@ std::tuple<Vector<float>, Vector<float>> playout_eval(const GameState& gs) {
   }
 
   // Value: play random moves until terminal.
-  thread_local std::default_random_engine re{std::random_device{}()};
   auto sim = gs.copy();
   while (!sim->scores().has_value()) {
     auto sim_valids = sim->valid_moves();
@@ -42,6 +45,44 @@ std::tuple<Vector<float>, Vector<float>> playout_eval(const GameState& gs) {
   auto values = Vector<float>{gs.num_players() + 1};
   values.setConstant(1.0 / (gs.num_players() + 1));
   return {values, policy};
+}
+
+std::tuple<Vector<float>, Vector<float>> playout_eval(const GameState& gs) {
+  thread_local std::default_random_engine re{std::random_device{}()};
+  return playout_eval_impl(gs, re);
+}
+
+std::tuple<std::vector<Vector<float>>, std::vector<Vector<float>>>
+playout_eval_batch(const std::vector<const GameState*>& states) {
+  const auto n = states.size();
+  std::vector<Vector<float>> values(n);
+  std::vector<Vector<float>> policies(n);
+
+  const auto hw = std::thread::hardware_concurrency();
+  const auto num_threads =
+      std::min(n, static_cast<size_t>(hw > 0 ? hw : 4));
+
+  std::vector<std::thread> threads;
+  threads.reserve(num_threads);
+  for (size_t t = 0; t < num_threads; ++t) {
+    threads.emplace_back([&, t]() {
+      // Local RNG per thread — avoids thread_local TLS churn in dylibs.
+      std::default_random_engine re{std::random_device{}()};
+
+      const size_t chunk = (n + num_threads - 1) / num_threads;
+      const size_t start = t * chunk;
+      const size_t end = std::min(start + chunk, n);
+      for (size_t i = start; i < end; ++i) {
+        std::tie(values[i], policies[i]) =
+            playout_eval_impl(*states[i], re);
+      }
+    });
+  }
+  for (auto& th : threads) {
+    th.join();
+  }
+
+  return {std::move(values), std::move(policies)};
 }
 
 }  // namespace alphazero

@@ -1,8 +1,8 @@
 #include "game_state.h"
 
-#include <algorithm>
 #include <random>
 #include <thread>
+#include <vector>
 
 namespace alphazero {
 
@@ -22,7 +22,6 @@ static std::tuple<Vector<float>, Vector<float>> playout_eval_impl(
   auto sim = gs.copy();
   while (!sim->scores().has_value()) {
     auto sim_valids = sim->valid_moves();
-    // Collect valid move indices.
     std::vector<uint32_t> valid_indices;
     for (uint32_t i = 0; i < sim->num_moves(); ++i) {
       if (sim_valids[i] != 0) {
@@ -41,7 +40,6 @@ static std::tuple<Vector<float>, Vector<float>> playout_eval_impl(
   if (scores.has_value()) {
     return {scores.value(), policy};
   }
-  // Fallback: uniform value (shouldn't normally happen).
   auto values = Vector<float>{gs.num_players() + 1};
   values.setConstant(1.0 / (gs.num_players() + 1));
   return {values, policy};
@@ -51,6 +49,14 @@ std::tuple<Vector<float>, Vector<float>> playout_eval(const GameState& gs) {
   thread_local std::default_random_engine re{std::random_device{}()};
   return playout_eval_impl(gs, re);
 }
+
+// ---------------------------------------------------------------------------
+// Batch playout evaluation with parallelism.
+//
+// Uses chunked std::thread for parallel rollouts. On macOS, the process must
+// be started with MallocNanoZone=0 to avoid heap corruption in the nano zone
+// allocator when C++ threads run inside a Python process.
+// ---------------------------------------------------------------------------
 
 std::tuple<std::vector<Vector<float>>, std::vector<Vector<float>>>
 playout_eval_batch(const std::vector<const GameState*>& states) {
@@ -66,7 +72,6 @@ playout_eval_batch(const std::vector<const GameState*>& states) {
   threads.reserve(num_threads);
   for (size_t t = 0; t < num_threads; ++t) {
     threads.emplace_back([&, t]() {
-      // Local RNG per thread — avoids thread_local TLS churn in dylibs.
       std::default_random_engine re{std::random_device{}()};
 
       const size_t chunk = (n + num_threads - 1) / num_threads;

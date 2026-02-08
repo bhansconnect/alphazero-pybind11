@@ -9,6 +9,12 @@ Determines the optimal MCTS visit count for self-play and evaluation by:
 
 import os
 import sys
+
+# macOS nano zone allocator corrupts heap when C++ threads run inside Python.
+# Must be set before process starts (before first malloc), so re-exec if needed.
+if sys.platform == "darwin" and os.environ.get("MallocNanoZone") != "0":
+    os.environ["MallocNanoZone"] = "0"
+    os.execve(sys.executable, [sys.executable] + sys.argv, os.environ)
 import math
 import gc
 import numpy as np

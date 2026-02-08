@@ -541,9 +541,8 @@ def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None, eval_type
             v = np.array(v)
             pi = np.array(pi)
         elif agent is None:
-            # Random policy
-            v = np.zeros(gs.NUM_PLAYERS() + 1)
-            v[-1] = 1.0  # Uniform draw assumption
+            # Random policy: uniform value and policy, MCTS finds terminals
+            v = np.full(gs.NUM_PLAYERS() + 1, 1.0 / (gs.NUM_PLAYERS() + 1))
             pi = np.ones(gs.NUM_MOVES()) / gs.NUM_MOVES()
         else:
             canonical = torch.from_numpy(np.array(leaf.canonicalized()))

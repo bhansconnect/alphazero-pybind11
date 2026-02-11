@@ -1044,11 +1044,14 @@ if __name__ == "__main__":
             )
     else:
         tmp_wr = np.genfromtxt(os.path.join("data", "win_rate.csv"), delimiter=",")
-        wr = np.full_like(tmp_wr, np.nan)
-        wr[: start + 1][: start + 1] = tmp_wr[: start + 1][: start + 1]
+        wr = np.empty((total_agents, total_agents))
+        wr[:] = np.nan
+        old_size = min(tmp_wr.shape[0], total_agents)
+        wr[:old_size, :old_size] = tmp_wr[:old_size, :old_size]
         tmp_elo = np.genfromtxt(os.path.join("data", "elo.csv"), delimiter=",")
-        elo = np.zeros_like(tmp_elo)
-        elo[: start + 1] = tmp_elo[: start + 1]
+        elo = np.zeros(total_agents)
+        old_size = min(tmp_elo.shape[0], total_agents)
+        elo[:old_size] = tmp_elo[:old_size]
         current_best = np.argmax(elo[: start + 1])
         total_train_steps = int(
             np.genfromtxt(os.path.join("data", "total_train_steps.txt"))

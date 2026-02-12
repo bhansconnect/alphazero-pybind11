@@ -23,6 +23,20 @@ NNArgs = namedtuple(
 )
 
 
+def nnargs_from_config(config):
+    """Construct NNArgs from a TrainConfig instance."""
+    return NNArgs(
+        num_channels=config.channels,
+        depth=config.depth,
+        kernel_size=config.kernel_size,
+        lr_milestone=config.lr_milestone,
+        dense_net=config.dense_net,
+        lr=config.lr,
+        cv=config.cv,
+        star_gambit_spatial=config.star_gambit_spatial,
+    )
+
+
 def get_device():
     """Get the best available device for computation (CUDA > MPS > CPU)"""
     if torch.cuda.is_available():

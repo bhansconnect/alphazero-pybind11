@@ -15,20 +15,10 @@ import gc
 import zstandard as zstd
 import alphazero
 from neural_net import get_device
+from config import load_config
 from tracy_utils import tracy_zone, tracy_thread, TracyZone, tracy_frame
 
-HIST_SIZE = 30_000
-HIST_LOCATION = os.path.join("data", "history")
-TMP_HIST_LOCATION = os.path.join("data", "tmp_history")
-CHECKPOINT_LOCATION = os.path.join("data", "checkpoint")
-RESERVOIR_LOCATION = os.path.join("data", "reservoir")
-RESERVOIR_RECENCY_DECAY = 0.99
 ZSTD_LEVEL = 3
-
-# Reservoir bootstrap: number of passes over the full dataset (reservoir + window)
-# and then over the window-only subset for fine-tuning.
-BOOTSTRAP_FULL_PASSES = 5
-BOOTSTRAP_WINDOW_PASSES = 2
 
 
 def save_compressed(tensor, path):
@@ -46,6 +36,21 @@ def load_compressed(path):
     return torch.load(io.BytesIO(data), map_location="cpu", weights_only=True).float()
 
 
+def _load_hist_tensor(path):
+    """Load a history tensor from .ptz (compressed) or .pt (legacy) file."""
+    if path.endswith(".ptz"):
+        return load_compressed(path)
+    return torch.load(path, map_location="cpu", mmap=True)
+
+
+def _glob_hist_files(location, pattern):
+    """Glob for both .ptz and .pt files, preferring .ptz."""
+    files = sorted(glob.glob(os.path.join(location, pattern + ".ptz")))
+    if not files:
+        files = sorted(glob.glob(os.path.join(location, pattern + ".pt")))
+    return files
+
+
 GRArgs = namedtuple(
     "GRArgs",
     [
@@ -61,109 +66,8 @@ GRArgs = namedtuple(
         "result_workers",
         "mcts_workers",
     ],
-    # NOTE: data_folder default is None to avoid early-binding issues when module
-    # variables are changed after import. Resolved at runtime in hist_saver().
-    defaults=(0, HIST_SIZE, None, 0, 0, 1, 1, os.cpu_count() - 1),
+    defaults=(0, 30_000, None, 0, 0, 1, 1, os.cpu_count() - 1),
 )
-
-# In some games, setting this to max out your memory can have huge performance gains.
-# That said, some games get a lot of cache misses and the cache contention makes it slower.
-# Setting to 0 disables the cache.
-# Probably a number between 100_000 and 1_000_000 for most games.
-MAX_CACHE_SIZE = 200_000
-
-# How many shards to split the cache into.
-# Due to multithreading, the cache can have high contention.
-# The more threads generally means you want more shards.
-CACHE_SHARDS = os.cpu_count()
-
-# To decide on the following numbers, I would advise graphing the equation: scalar*(1+beta*(((iter+1)/scalar)**alpha-1)/alpha)
-WINDOW_SIZE_ALPHA = 0.5  # This decides how fast the curve flattens to a max
-WINDOW_SIZE_BETA = 0.7  # This decides the rough overall slope.
-WINDOW_SIZE_SCALAR = (
-    6  # This ends up being approximately first time history doesn't grow
-)
-
-RESULT_WORKERS = 2
-DATA_WORKERS = os.cpu_count() - 1
-
-# The traditional alphazero parameters.
-EXPECTED_OPENING_LENGTH = 10
-CPUCT = 1.25
-SELF_PLAY_TEMP = 1.0
-EVAL_TEMP = 0.5
-TEMP_DECAY_HALF_LIFE = EXPECTED_OPENING_LENGTH
-FINAL_TEMP = 0.2
-FPU_REDUCTION = 0.25
-
-# Concurrent games played is batch size * num player * concurrent batch mult
-# Total games per iteration is batch size * num players * concurrent batch mult * chunks
-# For training of complex games, this probably should be closer to 1024.
-SELF_PLAY_BATCH_SIZE = 256
-SELF_PLAY_CONCURRENT_BATCH_MULT = 2
-SELF_PLAY_CHUNKS = 4
-
-# This generally should be as big as can fit on your gpu.
-TRAIN_BATCH_SIZE = 1024
-# Note: If the game has a high number of symetries generated, this number should likely get lowered.
-TRAIN_SAMPLE_RATE = 1
-
-# Panel based gating has the network play against multiple previous best agents before being promoted.
-# This is muhch more imortant with games where the draw rate is high betwen new networks and the best.
-# It is also important in games that lead to rock-paper-scissor type network oscillations.
-GATING_PANEL_SIZE = 1
-# Ensure it is at least this good against the entire panel of networks.
-GATING_PANEL_WIN_RATE = 0.52
-# Ensure it is at least this good against the best network.
-# Generally it is ok to be slightly worse than the best if you crush the panel. Especially in high draw games.
-GATING_BEST_WIN_RATE = 0.52
-
-# Batch sizes for evaluation games. Total games per position = batch_size * NUM_PLAYERS.
-PAST_COMPARE_BATCH_SIZE = 64
-GATE_COMPARE_BATCH_SIZE = 64
-
-# A win/loss/draw will happen if it has a lower percent than this to not happen.
-# EX: 0.02 means that if the chance to draw is greater than 98% it will automatically happen.
-# This must be zero if there are more than 2 players.
-RESIGN_PERCENT = 0.02
-# The percent of resignations that will be played to the end anyway.
-RESIGN_PLAYTHROUGH_PERCENT = 0.20
-
-# Use this to select what game to train.
-Game = alphazero.Connect4GS
-game_name = "connect4"
-
-# When you change game, define initialization here.
-# For example some games could change board size or exact ruleset here.
-
-
-def new_game():
-    return Game()
-
-
-# These control the network generated.
-# They also enable restarting at a specific interation.
-bootstrap_iters = 0
-start = 0
-iters = 200
-depth = 4
-channels = 12
-kernel_size = 5
-dense_net = True
-star_gambit_spatial = False  # Star Gambit-specific spatial policy head
-network_name = "densenet" if dense_net else "resnet"
-lr_milestone = 150
-
-# MCTS search depth must increase with complex games.
-nn_selfplay_mcts_depth = 100
-nn_selfplay_fast_mcts_depth = 25
-nn_compare_mcts_depth = nn_selfplay_mcts_depth // 2
-
-# This is  just for validation of learning.
-compare_past = 20
-
-
-experiment_name = f"{network_name}-{depth}d-{channels}c-{kernel_size}k-{nn_selfplay_mcts_depth}sims"
 
 
 class GameRunner:
@@ -216,8 +120,6 @@ class GameRunner:
 
     @tracy_zone
     def run(self):
-        # Identify which players need NN batch pipeline (non-NN players
-        # are handled inline in C++ play() threads via eval_type).
         nn_players = set()
         for i in range(self.num_players):
             if not isinstance(self.players[i], (PlayoutPlayer, RandPlayer)):
@@ -322,7 +224,6 @@ class GameRunner:
                 batch_index % self.num_players, batch, self.batch_workers
             )
             if len(game_indices) == 0:
-                # Race condition: no games ready, return batch_index and retry
                 self.ready_queues[player].put(batch_index)
                 continue
             out = batch[: len(game_indices)]
@@ -353,8 +254,6 @@ class GameRunner:
             v = self.v[batch_index].cpu().numpy()
             pi = self.pi[batch_index].cpu().numpy()
             if v.size == 0 or pi.size == 0:
-                # As an edge case, it seems that when queues are closed, empty data gets sent somehow.
-                # Just ignore the data.
                 continue
             self.pm.update_inferences(
                 batch_index % self.num_players, game_indices, v, pi
@@ -366,8 +265,7 @@ class GameRunner:
     def hist_saver(self):
         tracy_thread("hist_saver")
         batch = 0
-        # Resolve data_folder at runtime to handle late-binding of module variables
-        data_folder = self.args.data_folder if self.args.data_folder is not None else TMP_HIST_LOCATION
+        data_folder = self.args.data_folder
         os.makedirs(data_folder, exist_ok=True)
         while self.pm.remaining_games() > 0 or self.pm.hist_count() > 0:
             size = self.pm.build_history_batch(
@@ -375,8 +273,6 @@ class GameRunner:
             )
             if size == 0:
                 continue
-
-            # Direct save without creating intermediate tensors
             torch.save(
                 self.hist_canonical[:size],
                 os.path.join(
@@ -425,21 +321,23 @@ def set_eval_types(params, players):
     params.eval_type = eval_types
 
 
-def base_params(Game, start_temp, bs, cb):
+def base_params(config, start_temp, bs, cb):
+    """Create PlayParams from config."""
     params = alphazero.PlayParams()
-    params.cache_shards = CACHE_SHARDS
-    params.max_cache_size = MAX_CACHE_SIZE
-    params.cpuct = CPUCT
+    params.cache_shards = config.resolved_cache_shards
+    params.max_cache_size = config.max_cache_size
+    params.cpuct = config.cpuct
     params.start_temp = start_temp
-    params.temp_decay_half_life = TEMP_DECAY_HALF_LIFE
-    params.final_temp = FINAL_TEMP
+    params.temp_decay_half_life = config.temp_decay_half_life
+    params.final_temp = config.final_temp
     params.max_batch_size = bs
     params.concurrent_games = bs * cb
-    params.fpu_reduction = FPU_REDUCTION
+    params.fpu_reduction = config.fpu_reduction
     return params
 
 
 _ELO_ALPHA = math.log(10) / 400.0
+
 
 def elo_prob(r1, r2):
     x = _ELO_ALPHA * (r2 - r1)
@@ -453,8 +351,6 @@ def elo_prob(r1, r2):
 
 @tracy_zone
 def get_elo(past_elo, win_rates, new_agent):
-    # Everything but the newest agent is anchored for consitency.
-    # Start with the assumption it is equal to the agent before it.
     if new_agent != 0:
         past_elo[new_agent] = past_elo[new_agent - 1]
     iters = 5000
@@ -470,673 +366,685 @@ def get_elo(past_elo, win_rates, new_agent):
     return past_elo
 
 
-if __name__ == "__main__":
+def calc_hist_size(config, i):
+    return int(
+        config.window_size_scalar
+        * (
+            1
+            + config.window_size_beta
+            * (((i + 1) / config.window_size_scalar) ** config.window_size_alpha - 1)
+            / config.window_size_alpha
+        )
+    )
+
+
+def maybe_save(
+    config,
+    c,
+    v,
+    p,
+    size,
+    batch,
+    iteration,
+    location,
+    name="",
+    force=False,
+    use_compression=False,
+):
+    if size == config.hist_size or (force and size > 0):
+        save_fn = save_compressed if use_compression else torch.save
+        ext = ".ptz" if use_compression else ".pt"
+        save_fn(
+            c[:size],
+            os.path.join(
+                location, f"{iteration:04d}-{batch:04d}{name}-canonical-{size}{ext}"
+            ),
+        )
+        save_fn(
+            v[:size],
+            os.path.join(
+                location, f"{iteration:04d}-{batch:04d}{name}-v-{size}{ext}"
+            ),
+        )
+        save_fn(
+            p[:size],
+            os.path.join(
+                location, f"{iteration:04d}-{batch:04d}{name}-pi-{size}{ext}"
+            ),
+        )
+        return True
+    return False
+
+
+@tracy_zone
+def exploit_symmetries(config, paths, iteration):
+    Game = config.Game
+    if Game.NUM_SYMMETRIES() <= 1:
+        return
+
+    tmp_hist = paths["tmp_history"]
+    c_names = sorted(
+        glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-canonical-*.pt"))
+    )
+    v_names = sorted(
+        glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-v-*.pt"))
+    )
+    p_names = sorted(
+        glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-pi-*.pt"))
+    )
+
+    datasets = []
+    for j in range(len(c_names)):
+        c_tensor = torch.load(c_names[j], map_location="cpu", mmap=True)
+        v_tensor = torch.load(v_names[j], map_location="cpu", mmap=True)
+        p_tensor = torch.load(p_names[j], map_location="cpu", mmap=True)
+        datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
+        del c_tensor, v_tensor, p_tensor
+
+    dataset = ConcatDataset(datasets)
+    sample_count = len(dataset)
+
+    i_out = 0
+    batch_out = 0
+    cs = Game.CANONICAL_SHAPE()
+    c_out = torch.zeros(config.hist_size, cs[0], cs[1], cs[2])
+    v_out = torch.zeros(config.hist_size, Game.NUM_PLAYERS() + 1)
+    p_out = torch.zeros(config.hist_size, Game.NUM_MOVES())
+
+    for i in tqdm.trange(
+        sample_count, desc="Creating Symmetric Samples", leave=False
+    ):
+        c, v, pi = dataset[i]
+        ph = alphazero.PlayHistory(c, v, pi)
+        syms = Game().symmetries(ph)
+        for sym in syms:
+            c_out[i_out] = torch.from_numpy(np.array(sym.canonical()))
+            v_out[i_out] = torch.from_numpy(np.array(sym.v()))
+            p_out[i_out] = torch.from_numpy(np.array(sym.pi()))
+            i_out += 1
+            if maybe_save(
+                config,
+                c_out,
+                v_out,
+                p_out,
+                i_out,
+                batch_out,
+                iteration,
+                location=tmp_hist,
+                name="syms",
+            ):
+                i_out = 0
+                batch_out += 1
+        del c, v, pi, ph, syms
+    maybe_save(
+        config,
+        c_out,
+        v_out,
+        p_out,
+        i_out,
+        batch_out,
+        iteration,
+        location=tmp_hist,
+        name="syms",
+        force=True,
+    )
+
+    del datasets, dataset
+    del c_out, v_out, p_out
+
+    gc.collect()
+    for fn in c_names + v_names + p_names:
+        os.remove(fn)
+
+
+@tracy_zone
+def resample_by_surprise(config, paths, experiment_name, iteration):
     import neural_net
 
-    @tracy_zone
-    def create_init_net(Game, nnargs):
-        nn = neural_net.NNWrapper(Game, nnargs)
-        nn.save_checkpoint(CHECKPOINT_LOCATION, f"0000-{experiment_name}.pt")
+    Game = config.Game
+    tmp_hist = paths["tmp_history"]
+    hist_location = paths["history"]
 
-    def calc_hist_size(i):
-        return int(
-            WINDOW_SIZE_SCALAR
-            * (
-                1
-                + WINDOW_SIZE_BETA
-                * (((i + 1) / WINDOW_SIZE_SCALAR) ** WINDOW_SIZE_ALPHA - 1)
-                / WINDOW_SIZE_ALPHA
-            )
-        )
+    c_names = sorted(
+        glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-canonical-*.pt"))
+    )
+    v_names = sorted(
+        glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-v-*.pt"))
+    )
+    p_names = sorted(
+        glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-pi-*.pt"))
+    )
 
-    def maybe_save(
-        Game,
-        c,
-        v,
-        p,
-        size,
-        batch,
-        iteration,
-        location=None,
-        name="",
-        force=False,
-    ):
-        # Resolve location at runtime to handle late-binding of module variables
-        location = location if location is not None else HIST_LOCATION
-        if size == HIST_SIZE or (force and size > 0):
-            use_compression = (location == HIST_LOCATION)
-            save_fn = save_compressed if use_compression else torch.save
-            ext = ".ptz" if use_compression else ".pt"
-            save_fn(
-                c[:size],
-                os.path.join(
-                    location, f"{iteration:04d}-{batch:04d}{name}-canonical-{size}{ext}"
-                ),
-            )
-            save_fn(
-                v[:size],
-                os.path.join(
-                    location, f"{iteration:04d}-{batch:04d}{name}-v-{size}{ext}"
-                ),
-            )
-            save_fn(
-                p[:size],
-                os.path.join(
-                    location, f"{iteration:04d}-{batch:04d}{name}-pi-{size}{ext}"
-                ),
-            )
-            return True
-        return False
+    datasets = []
+    for j in range(len(c_names)):
+        c_tensor = torch.load(c_names[j], map_location="cpu", mmap=True)
+        v_tensor = torch.load(v_names[j], map_location="cpu", mmap=True)
+        p_tensor = torch.load(p_names[j], map_location="cpu", mmap=True)
+        datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
+        del c_tensor, v_tensor, p_tensor
 
-    @tracy_zone
-    def exploit_symmetries(Game, iteration):
-        # In games with symmetries, create symmetric samples of the data.
-        if Game.NUM_SYMMETRIES() <= 1:
-            return
+    dataset = ConcatDataset(datasets)
+    sample_count = len(dataset)
+    dataloader = DataLoader(dataset, batch_size=config.train_batch_size, shuffle=False)
 
-        c_names = sorted(
-            glob.glob(
-                os.path.join(
-                    f"{TMP_HIST_LOCATION}", f"{iteration:04d}-*-canonical-*.pt"
-                )
-            )
-        )
-        v_names = sorted(
-            glob.glob(os.path.join(f"{TMP_HIST_LOCATION}", f"{iteration:04d}-*-v-*.pt"))
-        )
-        p_names = sorted(
-            glob.glob(
-                os.path.join(f"{TMP_HIST_LOCATION}", f"{iteration:04d}-*-pi-*.pt")
-            )
-        )
+    nn = neural_net.NNWrapper.load_checkpoint(
+        Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
+    )
+    loss = nn.sample_loss(dataloader, sample_count)
+    total_loss = np.sum(loss)
 
-        datasets = []
-        for j in range(len(c_names)):
-            # Load tensors using memory-mapped loading
-            c_tensor = torch.load(c_names[j], map_location="cpu", mmap=True)
-            v_tensor = torch.load(v_names[j], map_location="cpu", mmap=True)
-            p_tensor = torch.load(p_names[j], map_location="cpu", mmap=True)
-            datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-            del c_tensor, v_tensor, p_tensor
+    i_out = 0
+    batch_out = 0
+    cs = Game.CANONICAL_SHAPE()
+    c_out = torch.zeros(config.hist_size, cs[0], cs[1], cs[2])
+    v_out = torch.zeros(config.hist_size, Game.NUM_PLAYERS() + 1)
+    p_out = torch.zeros(config.hist_size, Game.NUM_MOVES())
+    os.makedirs(hist_location, exist_ok=True)
 
-        dataset = ConcatDataset(datasets)
-        sample_count = len(dataset)
-        dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE, shuffle=False)
+    # Clear old history for iteration before saving new history.
+    gc.collect()
+    for fn in glob.glob(os.path.join(hist_location, f"{iteration:04d}-*.pt*")):
+        os.remove(fn)
 
-        i_out = 0
-        batch_out = 0
-        cs = Game.CANONICAL_SHAPE()
-        c_out = torch.zeros(HIST_SIZE, cs[0], cs[1], cs[2])
-        v_out = torch.zeros(HIST_SIZE, Game.NUM_PLAYERS() + 1)
-        p_out = torch.zeros(HIST_SIZE, Game.NUM_MOVES())
-
-        for i in tqdm.trange(
-            sample_count, desc="Creating Symmetric Samples", leave=False
-        ):
+    for i in tqdm.trange(sample_count, desc="Resampling Data", leave=False):
+        sample_weight = 0.5 + (loss[i] / total_loss) * 0.5 * sample_count
+        for _ in range(math.floor(sample_weight)):
             c, v, pi = dataset[i]
-            ph = alphazero.PlayHistory(c, v, pi)
-            syms = new_game().symmetries(ph)
-            for sym in syms:
-                c_out[i_out] = torch.from_numpy(np.array(sym.canonical()))
-                v_out[i_out] = torch.from_numpy(np.array(sym.v()))
-                p_out[i_out] = torch.from_numpy(np.array(sym.pi()))
-                i_out += 1
-                if maybe_save(
-                    Game,
-                    c_out,
-                    v_out,
-                    p_out,
-                    i_out,
-                    batch_out,
-                    iteration,
-                    location=TMP_HIST_LOCATION,
-                    name="syms",
-                ):
-                    i_out = 0
-                    batch_out += 1
-            del c, v, pi, ph, syms
-        maybe_save(
-            Game,
-            c_out,
-            v_out,
-            p_out,
-            i_out,
-            batch_out,
-            iteration,
-            location=TMP_HIST_LOCATION,
-            name="syms",
-            force=True,
-        )
+            c_out[i_out] = c
+            v_out[i_out] = v
+            p_out[i_out] = pi
+            i_out += 1
+            if maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True):
+                i_out = 0
+                batch_out += 1
+            del c, v, pi
+        if random.random() < sample_weight - math.floor(sample_weight):
+            c, v, pi = dataset[i]
+            c_out[i_out] = c
+            v_out[i_out] = v
+            p_out[i_out] = pi
+            i_out += 1
+            if maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True):
+                i_out = 0
+                batch_out += 1
+            del c, v, pi
 
-        del datasets, dataset, dataloader
-        del c_out, v_out, p_out
+    maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True, force=True)
 
-        gc.collect()
-        for fn in c_names + v_names + p_names:
-            os.remove(fn)
+    del datasets, dataset, dataloader, nn
+    del c_out, v_out, p_out
 
-    @tracy_zone
-    def resample_by_surprise(Game, iteration):
-        # Used to resample the latest iteration by how surprising each sample is.
-        # Each sample is given 0.5 weight as a base.
-        # The other half of the weight is distributed based on the sample loss.
-        # The sample is then added to the dataset floor(weight) times.
-        # It is also added an extra time with the probability of weight - floor(weight)
-        c_names = sorted(
-            glob.glob(
-                os.path.join(
-                    f"{TMP_HIST_LOCATION}", f"{iteration:04d}-*-canonical-*.pt"
-                )
-            )
-        )
-        v_names = sorted(
-            glob.glob(os.path.join(f"{TMP_HIST_LOCATION}", f"{iteration:04d}-*-v-*.pt"))
-        )
-        p_names = sorted(
-            glob.glob(
-                os.path.join(f"{TMP_HIST_LOCATION}", f"{iteration:04d}-*-pi-*.pt")
-            )
-        )
+    gc.collect()
+    for fn in glob.glob(os.path.join(tmp_hist, "*")):
+        os.remove(fn)
 
-        datasets = []
-        for j in range(len(c_names)):
-            # Load tensors using memory-mapped loading
-            c_tensor = torch.load(c_names[j], map_location="cpu", mmap=True)
-            v_tensor = torch.load(v_names[j], map_location="cpu", mmap=True)
-            p_tensor = torch.load(p_names[j], map_location="cpu", mmap=True)
-            datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-            del c_tensor, v_tensor, p_tensor
 
-        dataset = ConcatDataset(datasets)
-        sample_count = len(dataset)
-        dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE, shuffle=False)
+@tracy_zone
+def iteration_loss(config, paths, experiment_name, iteration):
+    import neural_net
 
-        nn = neural_net.NNWrapper.load_checkpoint(
-            Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{experiment_name}.pt"
-        )
-        loss = nn.sample_loss(dataloader, sample_count)
-        total_loss = np.sum(loss)
+    Game = config.Game
+    hist_location = paths["history"]
+    datasets = []
+    c = _glob_hist_files(hist_location, f"{iteration:04d}-*-canonical-*")
+    v = _glob_hist_files(hist_location, f"{iteration:04d}-*-v-*")
+    p = _glob_hist_files(hist_location, f"{iteration:04d}-*-pi-*")
+    for j in range(len(c)):
+        c_tensor = _load_hist_tensor(c[j])
+        v_tensor = _load_hist_tensor(v[j])
+        p_tensor = _load_hist_tensor(p[j])
+        datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
+        del c_tensor, v_tensor, p_tensor
 
-        i_out = 0
-        batch_out = 0
-        cs = Game.CANONICAL_SHAPE()
-        c_out = torch.zeros(HIST_SIZE, cs[0], cs[1], cs[2])
-        v_out = torch.zeros(HIST_SIZE, Game.NUM_PLAYERS() + 1)
-        p_out = torch.zeros(HIST_SIZE, Game.NUM_MOVES())
-        os.makedirs(HIST_LOCATION, exist_ok=True)
+    dataset = ConcatDataset(datasets)
+    dataloader = DataLoader(dataset, batch_size=config.train_batch_size, shuffle=True)
 
-        # Clear old history for iteration before saving new history.
-        gc.collect()
-        for fn in glob.glob(os.path.join(f"{HIST_LOCATION}", f"{iteration:04d}-*.pt*")):
-            os.remove(fn)
+    nn = neural_net.NNWrapper.load_checkpoint(
+        Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
+    )
+    v_loss, pi_loss = nn.losses(dataloader)
 
-        for i in tqdm.trange(sample_count, desc="Resampling Data", leave=False):
-            sample_weight = 0.5 + (loss[i] / total_loss) * 0.5 * sample_count
-            for _ in range(math.floor(sample_weight)):
-                c, v, pi = dataset[i]
-                c_out[i_out] = c
-                v_out[i_out] = v
-                p_out[i_out] = pi
-                i_out += 1
-                if maybe_save(Game, c_out, v_out, p_out, i_out, batch_out, iteration):
-                    i_out = 0
-                    batch_out += 1
-                del c, v, pi
-            if random.random() < sample_weight - math.floor(sample_weight):
-                c, v, pi = dataset[i]
-                c_out[i_out] = c
-                v_out[i_out] = v
-                p_out[i_out] = pi
-                i_out += 1
-                if maybe_save(Game, c_out, v_out, p_out, i_out, batch_out, iteration):
-                    i_out = 0
-                    batch_out += 1
-                del c, v, pi
+    del datasets, dataset, dataloader, nn
 
-        maybe_save(Game, c_out, v_out, p_out, i_out, batch_out, iteration, force=True)
+    return v_loss, pi_loss
 
-        del datasets, dataset, dataloader, nn
-        del c_out, v_out, p_out
 
-        gc.collect()
-        for fn in glob.glob(os.path.join(f"{TMP_HIST_LOCATION}", "*")):
-            os.remove(fn)
+@tracy_zone
+def train(config, paths, experiment_name, iteration, hist_size, run, total_train_steps):
+    import neural_net
 
-    def _load_hist_tensor(path):
-        """Load a history tensor from .ptz (compressed) or .pt (legacy) file."""
-        if path.endswith(".ptz"):
-            return load_compressed(path)
-        return torch.load(path, map_location="cpu", mmap=True)
-
-    def _glob_hist_files(location, pattern):
-        """Glob for both .ptz and .pt files, preferring .ptz."""
-        files = sorted(glob.glob(os.path.join(location, pattern + ".ptz")))
-        if not files:
-            files = sorted(glob.glob(os.path.join(location, pattern + ".pt")))
-        return files
-
-    @tracy_zone
-    def iteration_loss(Game, iteration):
-        datasets = []
-        c = _glob_hist_files(HIST_LOCATION, f"{iteration:04d}-*-canonical-*")
-        v = _glob_hist_files(HIST_LOCATION, f"{iteration:04d}-*-v-*")
-        p = _glob_hist_files(HIST_LOCATION, f"{iteration:04d}-*-pi-*")
+    Game = config.Game
+    hist_location = paths["history"]
+    total_size = 0
+    datasets = []
+    for i in range(max(0, iteration - hist_size), iteration + 1):
+        c = _glob_hist_files(hist_location, f"{i:04d}-*-canonical-*")
+        v = _glob_hist_files(hist_location, f"{i:04d}-*-v-*")
+        p = _glob_hist_files(hist_location, f"{i:04d}-*-pi-*")
         for j in range(len(c)):
+            size = int(c[j].split("-")[-1].split(".")[0])
+            total_size += size
             c_tensor = _load_hist_tensor(c[j])
             v_tensor = _load_hist_tensor(v[j])
             p_tensor = _load_hist_tensor(p[j])
             datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
             del c_tensor, v_tensor, p_tensor
 
-        dataset = ConcatDataset(datasets)
-        dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE, shuffle=True)
+    bs = config.train_batch_size
+    dataset = ConcatDataset(datasets)
+    dataloader = DataLoader(dataset, batch_size=bs, shuffle=True)
 
+    average_generation = total_size / min(hist_size, iteration + 1)
+    nn = neural_net.NNWrapper.load_checkpoint(
+        Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
+    )
+    steps_to_train = int(math.ceil(average_generation / bs * config.train_sample_rate))
+    v_loss, pi_loss = nn.train(
+        dataloader, steps_to_train, run, iteration, total_train_steps
+    )
+    total_train_steps += steps_to_train
+    nn.save_checkpoint(paths["checkpoint"], f"{iteration + 1:04d}-{experiment_name}.pt")
+    del datasets, dataset, dataloader, nn
+    return v_loss, pi_loss, total_train_steps
+
+
+def update_reservoir(config, paths, iteration, hist_size):
+    """Merge evicted window data into the reservoir and delete old files."""
+    hist_location = paths["history"]
+    reservoir_location = paths["reservoir"]
+
+    oldest_in_window = max(0, iteration - hist_size)
+    prev_oldest = max(0, (iteration - 1) - calc_hist_size(config, iteration - 1))
+    evicted_iters = list(range(prev_oldest, oldest_in_window))
+    if not evicted_iters:
+        return
+
+    new_c, new_v, new_pi = [], [], []
+    new_iters = []
+    for it in evicted_iters:
+        c_files = _glob_hist_files(hist_location, f"{it:04d}-*-canonical-*")
+        v_files = _glob_hist_files(hist_location, f"{it:04d}-*-v-*")
+        p_files = _glob_hist_files(hist_location, f"{it:04d}-*-pi-*")
+        for j in range(len(c_files)):
+            ct = _load_hist_tensor(c_files[j])
+            new_c.append(ct)
+            new_v.append(_load_hist_tensor(v_files[j]))
+            new_pi.append(_load_hist_tensor(p_files[j]))
+            new_iters.append(torch.full((ct.shape[0],), it, dtype=torch.int16))
+
+    if not new_c:
+        return
+
+    new_c = torch.cat(new_c)
+    new_v = torch.cat(new_v)
+    new_pi = torch.cat(new_pi)
+    new_iters = torch.cat(new_iters)
+
+    os.makedirs(reservoir_location, exist_ok=True)
+    res_c_path = os.path.join(reservoir_location, "canonical.ptz")
+    if os.path.exists(res_c_path):
+        old_c = load_compressed(res_c_path)
+        old_v = load_compressed(os.path.join(reservoir_location, "v.ptz"))
+        old_pi = load_compressed(os.path.join(reservoir_location, "pi.ptz"))
+        old_iters = load_compressed(os.path.join(reservoir_location, "meta.ptz")).to(torch.int16)
+        all_c = torch.cat([old_c, new_c])
+        all_v = torch.cat([old_v, new_v])
+        all_pi = torch.cat([old_pi, new_pi])
+        all_iters = torch.cat([old_iters, new_iters])
+        del old_c, old_v, old_pi, old_iters
+    else:
+        all_c, all_v, all_pi, all_iters = new_c, new_v, new_pi, new_iters
+
+    # Compute capacity = total samples in current window
+    capacity = 0
+    for i in range(max(0, iteration - hist_size), iteration + 1):
+        for fn in glob.glob(os.path.join(hist_location, f"{i:04d}-*-canonical-*.pt*")):
+            capacity += int(fn.split("-")[-1].split(".")[0])
+
+    if len(all_c) > capacity > 0:
+        ages = (iteration - all_iters.float()).clamp(min=0)
+        weights = config.reservoir_recency_decay ** ages
+        indices = torch.multinomial(weights, capacity, replacement=False)
+        all_c = all_c[indices]
+        all_v = all_v[indices]
+        all_pi = all_pi[indices]
+        all_iters = all_iters[indices]
+
+    save_compressed(all_c, res_c_path)
+    save_compressed(all_v, os.path.join(reservoir_location, "v.ptz"))
+    save_compressed(all_pi, os.path.join(reservoir_location, "pi.ptz"))
+    save_compressed(all_iters.float(), os.path.join(reservoir_location, "meta.ptz"))
+
+    del new_c, new_v, new_pi, new_iters, all_c, all_v, all_pi, all_iters
+    gc.collect()
+    for it in evicted_iters:
+        for fn in glob.glob(os.path.join(hist_location, f"{it:04d}-*.pt*")):
+            os.remove(fn)
+
+
+def load_reservoir(paths):
+    """Load reservoir as a TensorDataset, or None if no reservoir exists."""
+    res_c_path = os.path.join(paths["reservoir"], "canonical.ptz")
+    if not os.path.exists(res_c_path):
+        return None
+    c = load_compressed(res_c_path)
+    v = load_compressed(os.path.join(paths["reservoir"], "v.ptz"))
+    pi = load_compressed(os.path.join(paths["reservoir"], "pi.ptz"))
+    return TensorDataset(c, v, pi)
+
+
+def load_available_window(paths, start, end):
+    """Load whatever window history files exist across an iteration range."""
+    hist_location = paths["history"]
+    datasets = []
+    for i in range(start, end):
+        c = _glob_hist_files(hist_location, f"{i:04d}-*-canonical-*")
+        v = _glob_hist_files(hist_location, f"{i:04d}-*-v-*")
+        p = _glob_hist_files(hist_location, f"{i:04d}-*-pi-*")
+        for j in range(len(c)):
+            c_tensor = _load_hist_tensor(c[j])
+            v_tensor = _load_hist_tensor(v[j])
+            p_tensor = _load_hist_tensor(p[j])
+            datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
+            del c_tensor, v_tensor, p_tensor
+    return datasets
+
+
+@tracy_zone
+def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth):
+    import neural_net
+
+    Game = config.Game
+    bs = config.self_play_batch_size
+    cb = Game.NUM_PLAYERS() * config.self_play_concurrent_batch_mult
+    n = bs * cb * config.self_play_chunks
+    params = base_params(config, config.self_play_temp, bs, cb)
+    params.games_to_play = n
+    params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+    params.self_play = True
+    params.history_enabled = True
+    params.add_noise = True
+    params.playout_cap_randomization = True
+    params.playout_cap_depth = fast_depth
+    params.playout_cap_percent = 0.75
+    params.resign_percent = config.resign_percent
+    params.resign_playthrough_percent = config.resign_playthrough_percent
+
+    use_rand = best == 0
+
+    if use_rand:
+        nn = RandPlayer()
+        params.max_cache_size = 0
+    else:
         nn = neural_net.NNWrapper.load_checkpoint(
-            Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{experiment_name}.pt"
+            Game, paths["checkpoint"], f"{best:04d}-{experiment_name}.pt"
         )
-        v_loss, pi_loss = nn.losses(dataloader)
 
-        del datasets, dataset, dataloader, nn
+    players = [nn] * Game.NUM_PLAYERS()
+    set_eval_types(params, players)
 
-        return v_loss, pi_loss
+    pm = alphazero.PlayManager(Game(), params)
+    grargs = GRArgs(
+        title="Self Play",
+        game=Game,
+        iteration=iteration,
+        max_batch_size=bs,
+        concurrent_batches=cb,
+        result_workers=config.result_workers,
+        data_folder=paths["tmp_history"],
+    )
 
-    @tracy_zone
-    def train(Game, iteration, hist_size, run, total_train_steps):
-        total_size = 0
-        datasets = []
-        for i in range(max(0, iteration - hist_size), iteration + 1):
-            c = _glob_hist_files(HIST_LOCATION, f"{i:04d}-*-canonical-*")
-            v = _glob_hist_files(HIST_LOCATION, f"{i:04d}-*-v-*")
-            p = _glob_hist_files(HIST_LOCATION, f"{i:04d}-*-pi-*")
-            for j in range(len(c)):
-                size = int(c[j].split("-")[-1].split(".")[0])
-                total_size += size
-                c_tensor = _load_hist_tensor(c[j])
-                v_tensor = _load_hist_tensor(v[j])
-                p_tensor = _load_hist_tensor(p[j])
-                datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-                del c_tensor, v_tensor, p_tensor
+    gr = GameRunner(players, pm, grargs)
+    gr.run()
+    scores = pm.scores()
+    win_rates = [0] * len(scores)
+    sn = sum(scores)
+    for i in range(len(scores)):
+        win_rates[i] = scores[i] / sn
+    resign_scores = pm.resign_scores()
+    resign_win_rates = [0] * len(resign_scores)
+    rn = sum(resign_scores)
+    for i in range(len(resign_scores)):
+        resign_win_rates[i] = resign_scores[i] / rn
+    resign_rate = rn / sn
+    hits = pm.cache_hits()
+    total = hits + pm.cache_misses()
+    hr = 0
+    if total > 0:
+        hr = hits / total
+    agl = pm.avg_game_length()
+    avg_depth = pm.avg_leaf_depth()
+    avg_entropy = pm.avg_search_entropy()
+    fast_avg_depth = pm.fast_avg_leaf_depth()
+    fast_avg_entropy = pm.fast_avg_search_entropy()
+    avg_mpt = pm.avg_moves_per_turn()
+    avg_vm = pm.avg_valid_moves()
+    del pm, nn
+    return win_rates, hr, agl, resign_win_rates, resign_rate, avg_depth, avg_entropy, fast_avg_depth, fast_avg_entropy, avg_mpt, avg_vm
 
-        bs = TRAIN_BATCH_SIZE
-        dataset = ConcatDataset(datasets)
-        dataloader = DataLoader(dataset, batch_size=bs, shuffle=True)
 
-        average_generation = total_size / min(hist_size, iteration + 1)
-        nn = neural_net.NNWrapper.load_checkpoint(
-            Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{experiment_name}.pt"
+@tracy_zone
+def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch_size=64):
+    import neural_net
+
+    Game = config.Game
+    nn_rate = 0
+    draw_rate = 0
+    hr = 0
+    agl = 0
+    avg_depth = 0
+    avg_entropy = 0
+    avg_mpt = 0
+    avg_vm = 0
+    nn = neural_net.NNWrapper.load_checkpoint(
+        Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
+    )
+    if past_iter == 0:
+        nn_past = RandPlayer()
+    else:
+        nn_past = neural_net.NNWrapper.load_checkpoint(
+            Game, paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt"
         )
-        steps_to_train = int(math.ceil(average_generation / bs * TRAIN_SAMPLE_RATE))
-        v_loss, pi_loss = nn.train(
-            dataloader, steps_to_train, run, iteration, total_train_steps
-        )
-        total_train_steps += steps_to_train
-        nn.save_checkpoint(CHECKPOINT_LOCATION, f"{iteration + 1:04d}-{experiment_name}.pt")
-        del datasets, dataset, dataloader, nn
-        return v_loss, pi_loss, total_train_steps
+    cb = Game.NUM_PLAYERS()
+    if Game.NUM_PLAYERS() > 2:
+        bs = batch_size
+        n = bs * cb
+        for i in tqdm.trange(
+            Game.NUM_PLAYERS(),
+            leave=False,
+            desc=f"Bench 1 new vs {Game.NUM_PLAYERS() - 1} old",
+        ):
+            params = base_params(config, config.eval_temp, bs, cb)
+            params.games_to_play = n
+            params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+            players = [nn_past] * Game.NUM_PLAYERS()
+            players[i] = nn
+            set_eval_types(params, players)
+            pm = alphazero.PlayManager(Game(), params)
 
-    def update_reservoir(Game, iteration, hist_size):
-        """Merge evicted window data into the reservoir and delete old files."""
-        oldest_in_window = max(0, iteration - hist_size)
-        prev_oldest = max(0, (iteration - 1) - calc_hist_size(iteration - 1))
-        evicted_iters = list(range(prev_oldest, oldest_in_window))
-        if not evicted_iters:
-            return
-
-        # Load evicted iteration data
-        new_c, new_v, new_pi = [], [], []
-        new_iters = []
-        for it in evicted_iters:
-            c_files = _glob_hist_files(HIST_LOCATION, f"{it:04d}-*-canonical-*")
-            v_files = _glob_hist_files(HIST_LOCATION, f"{it:04d}-*-v-*")
-            p_files = _glob_hist_files(HIST_LOCATION, f"{it:04d}-*-pi-*")
-            for j in range(len(c_files)):
-                ct = _load_hist_tensor(c_files[j])
-                new_c.append(ct)
-                new_v.append(_load_hist_tensor(v_files[j]))
-                new_pi.append(_load_hist_tensor(p_files[j]))
-                new_iters.append(torch.full((ct.shape[0],), it, dtype=torch.int16))
-
-        if not new_c:
-            return
-
-        new_c = torch.cat(new_c)
-        new_v = torch.cat(new_v)
-        new_pi = torch.cat(new_pi)
-        new_iters = torch.cat(new_iters)
-
-        # Load existing reservoir
-        os.makedirs(RESERVOIR_LOCATION, exist_ok=True)
-        res_c_path = os.path.join(RESERVOIR_LOCATION, "canonical.ptz")
-        if os.path.exists(res_c_path):
-            old_c = load_compressed(res_c_path)
-            old_v = load_compressed(os.path.join(RESERVOIR_LOCATION, "v.ptz"))
-            old_pi = load_compressed(os.path.join(RESERVOIR_LOCATION, "pi.ptz"))
-            old_iters = load_compressed(os.path.join(RESERVOIR_LOCATION, "meta.ptz")).to(torch.int16)
-            all_c = torch.cat([old_c, new_c])
-            all_v = torch.cat([old_v, new_v])
-            all_pi = torch.cat([old_pi, new_pi])
-            all_iters = torch.cat([old_iters, new_iters])
-            del old_c, old_v, old_pi, old_iters
-        else:
-            all_c, all_v, all_pi, all_iters = new_c, new_v, new_pi, new_iters
-
-        # Compute capacity = total samples in current window
-        capacity = 0
-        for i in range(max(0, iteration - hist_size), iteration + 1):
-            for fn in glob.glob(os.path.join(HIST_LOCATION, f"{i:04d}-*-canonical-*.pt*")):
-                capacity += int(fn.split("-")[-1].split(".")[0])
-
-        # Downsample if over capacity (recency-weighted)
-        if len(all_c) > capacity > 0:
-            ages = (iteration - all_iters.float()).clamp(min=0)
-            weights = RESERVOIR_RECENCY_DECAY ** ages
-            indices = torch.multinomial(weights, capacity, replacement=False)
-            all_c = all_c[indices]
-            all_v = all_v[indices]
-            all_pi = all_pi[indices]
-            all_iters = all_iters[indices]
-
-        # Save reservoir
-        save_compressed(all_c, res_c_path)
-        save_compressed(all_v, os.path.join(RESERVOIR_LOCATION, "v.ptz"))
-        save_compressed(all_pi, os.path.join(RESERVOIR_LOCATION, "pi.ptz"))
-        save_compressed(all_iters.float(), os.path.join(RESERVOIR_LOCATION, "meta.ptz"))
-
-        # Delete evicted files
-        del new_c, new_v, new_pi, new_iters, all_c, all_v, all_pi, all_iters
-        gc.collect()
-        for it in evicted_iters:
-            for fn in glob.glob(os.path.join(HIST_LOCATION, f"{it:04d}-*.pt*")):
-                os.remove(fn)
-
-    def load_reservoir(Game):
-        """Load reservoir as a TensorDataset, or None if no reservoir exists."""
-        res_c_path = os.path.join(RESERVOIR_LOCATION, "canonical.ptz")
-        if not os.path.exists(res_c_path):
-            return None
-        c = load_compressed(res_c_path)
-        v = load_compressed(os.path.join(RESERVOIR_LOCATION, "v.ptz"))
-        pi = load_compressed(os.path.join(RESERVOIR_LOCATION, "pi.ptz"))
-        return TensorDataset(c, v, pi)
-
-    def load_available_window(start, end):
-        """Load whatever window history files exist across an iteration range."""
-        datasets = []
-        for i in range(start, end):
-            c = _glob_hist_files(HIST_LOCATION, f"{i:04d}-*-canonical-*")
-            v = _glob_hist_files(HIST_LOCATION, f"{i:04d}-*-v-*")
-            p = _glob_hist_files(HIST_LOCATION, f"{i:04d}-*-pi-*")
-            for j in range(len(c)):
-                c_tensor = _load_hist_tensor(c[j])
-                v_tensor = _load_hist_tensor(v[j])
-                p_tensor = _load_hist_tensor(p[j])
-                datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-                del c_tensor, v_tensor, p_tensor
-        return datasets
-
-    @tracy_zone
-    def self_play(Game, best, iteration, depth, fast_depth):
-        bs = SELF_PLAY_BATCH_SIZE
-        cb = Game.NUM_PLAYERS() * SELF_PLAY_CONCURRENT_BATCH_MULT
-        n = bs * cb * SELF_PLAY_CHUNKS
-        params = base_params(Game, SELF_PLAY_TEMP, bs, cb)
-        params.games_to_play = n
-        params.mcts_depth = [depth] * Game.NUM_PLAYERS()
-        params.self_play = True
-        params.history_enabled = True
-        params.add_noise = True
-        params.playout_cap_randomization = True
-        params.playout_cap_depth = fast_depth
-        params.playout_cap_percent = 0.75
-        params.resign_percent = RESIGN_PERCENT
-        params.resign_playthrough_percent = RESIGN_PLAYTHROUGH_PERCENT
-
-        # Just use a random agent when generating data with network zero.
-        # They are equivalent.
-        use_rand = best == 0
-
-        if use_rand:
-            nn = RandPlayer()
-            params.max_cache_size = 0
-        else:
-            nn = neural_net.NNWrapper.load_checkpoint(
-                Game, CHECKPOINT_LOCATION, f"{best:04d}-{experiment_name}.pt"
+            grargs = GRArgs(
+                title=f"Bench {iteration} v {past_iter} as p{i + 1}",
+                game=Game,
+                iteration=iteration,
+                max_batch_size=bs,
+                concurrent_batches=cb,
+                result_workers=config.result_workers,
             )
+            gr = GameRunner(players, pm, grargs)
+            gr.run()
+            scores = pm.scores()
+            nn_rate += scores[i] / n
+            draw_rate += scores[-1] / n
+            hits = pm.cache_hits()
+            total = hits + pm.cache_misses()
+            if total > 0:
+                hr += hits / total
+            agl += pm.avg_game_length()
+            avg_depth += pm.avg_leaf_depth()
+            avg_entropy += pm.avg_search_entropy()
+            avg_mpt += pm.avg_moves_per_turn()
+            avg_vm += pm.avg_valid_moves()
+            del pm
+            gc.collect()
+        for i in tqdm.trange(
+            Game.NUM_PLAYERS(),
+            leave=False,
+            desc=f"Bench {Game.NUM_PLAYERS() - 1} new vs 1 old",
+        ):
+            params = base_params(config, config.eval_temp, bs, cb)
+            params.games_to_play = n
+            params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+            players = [nn] * Game.NUM_PLAYERS()
+            players[i] = nn_past
+            set_eval_types(params, players)
+            pm = alphazero.PlayManager(Game(), params)
 
-        players = [nn] * Game.NUM_PLAYERS()
-        set_eval_types(params, players)
+            grargs = GRArgs(
+                title=f"Bench {iteration} v {past_iter} as p{i + 1}",
+                game=Game,
+                iteration=iteration,
+                max_batch_size=bs,
+                concurrent_batches=cb,
+                result_workers=config.result_workers,
+            )
+            gr = GameRunner(players, pm, grargs)
+            gr.run()
+            scores = pm.scores()
+            for j in range(1, Game.NUM_PLAYERS()):
+                nn_rate += scores[(i + j) % Game.NUM_PLAYERS()] / n
+            draw_rate += scores[-1] / n
+            hits = pm.cache_hits()
+            total = hits + pm.cache_misses()
+            if total > 0:
+                hr += hits / total
+            agl += pm.avg_game_length()
+            avg_depth += pm.avg_leaf_depth()
+            avg_entropy += pm.avg_search_entropy()
+            avg_mpt += pm.avg_moves_per_turn()
+            avg_vm += pm.avg_valid_moves()
+            del pm
+            gc.collect()
+        nn_rate /= 2 * Game.NUM_PLAYERS()
+        draw_rate /= 2 * Game.NUM_PLAYERS()
+        hr /= 2 * Game.NUM_PLAYERS()
+        agl /= 2 * Game.NUM_PLAYERS()
+        avg_depth /= 2 * Game.NUM_PLAYERS()
+        avg_entropy /= 2 * Game.NUM_PLAYERS()
+        avg_mpt /= 2 * Game.NUM_PLAYERS()
+        avg_vm /= 2 * Game.NUM_PLAYERS()
+    else:
+        bs = batch_size
+        n = bs * cb
+        for i in tqdm.trange(
+            Game.NUM_PLAYERS(), leave=False, desc="Bench new vs old"
+        ):
+            params = base_params(config, config.eval_temp, bs, cb)
+            params.games_to_play = n
+            params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+            players = [nn_past] * Game.NUM_PLAYERS()
+            players[i] = nn
+            set_eval_types(params, players)
+            pm = alphazero.PlayManager(Game(), params)
 
-        pm = alphazero.PlayManager(new_game(), params)
-        grargs = GRArgs(
-            title="Self Play",
-            game=Game,
-            iteration=iteration,
-            max_batch_size=bs,
-            concurrent_batches=cb,
-            result_workers=RESULT_WORKERS,
-        )
+            grargs = GRArgs(
+                title=f"Bench {iteration} v {past_iter} as p{i + 1}",
+                game=Game,
+                iteration=iteration,
+                max_batch_size=bs,
+                concurrent_batches=cb,
+                result_workers=config.result_workers,
+            )
+            gr = GameRunner(players, pm, grargs)
+            gr.run()
+            scores = pm.scores()
+            nn_rate += scores[i] / n
+            draw_rate += scores[-1] / n
+            hits = pm.cache_hits()
+            total = hits + pm.cache_misses()
+            if total > 0:
+                hr += hits / total
+            agl += pm.avg_game_length()
+            avg_depth += pm.avg_leaf_depth()
+            avg_entropy += pm.avg_search_entropy()
+            avg_mpt += pm.avg_moves_per_turn()
+            avg_vm += pm.avg_valid_moves()
+            del pm
+            gc.collect()
+        nn_rate /= Game.NUM_PLAYERS()
+        draw_rate /= Game.NUM_PLAYERS()
+        hr /= Game.NUM_PLAYERS()
+        agl /= Game.NUM_PLAYERS()
+        avg_depth /= Game.NUM_PLAYERS()
+        avg_entropy /= Game.NUM_PLAYERS()
+        avg_mpt /= Game.NUM_PLAYERS()
+        avg_vm /= Game.NUM_PLAYERS()
 
-        gr = GameRunner(players, pm, grargs)
-        gr.run()
-        scores = pm.scores()
-        win_rates = [0] * len(scores)
-        sn = sum(scores)
-        for i in range(len(scores)):
-            win_rates[i] = scores[i] / sn
-        resign_scores = pm.resign_scores()
-        resign_win_rates = [0] * len(resign_scores)
-        rn = sum(resign_scores)
-        for i in range(len(resign_scores)):
-            resign_win_rates[i] = resign_scores[i] / rn
-        resign_rate = rn / sn
-        hits = pm.cache_hits()
-        total = hits + pm.cache_misses()
-        hr = 0
-        if total > 0:
-            hr = hits / total
-        agl = pm.avg_game_length()
-        avg_depth = pm.avg_leaf_depth()
-        avg_entropy = pm.avg_search_entropy()
-        fast_avg_depth = pm.fast_avg_leaf_depth()
-        fast_avg_entropy = pm.fast_avg_search_entropy()
-        avg_mpt = pm.avg_moves_per_turn()
-        avg_vm = pm.avg_valid_moves()
-        del pm, nn
-        return win_rates, hr, agl, resign_win_rates, resign_rate, avg_depth, avg_entropy, fast_avg_depth, fast_avg_entropy, avg_mpt, avg_vm
+    del nn, nn_past
+    return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm
+
+
+def main(config, experiment_dir, aim_repo=None):
+    """Main training loop.
+
+    Args:
+        config: TrainConfig instance with all training parameters.
+        experiment_dir: Path to experiment directory (e.g. data/connect4/densenet-4d-12c-5k-100sims/).
+        aim_repo: Path for aim logging directory. Default None uses project root.
+    """
+    import neural_net
+
+    Game = config.Game
+    paths = config.resolve_paths(experiment_dir)
+    experiment_name = config.auto_experiment_name
+
+    # Ensure all directories exist
+    for key in ("checkpoint", "history", "tmp_history", "reservoir"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    # Save config at start
+    config.save(os.path.join(experiment_dir, "config.yaml"))
 
     @tracy_zone
-    def play_past(Game, depth, iteration, past_iter, batch_size=64):
-        nn_rate = 0
-        draw_rate = 0
-        hr = 0
-        agl = 0
-        avg_depth = 0
-        avg_entropy = 0
-        avg_mpt = 0
-        avg_vm = 0
-        nn = neural_net.NNWrapper.load_checkpoint(
-            Game, CHECKPOINT_LOCATION, f"{iteration:04d}-{experiment_name}.pt"
+    def create_init_net():
+        nnargs = neural_net.NNArgs(
+            num_channels=config.channels,
+            depth=config.depth,
+            lr_milestone=config.lr_milestone,
+            dense_net=config.dense_net,
+            kernel_size=config.kernel_size,
+            star_gambit_spatial=config.star_gambit_spatial,
+            lr=config.lr,
+            cv=config.cv,
         )
-        if past_iter == 0:
-            nn_past = RandPlayer()
-        else:
-            nn_past = neural_net.NNWrapper.load_checkpoint(
-                Game, CHECKPOINT_LOCATION, f"{past_iter:04d}-{experiment_name}.pt"
-            )
-        cb = Game.NUM_PLAYERS()
-        if Game.NUM_PLAYERS() > 2:
-            bs = batch_size
-            n = bs * cb
-            for i in tqdm.trange(
-                Game.NUM_PLAYERS(),
-                leave=False,
-                desc=f"Bench 1 new vs {Game.NUM_PLAYERS() - 1} old",
-            ):
-                params = base_params(Game, EVAL_TEMP, bs, cb)
-                params.games_to_play = n
-                params.mcts_depth = [depth] * Game.NUM_PLAYERS()
-                players = [nn_past] * Game.NUM_PLAYERS()
-                players[i] = nn
-                set_eval_types(params, players)
-                pm = alphazero.PlayManager(new_game(), params)
-
-                grargs = GRArgs(
-                    title=f"Bench {iteration} v {past_iter} as p{i + 1}",
-                    game=Game,
-                    iteration=iteration,
-                    max_batch_size=bs,
-                    concurrent_batches=cb,
-                    result_workers=RESULT_WORKERS,
-                )
-                gr = GameRunner(players, pm, grargs)
-                gr.run()
-                scores = pm.scores()
-                nn_rate += scores[i] / n
-                draw_rate += scores[-1] / n
-                hits = pm.cache_hits()
-                total = hits + pm.cache_misses()
-                if total > 0:
-                    hr += hits / total
-                agl += pm.avg_game_length()
-                avg_depth += pm.avg_leaf_depth()
-                avg_entropy += pm.avg_search_entropy()
-                avg_mpt += pm.avg_moves_per_turn()
-                avg_vm += pm.avg_valid_moves()
-                del pm
-                gc.collect()
-            for i in tqdm.trange(
-                Game.NUM_PLAYERS(),
-                leave=False,
-                desc=f"Bench {Game.NUM_PLAYERS() - 1} new vs 1 old",
-            ):
-                params = base_params(Game, EVAL_TEMP, bs, cb)
-                params.games_to_play = n
-                params.mcts_depth = [depth] * Game.NUM_PLAYERS()
-                players = [nn] * Game.NUM_PLAYERS()
-                players[i] = nn_past
-                set_eval_types(params, players)
-                pm = alphazero.PlayManager(new_game(), params)
-
-                grargs = GRArgs(
-                    title=f"Bench {iteration} v {past_iter} as p{i + 1}",
-                    game=Game,
-                    iteration=iteration,
-                    max_batch_size=bs,
-                    concurrent_batches=cb,
-                    result_workers=RESULT_WORKERS,
-                )
-                gr = GameRunner(players, pm, grargs)
-                gr.run()
-                scores = pm.scores()
-                for j in range(1, Game.NUM_PLAYERS()):
-                    nn_rate += scores[(i + j) % Game.NUM_PLAYERS()] / n
-                draw_rate += scores[-1] / n
-                hits = pm.cache_hits()
-                total = hits + pm.cache_misses()
-                if total > 0:
-                    hr += hits / total
-                agl += pm.avg_game_length()
-                avg_depth += pm.avg_leaf_depth()
-                avg_entropy += pm.avg_search_entropy()
-                avg_mpt += pm.avg_moves_per_turn()
-                avg_vm += pm.avg_valid_moves()
-                del pm
-                gc.collect()
-            nn_rate /= 2 * Game.NUM_PLAYERS()
-            draw_rate /= 2 * Game.NUM_PLAYERS()
-            hr /= 2 * Game.NUM_PLAYERS()
-            agl /= 2 * Game.NUM_PLAYERS()
-            avg_depth /= 2 * Game.NUM_PLAYERS()
-            avg_entropy /= 2 * Game.NUM_PLAYERS()
-            avg_mpt /= 2 * Game.NUM_PLAYERS()
-            avg_vm /= 2 * Game.NUM_PLAYERS()
-        else:
-            bs = batch_size
-            n = bs * cb
-            for i in tqdm.trange(
-                Game.NUM_PLAYERS(), leave=False, desc="Bench new vs old"
-            ):
-                params = base_params(Game, EVAL_TEMP, bs, cb)
-                params.games_to_play = n
-                params.mcts_depth = [depth] * Game.NUM_PLAYERS()
-                players = [nn_past] * Game.NUM_PLAYERS()
-                players[i] = nn
-                set_eval_types(params, players)
-                pm = alphazero.PlayManager(new_game(), params)
-
-                grargs = GRArgs(
-                    title=f"Bench {iteration} v {past_iter} as p{i + 1}",
-                    game=Game,
-                    iteration=iteration,
-                    max_batch_size=bs,
-                    concurrent_batches=cb,
-                    result_workers=RESULT_WORKERS,
-                )
-                gr = GameRunner(players, pm, grargs)
-                gr.run()
-                scores = pm.scores()
-                nn_rate += scores[i] / n
-                draw_rate += scores[-1] / n
-                hits = pm.cache_hits()
-                total = hits + pm.cache_misses()
-                if total > 0:
-                    hr += hits / total
-                agl += pm.avg_game_length()
-                avg_depth += pm.avg_leaf_depth()
-                avg_entropy += pm.avg_search_entropy()
-                avg_mpt += pm.avg_moves_per_turn()
-                avg_vm += pm.avg_valid_moves()
-                del pm
-                gc.collect()
-            nn_rate /= Game.NUM_PLAYERS()
-            draw_rate /= Game.NUM_PLAYERS()
-            hr /= Game.NUM_PLAYERS()
-            agl /= Game.NUM_PLAYERS()
-            avg_depth /= Game.NUM_PLAYERS()
-            avg_entropy /= Game.NUM_PLAYERS()
-            avg_mpt /= Game.NUM_PLAYERS()
-            avg_vm /= Game.NUM_PLAYERS()
-
-        del nn, nn_past
-        return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm
+        nn = neural_net.NNWrapper(Game, nnargs)
+        nn.save_checkpoint(paths["checkpoint"], f"0000-{experiment_name}.pt")
 
     try:
         import aim
-
-        run = aim.Run(experiment=experiment_name)
-        run.name = game_name
-
+        run = aim.Run(experiment=experiment_name, repo=aim_repo)
+        run.name = config.game
         run["hparams"] = {
-            "network": network_name,
-            "panel_size": GATING_PANEL_SIZE,
-            "panel_win_rate": GATING_PANEL_WIN_RATE,
-            "best_win_rate": GATING_BEST_WIN_RATE,
-            "expected_opening_length": EXPECTED_OPENING_LENGTH,
-            "cpuct": CPUCT,
-            "fpu_reduction": FPU_REDUCTION,
-            "self_play_temp": SELF_PLAY_TEMP,
-            "eval_temp": EVAL_TEMP,
-            "final_temp": FINAL_TEMP,
-            "training_sample_rate": TRAIN_SAMPLE_RATE,
-            "bootstrap_iters": bootstrap_iters,
-            "depth": depth,
-            "channels": channels,
-            "kernel_size": kernel_size,
-            "lr_milestone": lr_milestone,
-            "full_mcts_depth": nn_selfplay_mcts_depth,
-            "fast_mcts_depth": nn_selfplay_fast_mcts_depth,
+            "network": config.network_name,
+            "panel_size": config.gating_panel_size,
+            "panel_win_rate": config.gating_panel_win_rate,
+            "best_win_rate": config.gating_best_win_rate,
+            "expected_opening_length": config.expected_opening_length,
+            "cpuct": config.cpuct,
+            "fpu_reduction": config.fpu_reduction,
+            "self_play_temp": config.self_play_temp,
+            "eval_temp": config.eval_temp,
+            "final_temp": config.final_temp,
+            "training_sample_rate": config.train_sample_rate,
+            "depth": config.depth,
+            "channels": config.channels,
+            "kernel_size": config.kernel_size,
+            "lr_milestone": config.lr_milestone,
+            "full_mcts_depth": config.selfplay_mcts_depth,
+            "fast_mcts_depth": config.fast_mcts_depth,
         }
     except ImportError:
-        print(
-            "aim is used for nice web logging with graphs. I would advise `pip install aim`."
-        )
-        print(
-            "If on windows, that may fail due to: https://github.com/aimhubio/aim/issues/2064"
-        )
-        print("Hopefully it gets a fixed one day.")
+        print("aim is used for nice web logging with graphs. I would advise `pip install aim`.")
         print("Using a dummy logger for now that does nothing.\n")
-        # Maybe create a basic logger class that puts the information in a file to at least save the info.
-        # Or could fall back on tensorboard I guess.
 
         class DummyRun:
             def track(*args, **kwargs):
@@ -1144,126 +1052,146 @@ if __name__ == "__main__":
 
         run = DummyRun()
 
-    total_agents = iters + 1  # + base
+    total_agents = config.iterations + 1  # + base
 
-    nnargs = neural_net.NNArgs(
-        num_channels=channels,
-        depth=depth,
-        lr_milestone=lr_milestone,
-        dense_net=dense_net,
-        kernel_size=kernel_size,
-        star_gambit_spatial=star_gambit_spatial,
-    )
+    start = config.start
 
     if start == 0:
-        create_init_net(Game, nnargs)
+        create_init_net()
         wr = np.empty((total_agents, total_agents))
         wr[:] = np.nan
         elo = np.zeros(total_agents)
         current_best = 0
         total_train_steps = 0
-        if bootstrap_iters == 0:
-            np.savetxt(os.path.join("data", "elo.csv"), elo, delimiter=",")
-            np.savetxt(os.path.join("data", "win_rate.csv"), wr, delimiter=",")
-            np.savetxt(
-                os.path.join("data", "total_train_steps.txt"),
-                [total_train_steps],
-                delimiter=",",
-            )
+
+        # Handle bootstrap from existing experiment
+        if config.bootstrap_from:
+            source_dir = config.bootstrap_from
+            source_config_path = os.path.join(source_dir, "config.yaml")
+
+            # Determine source final iteration from elo.csv
+            source_elo_path = os.path.join(source_dir, "elo.csv")
+            if os.path.exists(source_elo_path):
+                source_elo = np.genfromtxt(source_elo_path, delimiter=",")
+                source_n = len(source_elo)
+            else:
+                raise RuntimeError(f"No elo.csv in bootstrap source: {source_dir}")
+
+            source_paths = config.resolve_paths(source_dir)
+
+            # Copy reservoir
+            import shutil
+            if os.path.exists(os.path.join(source_paths["reservoir"], "canonical.ptz")):
+                os.makedirs(paths["reservoir"], exist_ok=True)
+                for fname in ("canonical.ptz", "v.ptz", "pi.ptz", "meta.ptz"):
+                    src = os.path.join(source_paths["reservoir"], fname)
+                    if os.path.exists(src):
+                        shutil.copy2(src, os.path.join(paths["reservoir"], fname))
+
+            # Copy elo/wr from source
+            source_wr_path = os.path.join(source_dir, "win_rate.csv")
+            if os.path.exists(source_wr_path):
+                source_wr = np.genfromtxt(source_wr_path, delimiter=",")
+                copy_size = min(source_n, total_agents)
+                wr[:copy_size, :copy_size] = source_wr[:copy_size, :copy_size]
+                elo[:copy_size] = source_elo[:copy_size]
+
+            # Check if same architecture
+            same_arch = True
+            if os.path.exists(source_config_path):
+                source_cfg = load_config(source_config_path, {})
+                same_arch = (
+                    source_cfg.depth == config.depth
+                    and source_cfg.channels == config.channels
+                    and source_cfg.kernel_size == config.kernel_size
+                    and source_cfg.dense_net == config.dense_net
+                    and source_cfg.star_gambit_spatial == config.star_gambit_spatial
+                )
+
+            if same_arch:
+                # Copy best checkpoint
+                source_checkpoints = sorted(glob.glob(os.path.join(source_paths["checkpoint"], "*.pt")))
+                if source_checkpoints:
+                    best_cp = source_checkpoints[-1]
+                    dest_name = f"{source_n:04d}-{experiment_name}.pt"
+                    shutil.copy2(best_cp, os.path.join(paths["checkpoint"], dest_name))
+            else:
+                # Retrain on source data
+                reservoir_ds = load_reservoir(source_paths)
+                window_datasets = load_available_window(source_paths, 0, source_n)
+                nn = neural_net.NNWrapper.load_checkpoint(
+                    Game, paths["checkpoint"], f"0000-{experiment_name}.pt"
+                )
+                all_datasets = ([reservoir_ds] if reservoir_ds else []) + window_datasets
+                if all_datasets:
+                    combined = ConcatDataset(all_datasets)
+                    dataloader = DataLoader(combined, batch_size=config.train_batch_size, shuffle=True)
+                    steps_p1 = int(math.ceil(len(combined) / config.train_batch_size)) * config.bootstrap_full_passes
+                    nn.train(dataloader, steps_p1, run, source_n, total_train_steps)
+                    total_train_steps += steps_p1
+
+                    if window_datasets:
+                        window_only = ConcatDataset(window_datasets)
+                        dataloader2 = DataLoader(window_only, batch_size=config.train_batch_size, shuffle=True)
+                        steps_p2 = int(math.ceil(len(window_only) / config.train_batch_size)) * config.bootstrap_window_passes
+                        nn.train(dataloader2, steps_p2, run, source_n, total_train_steps)
+                        total_train_steps += steps_p2
+
+                nn.save_checkpoint(paths["checkpoint"], f"{source_n:04d}-{experiment_name}.pt")
+
+            current_best = source_n
+            start = source_n
+
+            # Calibrate bootstrap network ELO against source networks
+            compare_start = max(0, source_n - config.compare_past)
+            for past_iter in range(compare_start, source_n):
+                past_cp = os.path.join(source_paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt")
+                if not os.path.exists(past_cp):
+                    # Try to find a checkpoint with a different experiment name
+                    cps = glob.glob(os.path.join(source_paths["checkpoint"], f"{past_iter:04d}-*.pt"))
+                    if cps:
+                        # Copy it with our experiment name
+                        import shutil
+                        shutil.copy2(cps[0], os.path.join(paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt"))
+                    else:
+                        continue
+
+                nn_rate, draw_rate, _, _, _, _, _, _ = play_past(
+                    config, paths, experiment_name, config.compare_mcts_depth,
+                    source_n, past_iter, config.past_compare_batch_size
+                )
+                wr[source_n, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
+                wr[past_iter, source_n] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
+                gc.collect()
+
+            elo = get_elo(elo, wr, source_n)
+
+        np.savetxt(os.path.join(experiment_dir, "elo.csv"), elo, delimiter=",")
+        np.savetxt(os.path.join(experiment_dir, "win_rate.csv"), wr, delimiter=",")
+        np.savetxt(
+            os.path.join(experiment_dir, "total_train_steps.txt"),
+            [total_train_steps],
+            delimiter=",",
+        )
     else:
-        tmp_wr = np.genfromtxt(os.path.join("data", "win_rate.csv"), delimiter=",")
+        tmp_wr = np.genfromtxt(os.path.join(experiment_dir, "win_rate.csv"), delimiter=",")
         wr = np.empty((total_agents, total_agents))
         wr[:] = np.nan
         old_size = min(tmp_wr.shape[0], total_agents)
         wr[:old_size, :old_size] = tmp_wr[:old_size, :old_size]
-        tmp_elo = np.genfromtxt(os.path.join("data", "elo.csv"), delimiter=",")
+        tmp_elo = np.genfromtxt(os.path.join(experiment_dir, "elo.csv"), delimiter=",")
         elo = np.zeros(total_agents)
         old_size = min(tmp_elo.shape[0], total_agents)
         elo[:old_size] = tmp_elo[:old_size]
         current_best = np.argmax(elo[: start + 1])
         total_train_steps = int(
-            np.genfromtxt(os.path.join("data", "total_train_steps.txt"))
+            np.genfromtxt(os.path.join(experiment_dir, "total_train_steps.txt"))
         )
 
     postfix = {"best": current_best}
-    if bootstrap_iters > 0 and bootstrap_iters > start:
-        # We are just going to assume the new nets have similar elo to the past instead of running many comparisons matches.
-        prev_elo = np.genfromtxt(os.path.join("data", "elo.csv"), delimiter=",")
-        prev_wr = np.genfromtxt(os.path.join("data", "win_rate.csv"), delimiter=",")
-
-        # Check if full per-iteration history exists
-        has_full = all(
-            _glob_hist_files(HIST_LOCATION, f"{i:04d}-*-canonical-*")
-            for i in range(start, bootstrap_iters)
-        )
-
-        if has_full:
-            # Original behavior: iterate per-iteration
-            with tqdm.trange(start, bootstrap_iters, desc="Bootstraping Network") as pbar:
-                for i in pbar:
-                    elo[i] = prev_elo[i]
-                    wr[i][:bootstrap_iters] = prev_wr[i][:bootstrap_iters]
-                    hist_size = calc_hist_size(i)
-                    v_loss, pi_loss, total_train_steps = train(
-                        Game, i, hist_size, run, total_train_steps
-                    )
-                    np.savetxt(
-                        os.path.join("data", "total_train_steps.txt"),
-                        [total_train_steps],
-                        delimiter=",",
-                    )
-                    postfix["vloss"] = v_loss
-                    postfix["ploss"] = pi_loss
-                    pbar.set_postfix(postfix)
-                    gc.collect()
-        else:
-            # Reservoir bootstrap: two-phase pretrain + fine-tune
-            reservoir_ds = load_reservoir(Game)
-            if reservoir_ds is None:
-                raise RuntimeError("No reservoir and incomplete history. Cannot bootstrap.")
-
-            # Collect available window data
-            window_datasets = load_available_window(start, bootstrap_iters)
-
-            nn = neural_net.NNWrapper.load_checkpoint(
-                Game, CHECKPOINT_LOCATION, f"{start:04d}-{experiment_name}.pt"
-            )
-
-            # Phase 1: Broad training on reservoir + window (5 passes)
-            all_datasets = [reservoir_ds] + window_datasets
-            combined = ConcatDataset(all_datasets)
-            dataloader = DataLoader(combined, batch_size=TRAIN_BATCH_SIZE, shuffle=True)
-            steps_p1 = int(math.ceil(len(combined) / TRAIN_BATCH_SIZE)) * BOOTSTRAP_FULL_PASSES
-            nn.train(dataloader, steps_p1, run, bootstrap_iters, total_train_steps)
-            total_train_steps += steps_p1
-
-            # Phase 2: Fine-tune on window only (2 passes)
-            if window_datasets:
-                window_only = ConcatDataset(window_datasets)
-                dataloader2 = DataLoader(window_only, batch_size=TRAIN_BATCH_SIZE, shuffle=True)
-                steps_p2 = int(math.ceil(len(window_only) / TRAIN_BATCH_SIZE)) * BOOTSTRAP_WINDOW_PASSES
-                nn.train(dataloader2, steps_p2, run, bootstrap_iters, total_train_steps)
-                total_train_steps += steps_p2
-
-            nn.save_checkpoint(CHECKPOINT_LOCATION, f"{bootstrap_iters:04d}-{experiment_name}.pt")
-            np.savetxt(
-                os.path.join("data", "total_train_steps.txt"),
-                [total_train_steps],
-                delimiter=",",
-            )
-
-            # Copy elo/wr from previous run
-            for i in range(start, bootstrap_iters):
-                elo[i] = prev_elo[i]
-                wr[i][:bootstrap_iters] = prev_wr[i][:bootstrap_iters]
-
-        current_best = bootstrap_iters
-        start = bootstrap_iters
-        postfix["best"] = current_best
-
     panel = [current_best]
 
-    with tqdm.trange(start, iters, desc="Build Amazing Network") as pbar:
+    with tqdm.trange(start, config.iterations, desc="Build Amazing Network") as pbar:
         for i in pbar:
             stage_times = {}
             iteration_start = time.time()
@@ -1274,196 +1202,62 @@ if __name__ == "__main__":
 
             stage_start = time.time()
             with TracyZone("stage_history"):
-                past_iter = max(0, i - compare_past)
+                past_iter = max(0, i - config.compare_past)
                 if past_iter != i and math.isnan(wr[i, past_iter]):
                     nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy, bench_mpt, bench_vm = play_past(
-                        Game, nn_compare_mcts_depth, i, past_iter, PAST_COMPARE_BATCH_SIZE
+                        config, paths, experiment_name,
+                        config.compare_mcts_depth, i, past_iter, config.past_compare_batch_size
                     )
                     wr[i, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
                     wr[past_iter, i] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
-                    run.track(
-                        nn_rate,
-                        name="win_rate",
-                        epoch=i,
-                        step=total_train_steps,
-                        context={"vs": f"-{compare_past}", "from": "all_games"},
-                    )
-                    run.track(
-                        draw_rate,
-                        name="draw_rate",
-                        epoch=i,
-                        step=total_train_steps,
-                        context={"vs": f"-{compare_past}", "from": "all_games"},
-                    )
-                    run.track(
-                        game_length,
-                        name="average_game_length",
-                        epoch=i,
-                        step=total_train_steps,
-                        context={"vs": f"-{compare_past}"},
-                    )
-                    run.track(
-                        bench_depth,
-                        name="avg_leaf_depth",
-                        epoch=i,
-                        step=total_train_steps,
-                        context={"vs": f"-{compare_past}", "search": "full"},
-                    )
-                    run.track(
-                        bench_entropy,
-                        name="search_entropy",
-                        epoch=i,
-                        step=total_train_steps,
-                        context={"vs": f"-{compare_past}", "search": "full"},
-                    )
-                    run.track(
-                        bench_mpt,
-                        name="moves_per_turn",
-                        epoch=i,
-                        step=total_train_steps,
-                        context={"vs": f"-{compare_past}"},
-                    )
-                    run.track(
-                        bench_vm,
-                        name="avg_valid_moves",
-                        epoch=i,
-                        step=total_train_steps,
-                        context={"vs": f"-{compare_past}"},
-                    )
-                    postfix[f"vs -{compare_past}"] = (
-                        nn_rate + draw_rate / Game.NUM_PLAYERS()
-                    )
+                    run.track(nn_rate, name="win_rate", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}", "from": "all_games"})
+                    run.track(draw_rate, name="draw_rate", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}", "from": "all_games"})
+                    run.track(game_length, name="average_game_length", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
+                    run.track(bench_depth, name="avg_leaf_depth", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}", "search": "full"})
+                    run.track(bench_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}", "search": "full"})
+                    run.track(bench_mpt, name="moves_per_turn", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
+                    run.track(bench_vm, name="avg_valid_moves", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
+                    postfix[f"vs -{config.compare_past}"] = (nn_rate + draw_rate / Game.NUM_PLAYERS())
                     gc.collect()
             stage_times["history"] = time.time() - stage_start
 
             stage_start = time.time()
             with TracyZone("stage_elo"):
                 elo = get_elo(elo, wr, i)
-                run.track(
-                    elo[i],
-                    name="elo",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"type": "current"},
-                )
-                run.track(
-                    elo[current_best],
-                    name="elo",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"type": "best"},
-                )
+                run.track(elo[i], name="elo", epoch=i, step=total_train_steps, context={"type": "current"})
+                run.track(elo[current_best], name="elo", epoch=i, step=total_train_steps, context={"type": "best"})
                 postfix["elo"] = int(elo[i])
                 pbar.set_postfix(postfix)
-                np.savetxt(os.path.join("data", "elo.csv"), elo, delimiter=",")
+                np.savetxt(os.path.join(experiment_dir, "elo.csv"), elo, delimiter=",")
             stage_times["elo"] = time.time() - stage_start
 
             stage_start = time.time()
             with TracyZone("stage_selfplay"):
                 win_rates, hit_rate, game_length, resign_win_rates, resignation_rate, selfplay_depth, selfplay_entropy, fast_selfplay_depth, fast_selfplay_entropy, selfplay_mpt, selfplay_vm = (
                     self_play(
-                        Game,
-                        current_best,
-                        i,
-                        nn_selfplay_mcts_depth,
-                        nn_selfplay_fast_mcts_depth,
+                        config, paths, experiment_name,
+                        current_best, i,
+                        config.selfplay_mcts_depth,
+                        config.fast_mcts_depth,
                     )
                 )
                 for j in range(len(win_rates) - 1):
-                    run.track(
-                        win_rates[j],
-                        name="win_rate",
-                        epoch=i,
-                        step=total_train_steps,
-                        context={"vs": "self", "player": j + 1, "from": "all_games"},
-                    )
+                    run.track(win_rates[j], name="win_rate", epoch=i, step=total_train_steps, context={"vs": "self", "player": j + 1, "from": "all_games"})
                 for j in range(len(resign_win_rates) - 1):
-                    run.track(
-                        resign_win_rates[j],
-                        name="win_rate",
-                        epoch=i,
-                        step=total_train_steps,
-                        context={"vs": "self", "player": j + 1, "from": "resignation"},
-                    )
-                run.track(
-                    resignation_rate,
-                    name="resignation_rate",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"vs": "self"},
-                )
-                run.track(
-                    win_rates[-1],
-                    name="draw_rate",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"vs": "self", "from": "all_games"},
-                )
-                run.track(
-                    resign_win_rates[-1],
-                    name="draw_rate",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"vs": "self", "from": "resignation"},
-                )
-                run.track(
-                    float(hit_rate),
-                    name="cache_hit_rate",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"vs": "self"},
-                )
-                run.track(
-                    game_length,
-                    name="average_game_length",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"vs": "self"},
-                )
-                run.track(
-                    selfplay_depth,
-                    name="avg_leaf_depth",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"vs": "self", "search": "full"},
-                )
-                run.track(
-                    selfplay_entropy,
-                    name="search_entropy",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"vs": "self", "search": "full"},
-                )
+                    run.track(resign_win_rates[j], name="win_rate", epoch=i, step=total_train_steps, context={"vs": "self", "player": j + 1, "from": "resignation"})
+                run.track(resignation_rate, name="resignation_rate", epoch=i, step=total_train_steps, context={"vs": "self"})
+                run.track(win_rates[-1], name="draw_rate", epoch=i, step=total_train_steps, context={"vs": "self", "from": "all_games"})
+                run.track(resign_win_rates[-1], name="draw_rate", epoch=i, step=total_train_steps, context={"vs": "self", "from": "resignation"})
+                run.track(float(hit_rate), name="cache_hit_rate", epoch=i, step=total_train_steps, context={"vs": "self"})
+                run.track(game_length, name="average_game_length", epoch=i, step=total_train_steps, context={"vs": "self"})
+                run.track(selfplay_depth, name="avg_leaf_depth", epoch=i, step=total_train_steps, context={"vs": "self", "search": "full"})
+                run.track(selfplay_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": "self", "search": "full"})
                 if fast_selfplay_depth > 0:
-                    run.track(
-                        fast_selfplay_depth,
-                        name="avg_leaf_depth",
-                        epoch=i,
-                        step=total_train_steps,
-                        context={"vs": "self", "search": "fast"},
-                    )
+                    run.track(fast_selfplay_depth, name="avg_leaf_depth", epoch=i, step=total_train_steps, context={"vs": "self", "search": "fast"})
                 if fast_selfplay_entropy > 0:
-                    run.track(
-                        fast_selfplay_entropy,
-                        name="search_entropy",
-                        epoch=i,
-                        step=total_train_steps,
-                        context={"vs": "self", "search": "fast"},
-                    )
-                run.track(
-                    selfplay_mpt,
-                    name="moves_per_turn",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"vs": "self"},
-                )
-                run.track(
-                    selfplay_vm,
-                    name="avg_valid_moves",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"vs": "self"},
-                )
+                    run.track(fast_selfplay_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": "self", "search": "fast"})
+                run.track(selfplay_mpt, name="moves_per_turn", epoch=i, step=total_train_steps, context={"vs": "self"})
+                run.track(selfplay_vm, name="avg_valid_moves", epoch=i, step=total_train_steps, context={"vs": "self"})
                 postfix["win_rates"] = list(map(lambda x: f"{x:0.3f}", win_rates))
                 pbar.set_postfix(postfix)
                 gc.collect()
@@ -1471,27 +1265,27 @@ if __name__ == "__main__":
 
             stage_start = time.time()
             with TracyZone("stage_symmetries"):
-                exploit_symmetries(Game, i)
+                exploit_symmetries(config, paths, i)
                 gc.collect()
             stage_times["symmetries"] = time.time() - stage_start
 
             stage_start = time.time()
             with TracyZone("stage_resampling"):
-                resample_by_surprise(Game, i)
+                resample_by_surprise(config, paths, experiment_name, i)
                 gc.collect()
             stage_times["resampling"] = time.time() - stage_start
 
             stage_start = time.time()
             with TracyZone("stage_training"):
-                hist_size = calc_hist_size(i)
+                hist_size = calc_hist_size(config, i)
                 oldest_iteration = max(0, i - hist_size)
                 run.track(hist_size, name="history", epoch=i, step=total_train_steps, context={"type": "window_size"})
                 run.track(oldest_iteration, name="history", epoch=i, step=total_train_steps, context={"type": "oldest_iteration"})
                 v_loss, pi_loss, total_train_steps = train(
-                    Game, i, hist_size, run, total_train_steps
+                    config, paths, experiment_name, i, hist_size, run, total_train_steps
                 )
                 np.savetxt(
-                    os.path.join("data", "total_train_steps.txt"),
+                    os.path.join(experiment_dir, "total_train_steps.txt"),
                     [total_train_steps],
                     delimiter=",",
                 )
@@ -1503,13 +1297,12 @@ if __name__ == "__main__":
 
             stage_start = time.time()
             with TracyZone("stage_reservoir"):
-                update_reservoir(Game, i, hist_size)
+                update_reservoir(config, paths, i, hist_size)
                 gc.collect()
             stage_times["reservoir"] = time.time() - stage_start
 
             stage_start = time.time()
             with TracyZone("stage_gating"):
-                # Eval for gating
                 next_net = i + 1
                 panel_nn_rate = 0
                 panel_draw_rate = 0
@@ -1523,7 +1316,8 @@ if __name__ == "__main__":
                     panel, desc=f"Pitting against Panel {panel}", leave=False
                 ):
                     nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy, gate_mpt, gate_vm = play_past(
-                        Game, nn_compare_mcts_depth, next_net, gate_net, GATE_COMPARE_BATCH_SIZE
+                        config, paths, experiment_name,
+                        config.compare_mcts_depth, next_net, gate_net, config.gate_compare_batch_size
                     )
                     panel_nn_rate += nn_rate
                     panel_draw_rate += draw_rate
@@ -1536,54 +1330,13 @@ if __name__ == "__main__":
                     wr[gate_net, next_net] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
                     gc.collect()
                     if gate_net == current_best:
-                        run.track(
-                            nn_rate,
-                            name="win_rate",
-                            epoch=next_net,
-                            step=total_train_steps,
-                            context={"vs": "best", "from": "all_games"},
-                        )
-                        run.track(
-                            draw_rate,
-                            name="draw_rate",
-                            epoch=next_net,
-                            step=total_train_steps,
-                            context={"vs": "best", "from": "all_games"},
-                        )
-                        run.track(
-                            game_length,
-                            name="average_game_length",
-                            epoch=next_net,
-                            context={"vs": "best"},
-                        )
-                        run.track(
-                            gate_depth,
-                            name="avg_leaf_depth",
-                            epoch=next_net,
-                            step=total_train_steps,
-                            context={"vs": "best", "search": "full"},
-                        )
-                        run.track(
-                            gate_entropy,
-                            name="search_entropy",
-                            epoch=next_net,
-                            step=total_train_steps,
-                            context={"vs": "best", "search": "full"},
-                        )
-                        run.track(
-                            gate_mpt,
-                            name="moves_per_turn",
-                            epoch=next_net,
-                            step=total_train_steps,
-                            context={"vs": "best"},
-                        )
-                        run.track(
-                            gate_vm,
-                            name="avg_valid_moves",
-                            epoch=next_net,
-                            step=total_train_steps,
-                            context={"vs": "best"},
-                        )
+                        run.track(nn_rate, name="win_rate", epoch=next_net, step=total_train_steps, context={"vs": "best", "from": "all_games"})
+                        run.track(draw_rate, name="draw_rate", epoch=next_net, step=total_train_steps, context={"vs": "best", "from": "all_games"})
+                        run.track(game_length, name="average_game_length", epoch=next_net, context={"vs": "best"})
+                        run.track(gate_depth, name="avg_leaf_depth", epoch=next_net, step=total_train_steps, context={"vs": "best", "search": "full"})
+                        run.track(gate_entropy, name="search_entropy", epoch=next_net, step=total_train_steps, context={"vs": "best", "search": "full"})
+                        run.track(gate_mpt, name="moves_per_turn", epoch=next_net, step=total_train_steps, context={"vs": "best"})
+                        run.track(gate_vm, name="avg_valid_moves", epoch=next_net, step=total_train_steps, context={"vs": "best"})
                         best_win_rate = nn_rate + draw_rate / Game.NUM_PLAYERS()
                         postfix["vs best"] = best_win_rate
                         pbar.set_postfix(postfix)
@@ -1594,100 +1347,37 @@ if __name__ == "__main__":
                 panel_entropy /= len(panel)
                 panel_mpt /= len(panel)
                 panel_vm /= len(panel)
-                run.track(
-                    panel_nn_rate,
-                    name="win_rate",
-                    epoch=next_net,
-                    step=total_train_steps,
-                    context={"vs": "panel", "from": "all_games"},
-                )
-                run.track(
-                    panel_draw_rate,
-                    name="draw_rate",
-                    epoch=next_net,
-                    step=total_train_steps,
-                    context={"vs": "panel", "from": "all_games"},
-                )
-                run.track(
-                    panel_game_length,
-                    name="average_game_length",
-                    epoch=next_net,
-                    context={"vs": "panel"},
-                )
-                run.track(
-                    panel_depth,
-                    name="avg_leaf_depth",
-                    epoch=next_net,
-                    step=total_train_steps,
-                    context={"vs": "panel"},
-                )
-                run.track(
-                    panel_entropy,
-                    name="search_entropy",
-                    epoch=next_net,
-                    step=total_train_steps,
-                    context={"vs": "panel"},
-                )
-                run.track(
-                    panel_mpt,
-                    name="moves_per_turn",
-                    epoch=next_net,
-                    step=total_train_steps,
-                    context={"vs": "panel"},
-                )
-                run.track(
-                    panel_vm,
-                    name="avg_valid_moves",
-                    epoch=next_net,
-                    step=total_train_steps,
-                    context={"vs": "panel"},
-                )
+                run.track(panel_nn_rate, name="win_rate", epoch=next_net, step=total_train_steps, context={"vs": "panel", "from": "all_games"})
+                run.track(panel_draw_rate, name="draw_rate", epoch=next_net, step=total_train_steps, context={"vs": "panel", "from": "all_games"})
+                run.track(panel_game_length, name="average_game_length", epoch=next_net, context={"vs": "panel"})
+                run.track(panel_depth, name="avg_leaf_depth", epoch=next_net, step=total_train_steps, context={"vs": "panel"})
+                run.track(panel_entropy, name="search_entropy", epoch=next_net, step=total_train_steps, context={"vs": "panel"})
+                run.track(panel_mpt, name="moves_per_turn", epoch=next_net, step=total_train_steps, context={"vs": "panel"})
+                run.track(panel_vm, name="avg_valid_moves", epoch=next_net, step=total_train_steps, context={"vs": "panel"})
                 panel_win_rate = panel_nn_rate + panel_draw_rate / Game.NUM_PLAYERS()
                 postfix["vs panel"] = panel_win_rate
-                # Scale panel win rate based on size of the panel.
-                panel_ratio = len(panel) / GATING_PANEL_SIZE
-                wanted_panel_win_rate = (GATING_PANEL_WIN_RATE * panel_ratio) + (
-                    GATING_BEST_WIN_RATE * (1.0 - panel_ratio)
+                panel_ratio = len(panel) / config.gating_panel_size
+                wanted_panel_win_rate = (config.gating_panel_win_rate * panel_ratio) + (
+                    config.gating_best_win_rate * (1.0 - panel_ratio)
                 )
                 if (
                     panel_win_rate > wanted_panel_win_rate
-                    and best_win_rate > GATING_BEST_WIN_RATE
+                    and best_win_rate > config.gating_best_win_rate
                 ):
                     current_best = next_net
                     postfix["best"] = current_best
                     pbar.set_postfix(postfix)
                     panel.append(current_best)
-                    while len(panel) > GATING_PANEL_SIZE:
+                    while len(panel) > config.gating_panel_size:
                         panel = panel[1:]
-                np.savetxt(os.path.join("data", "win_rate.csv"), wr, delimiter=",")
+                np.savetxt(os.path.join(experiment_dir, "win_rate.csv"), wr, delimiter=",")
             stage_times["gating"] = time.time() - stage_start
 
-            # Log time percentages and raw times for each stage
             total_time = time.time() - iteration_start
             for stage_name, stage_time in stage_times.items():
                 percentage = (stage_time / total_time) * 100.0
-                run.track(
-                    percentage,
-                    name="time_percent",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"stage": stage_name},
-                )
-                run.track(
-                    stage_time,
-                    name="time_seconds",
-                    epoch=i,
-                    step=total_train_steps,
-                    context={"stage": stage_name},
-                )
-            # Log total iteration time
-            run.track(
-                total_time,
-                name="time_seconds",
-                epoch=i,
-                step=total_train_steps,
-                context={"stage": "total"},
-            )
+                run.track(percentage, name="time_percent", epoch=i, step=total_train_steps, context={"stage": stage_name})
+                run.track(stage_time, name="time_seconds", epoch=i, step=total_train_steps, context={"stage": stage_name})
+            run.track(total_time, name="time_seconds", epoch=i, step=total_train_steps, context={"stage": "total"})
 
-            # Mark end of training iteration for Tracy
             tracy_frame()

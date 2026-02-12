@@ -1,12 +1,16 @@
 from collections import namedtuple
+import io
 import os
 import torch
 from torch import optim, nn
 from torch.autograd import profiler
 from tqdm import tqdm
 import numpy as np
+import zstandard as zstd
 import alphazero
 from tracy_utils import tracy_zone
+
+ZSTD_LEVEL = 3
 
 # This is an autotuner for network speed.
 torch.backends.cudnn.benchmark = True
@@ -424,17 +428,26 @@ class NNWrapper:
         # Convert NNArgs namedtuple to dict for safe serialization
         args_dict = self.args._asdict()
 
+        # Convert model weights to bfloat16 for smaller checkpoints
+        state_dict_f16 = {
+            k: v.bfloat16() if v.is_floating_point() else v
+            for k, v in self.nnet.state_dict().items()
+        }
+
+        buffer = io.BytesIO()
         torch.save(
             {
-                "state_dict": self.nnet.state_dict(),
+                "state_dict": state_dict_f16,
                 "opt_state": self.optimizer.state_dict(),
                 "sch_state": self.scheduler.state_dict(),
                 "args": args_dict,  # Save as dict, not namedtuple
                 "game": self.game,
-                "version": "2.0",  # Add version for compatibility
+                "version": "3.0",  # zstd-compressed, bfloat16 weights
             },
-            filepath,
+            buffer,
         )
+        with open(filepath, 'wb') as f:
+            f.write(zstd.ZstdCompressor(level=ZSTD_LEVEL, threads=-1).compress(buffer.getvalue()))
 
     @staticmethod
     @tracy_zone
@@ -451,9 +464,15 @@ class NNWrapper:
         # Register safe globals for the game class
         torch.serialization.add_safe_globals([Game])
 
-        # Load with map_location for device flexibility
+        # Try zstd decompression first, fall back to legacy uncompressed
         device = get_device()
-        checkpoint = torch.load(filepath, map_location=device, weights_only=True)
+        with open(filepath, 'rb') as f:
+            raw = f.read()
+        try:
+            data = zstd.ZstdDecompressor().decompress(raw)
+            checkpoint = torch.load(io.BytesIO(data), map_location=device, weights_only=True)
+        except zstd.ZstdError:
+            checkpoint = torch.load(io.BytesIO(raw), map_location=device, weights_only=True)
 
         assert checkpoint["game"] == Game, (
             f"Mismatching game type when loading model: got: {checkpoint['game'].__name__} want: {Game.__name__}"
@@ -463,7 +482,12 @@ class NNWrapper:
         args = NNArgs(**checkpoint["args"])
 
         net = NNWrapper(checkpoint["game"], args)
-        net.nnet.load_state_dict(checkpoint["state_dict"])
+        # Convert bfloat16 weights back to float32 for training
+        state_dict = {
+            k: v.float() if v.is_floating_point() else v
+            for k, v in checkpoint["state_dict"].items()
+        }
+        net.nnet.load_state_dict(state_dict)
         net.optimizer.load_state_dict(checkpoint["opt_state"])
         net.scheduler.load_state_dict(checkpoint["sch_state"])
         return net

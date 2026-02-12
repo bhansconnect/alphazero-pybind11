@@ -6,6 +6,7 @@ build-backend = "mesonpy"
 name = "alphazero"
 version = "0.1.0"
 requires-python = ">=3.10"
+dependencies = ["zstandard>=0.19.0"]
 
 [project.optional-dependencies]
 dev = ["ninja", "meson", "pybind11"]

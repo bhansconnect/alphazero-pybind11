@@ -1,12 +1,19 @@
 game: star_gambit_battle
+
 depth: 4
 channels: 16
 kernel_size: 3
+
 star_gambit_spatial: true
-selfplay_mcts_depth: 300
-fast_mcts_depth: 50
-compare_mcts_depth: 100
-self_play_batch_size: 64
-expected_opening_length: 16
+selfplay_mcts_depth: 120
+fast_mcts_depth: 30
+compare_mcts_depth: 30
+
+self_play_batch_size: 1024
+self_play_chunks: 1
+
 temp_decay_half_life: 12
+gating_panel_win_rate: 0.51
+gating_best_win_rate: 0.51
+
 iterations: 400

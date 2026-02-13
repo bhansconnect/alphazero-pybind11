@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import alphazero
-from config import TrainConfig, GAME_REGISTRY, load_config
+from config import TrainConfig, GAME_REGISTRY, load_config, find_latest_checkpoint
 
 
 # ---------------------------------------------------------------------------
@@ -34,8 +34,14 @@ def test_default_config():
     assert config.self_play_batch_size == 256
     assert config.train_batch_size == 1024
     assert config.iterations == 200
-    assert config.start == 0
-    assert config.bootstrap_from == ""
+    assert config.lr_schedule == "constant"
+    assert config.lr_steps == []
+    assert config.lr_drop_factor == 0.3
+    assert config.lr_patience == 5
+    assert config.lr_min_iter == 50
+    assert config.lr_min_between_drops == 30
+    assert config.lr_max_drops == 3
+    assert config.bootstrap_compare_past == 5
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +70,7 @@ def test_yaml_loading_star_gambit():
     assert config.channels == 16  # overridden
     assert config.kernel_size == 3  # overridden
     assert config.star_gambit_spatial is True  # overridden
-    assert config.selfplay_mcts_depth == 300  # overridden
+    assert config.selfplay_mcts_depth == 120  # overridden
     assert config.gating_panel_size == 1  # default preserved
 
 
@@ -104,14 +110,16 @@ def test_bool_cli_override_true():
 # ---------------------------------------------------------------------------
 
 
-def test_unknown_yaml_key_raises():
-    """Unknown key in YAML raises ValueError."""
+def test_unknown_yaml_key_warns(capsys):
+    """Unknown key in YAML prints warning and is skipped."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         f.write("game: connect4\nbogus_key: 42\n")
         f.flush()
         try:
-            with pytest.raises(ValueError, match="Unknown config key in YAML"):
-                load_config(f.name, {})
+            config = load_config(f.name, {})
+            assert config.game == "connect4"
+            captured = capsys.readouterr()
+            assert "ignoring unknown config key in YAML: bogus_key" in captured.out
         finally:
             os.unlink(f.name)
 
@@ -217,13 +225,6 @@ def test_experiment_dir_explicit_name(tmp_path):
     assert "connect4" in result
 
 
-def test_experiment_dir_resume_exact(tmp_path):
-    """Resume (start>0) returns exact path, no auto-suffix."""
-    config = TrainConfig(start=50)
-    result = config.resolve_experiment_dir(base=str(tmp_path))
-    assert result.endswith("densenet-4d-12c-5k-100sims")
-
-
 # ---------------------------------------------------------------------------
 # Path resolution
 # ---------------------------------------------------------------------------
@@ -260,3 +261,210 @@ def test_config_save_and_reload(tmp_path):
     assert reloaded.depth == config.depth
     assert reloaded.channels == config.channels
     assert reloaded.star_gambit_spatial == config.star_gambit_spatial
+
+
+# ---------------------------------------------------------------------------
+# LR schedule config
+# ---------------------------------------------------------------------------
+
+
+def test_lr_schedule_step_from_yaml(tmp_path):
+    """Step LR schedule loads lr_steps from YAML."""
+    yaml_content = (
+        "game: connect4\n"
+        "lr_schedule: step\n"
+        "lr_steps:\n"
+        "  - [0, 0.01]\n"
+        "  - [250, 0.003]\n"
+        "  - [750, 0.001]\n"
+    )
+    yaml_path = str(tmp_path / "step.yaml")
+    with open(yaml_path, "w") as f:
+        f.write(yaml_content)
+
+    config = load_config(yaml_path, {})
+    assert config.lr_schedule == "step"
+    assert config.lr_steps == [[0, 0.01], [250, 0.003], [750, 0.001]]
+
+
+def test_lr_schedule_adaptive_from_yaml(tmp_path):
+    """Adaptive LR schedule fields load from YAML."""
+    yaml_content = (
+        "game: connect4\n"
+        "lr: 0.01\n"
+        "lr_schedule: adaptive\n"
+        "lr_drop_factor: 0.5\n"
+        "lr_patience: 10\n"
+        "lr_min_iter: 100\n"
+        "lr_min_between_drops: 50\n"
+        "lr_max_drops: 2\n"
+    )
+    yaml_path = str(tmp_path / "adaptive.yaml")
+    with open(yaml_path, "w") as f:
+        f.write(yaml_content)
+
+    config = load_config(yaml_path, {})
+    assert config.lr_schedule == "adaptive"
+    assert config.lr_drop_factor == 0.5
+    assert config.lr_patience == 10
+    assert config.lr_min_iter == 100
+    assert config.lr_min_between_drops == 50
+    assert config.lr_max_drops == 2
+
+
+def test_lr_schedule_save_reload(tmp_path):
+    """LR schedule fields survive save/reload cycle."""
+    config = TrainConfig(
+        lr_schedule="step",
+        lr_steps=[[0, 0.01], [100, 0.003]],
+    )
+    save_path = str(tmp_path / "config.yaml")
+    config.save(save_path)
+
+    reloaded = load_config(save_path, {})
+    assert reloaded.lr_schedule == "step"
+    assert reloaded.lr_steps == [[0, 0.01], [100, 0.003]]
+
+
+# ---------------------------------------------------------------------------
+# Arg parsing (train.py parse_args)
+# ---------------------------------------------------------------------------
+
+
+from unittest.mock import patch
+from train import parse_args
+
+
+def _parse(argv):
+    """Helper: call parse_args with given argv (excluding 'train.py')."""
+    with patch("sys.argv", ["train.py"] + argv):
+        return parse_args()
+
+
+def test_parse_config_positional():
+    """Positional config path is extracted."""
+    args, overrides = _parse(["configs/connect4.yaml"])
+    assert args.config == "configs/connect4.yaml"
+    assert args.resume is None
+    assert args.bootstrap is None
+    assert overrides == {}
+
+
+def test_parse_config_with_overrides():
+    """Config + overrides parse correctly."""
+    args, overrides = _parse(["configs/connect4.yaml", "--depth", "8", "--cpuct", "2.0"])
+    assert args.config == "configs/connect4.yaml"
+    assert overrides == {"depth": "8", "cpuct": "2.0"}
+
+
+def test_parse_resume():
+    """--resume is parsed, no config."""
+    args, overrides = _parse(["--resume", "data/connect4/exp1"])
+    assert args.config is None
+    assert args.resume == "data/connect4/exp1"
+    assert overrides == {}
+
+
+def test_parse_resume_with_overrides():
+    """--resume + overrides parse correctly."""
+    args, overrides = _parse(["--resume", "data/connect4/exp1", "--iterations", "400"])
+    assert args.resume == "data/connect4/exp1"
+    assert args.config is None
+    assert overrides == {"iterations": "400"}
+
+
+def test_parse_bootstrap():
+    """--bootstrap is parsed, no config."""
+    args, overrides = _parse(["--bootstrap", "data/connect4/exp1"])
+    assert args.config is None
+    assert args.bootstrap == "data/connect4/exp1"
+    assert overrides == {}
+
+
+def test_parse_bootstrap_with_overrides():
+    """--bootstrap + overrides don't consume values as config."""
+    args, overrides = _parse([
+        "--bootstrap", "data/connect4/exp1",
+        "--selfplay_mcts_depth", "30",
+        "--fast-mcts-depth", "1",
+    ])
+    assert args.config is None
+    assert args.bootstrap == "data/connect4/exp1"
+    assert overrides == {"selfplay_mcts_depth": "30", "fast_mcts_depth": "1"}
+
+
+def test_parse_hyphen_underscore_normalization():
+    """Override keys normalize hyphens to underscores."""
+    args, overrides = _parse([
+        "configs/connect4.yaml",
+        "--self-play-batch-size", "128",
+        "--temp-decay-half-life", "20",
+    ])
+    assert overrides == {"self_play_batch_size": "128", "temp_decay_half_life": "20"}
+
+
+def test_parse_bool_flag_no_value():
+    """Boolean flag without value defaults to 'true'."""
+    args, overrides = _parse(["configs/connect4.yaml", "--dense-net"])
+    assert overrides == {"dense_net": "true"}
+
+
+def test_parse_bootstrap_with_experiment():
+    """--bootstrap + --experiment are both parsed."""
+    args, overrides = _parse([
+        "--bootstrap", "data/connect4/exp1",
+        "--experiment", "my-new-run",
+        "--channels", "32",
+    ])
+    assert args.bootstrap == "data/connect4/exp1"
+    assert args.experiment == "my-new-run"
+    assert args.config is None
+    assert overrides == {"channels": "32"}
+
+
+# ---------------------------------------------------------------------------
+# find_latest_checkpoint
+# ---------------------------------------------------------------------------
+
+
+def test_find_latest_checkpoint(tmp_path):
+    """find_latest_checkpoint returns highest iteration number from checkpoint files."""
+    cp_dir = tmp_path / "checkpoint"
+    cp_dir.mkdir()
+    (cp_dir / "0005-net.pt").touch()
+    (cp_dir / "0010-net.pt").touch()
+    (cp_dir / "0003-net.pt").touch()
+    assert find_latest_checkpoint(str(cp_dir)) == 10
+
+
+def test_find_latest_checkpoint_empty(tmp_path):
+    """find_latest_checkpoint returns 0 for empty directory."""
+    cp_dir = tmp_path / "checkpoint"
+    cp_dir.mkdir()
+    assert find_latest_checkpoint(str(cp_dir)) == 0
+
+
+# ---------------------------------------------------------------------------
+# load_config warn parameter
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_warn_false_suppresses_warnings(tmp_path, capsys):
+    """warn=False suppresses unknown key warnings."""
+    yaml_path = str(tmp_path / "stale.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\nlr_milestone: 100\nbootstrap_from: foo\n")
+    load_config(yaml_path, {}, warn=False)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+
+
+def test_stale_keys_do_not_corrupt_config(tmp_path):
+    """Stale YAML keys are not set as attributes on the config object."""
+    yaml_path = str(tmp_path / "stale.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\nlr_milestone: 100\nbootstrap_from: foo\n")
+    config = load_config(yaml_path, {}, warn=False)
+    assert config.game == "connect4"
+    assert not hasattr(config, "lr_milestone")
+    assert not hasattr(config, "bootstrap_from")

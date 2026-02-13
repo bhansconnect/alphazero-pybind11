@@ -4,8 +4,10 @@ Provides TrainConfig dataclass with YAML loading, CLI overrides,
 game registry, experiment directory resolution, and path management.
 """
 
+import glob
 import os
-from dataclasses import dataclass, fields, asdict
+import re
+from dataclasses import dataclass, field, asdict
 
 import yaml
 import alphazero
@@ -46,7 +48,6 @@ class TrainConfig:
     compare_mcts_depth: int = 50
 
     # Temperature
-    expected_opening_length: int = 10
     self_play_temp: float = 1.0
     eval_temp: float = 0.5
     final_temp: float = 0.2
@@ -61,8 +62,16 @@ class TrainConfig:
     train_batch_size: int = 1024
     train_sample_rate: int = 1
     lr: float = 0.01
-    lr_milestone: int = 150
     cv: float = 1.5
+
+    # LR schedule: "constant", "step", or "adaptive"
+    lr_schedule: str = "constant"
+    lr_steps: list = field(default_factory=list)  # for step mode: [[0, 0.01], [250, 0.003]]
+    lr_drop_factor: float = 0.3
+    lr_patience: int = 5
+    lr_min_iter: int = 50
+    lr_min_between_drops: int = 30
+    lr_max_drops: int = 3
 
     # Gating
     gating_panel_size: int = 1
@@ -93,18 +102,15 @@ class TrainConfig:
 
     # Iteration control
     iterations: int = 200
-    start: int = 0
     compare_past: int = 20
 
     # Reservoir
     reservoir_recency_decay: float = 0.99
 
-    # Bootstrap
-    bootstrap_from: str = ""  # Path to source experiment dir (empty = no bootstrap)
-
     # Bootstrap training (only used when architecture differs from source)
     bootstrap_full_passes: int = 5
     bootstrap_window_passes: int = 2
+    bootstrap_compare_past: int = 5
 
     @property
     def network_name(self) -> str:
@@ -137,7 +143,6 @@ class TrainConfig:
         - Otherwise auto-derive from config and add integer suffix if collision:
           base/{game}/densenet-4d-16c-3k-300sims/
           base/{game}/densenet-4d-16c-3k-300sims-01/  (if first exists)
-        - When resuming (start > 0), require exact match (no auto-suffix).
         """
         game_dir = os.path.join(base, self.game)
 
@@ -146,10 +151,6 @@ class TrainConfig:
 
         name = self.auto_experiment_name
         path = os.path.join(game_dir, name)
-
-        if self.start > 0:
-            # Resuming: require exact match
-            return path
 
         if not os.path.exists(path):
             return path
@@ -178,7 +179,22 @@ class TrainConfig:
             yaml.dump(asdict(self), f, default_flow_style=False, sort_keys=False)
 
 
-def load_config(yaml_path: str, cli_overrides: dict) -> TrainConfig:
+def find_latest_checkpoint(checkpoint_dir):
+    """Scan checkpoint dir for highest iteration number, return it (0 if none)."""
+    pattern = os.path.join(checkpoint_dir, "*.pt")
+    files = glob.glob(pattern)
+    if not files:
+        return 0
+    best = 0
+    for f in files:
+        basename = os.path.basename(f)
+        match = re.match(r"(\d+)-", basename)
+        if match:
+            best = max(best, int(match.group(1)))
+    return best
+
+
+def load_config(yaml_path: str, cli_overrides: dict, warn=True) -> TrainConfig:
     """Load config from YAML file with CLI overrides.
 
     yaml_path: path to YAML config file
@@ -191,14 +207,18 @@ def load_config(yaml_path: str, cli_overrides: dict) -> TrainConfig:
             yaml_data = yaml.safe_load(f) or {}
         for key, val in yaml_data.items():
             if not hasattr(config, key):
-                raise ValueError(f"Unknown config key in YAML: {key}")
+                if warn:
+                    print(f"Warning: ignoring unknown config key in YAML: {key}")
+                continue
             setattr(config, key, val)
 
     for key, val in cli_overrides.items():
         if not hasattr(config, key):
             raise ValueError(f"Unknown config key: {key}")
         field_type = type(getattr(config, key))
-        if field_type == bool:
+        if field_type is list:
+            continue  # lists can't be set via CLI --key val
+        elif field_type is bool:
             setattr(config, key, str(val).lower() in ("true", "1", "yes"))
         else:
             setattr(config, key, field_type(val))

@@ -121,11 +121,10 @@ def test_bootstrap_same_arch(tmp_path):
         {
             **FAST_OVERRIDES,
             "iterations": "4",  # Will run iterations 2 & 3 after bootstrap at iter 2
-            "bootstrap_from": source_dir,
         },
     )
     new_dir = str(tmp_path / "data" / "connect4" / "bootstrapped")
-    game_runner.main(bootstrap_config, new_dir, aim_repo=aim_repo)
+    game_runner.main(bootstrap_config, new_dir, aim_repo=aim_repo, bootstrap_from=source_dir)
 
     # --- Phase 3: Verify bootstrap artifacts ---
     new_ckpt = tmp_path / "data" / "connect4" / "bootstrapped" / "checkpoint"
@@ -134,11 +133,8 @@ def test_bootstrap_same_arch(tmp_path):
     # Should have: initial + copied source + newly trained ones
     assert len(new_pts) >= 3, f"Expected >= 3 checkpoints, got {len(new_pts)}"
 
-    # config.yaml should record bootstrap_from
     new_config_path = tmp_path / "data" / "connect4" / "bootstrapped" / "config.yaml"
     assert new_config_path.exists()
-    new_config = load_config(str(new_config_path), {})
-    assert new_config.bootstrap_from == source_dir
 
     # elo.csv should exist with data from source + new iterations
     new_elo = tmp_path / "data" / "connect4" / "bootstrapped" / "elo.csv"

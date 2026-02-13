@@ -1,5 +1,6 @@
 import glob
 import io
+import json
 import os
 from collections import namedtuple
 import math
@@ -15,7 +16,7 @@ import gc
 import zstandard as zstd
 import alphazero
 from neural_net import get_device
-from config import load_config
+from config import load_config, find_latest_checkpoint
 from tracy_utils import tracy_zone, tracy_thread, TracyZone, tracy_frame
 
 ZSTD_LEVEL = 3
@@ -610,7 +611,7 @@ def iteration_loss(config, paths, experiment_name, iteration):
 
 
 @tracy_zone
-def train(config, paths, experiment_name, iteration, hist_size, run, total_train_steps):
+def train(config, paths, experiment_name, iteration, hist_size, run, total_train_steps, lr=None):
     import neural_net
 
     Game = config.Game
@@ -638,6 +639,8 @@ def train(config, paths, experiment_name, iteration, hist_size, run, total_train
     nn = neural_net.NNWrapper.load_checkpoint(
         Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
     )
+    if lr is not None:
+        nn.set_lr(lr)
     steps_to_train = int(math.ceil(average_generation / bs * config.train_sample_rate))
     v_loss, pi_loss = nn.train(
         dataloader, steps_to_train, run, iteration, total_train_steps
@@ -983,13 +986,43 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
     return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm
 
 
-def main(config, experiment_dir, aim_repo=None):
+def get_lr(config, iteration, lr_state):
+    """Compute learning rate for the current iteration."""
+    if config.lr_schedule == "constant":
+        return config.lr
+    elif config.lr_schedule == "step":
+        lr = config.lr_steps[0][1] if config.lr_steps else config.lr
+        for step_iter, step_lr in config.lr_steps:
+            if iteration >= step_iter:
+                lr = step_lr
+        return lr
+    elif config.lr_schedule == "adaptive":
+        lr = lr_state['current_lr']
+        can_drop = (
+            iteration >= config.lr_min_iter
+            and iteration - lr_state['last_drop_iter'] >= config.lr_min_between_drops
+            and (config.lr_max_drops == 0 or lr_state['num_drops'] < config.lr_max_drops)
+            and iteration - lr_state['last_best_iter'] >= config.lr_patience
+        )
+        if can_drop:
+            lr *= config.lr_drop_factor
+            lr_state['num_drops'] += 1
+            lr_state['last_drop_iter'] = iteration
+            lr_state['current_lr'] = lr
+        return lr
+    else:
+        raise ValueError(f"Unknown lr_schedule: {config.lr_schedule}")
+
+
+def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
     """Main training loop.
 
     Args:
         config: TrainConfig instance with all training parameters.
         experiment_dir: Path to experiment directory (e.g. data/connect4/densenet-4d-12c-5k-100sims/).
+        start: Iteration to resume from (0 = fresh start).
         aim_repo: Path for aim logging directory. Default None uses project root.
+        bootstrap_from: Path to source experiment dir to bootstrap from (empty = no bootstrap).
     """
     import neural_net
 
@@ -1009,39 +1042,43 @@ def main(config, experiment_dir, aim_repo=None):
         nnargs = neural_net.NNArgs(
             num_channels=config.channels,
             depth=config.depth,
-            lr_milestone=config.lr_milestone,
-            dense_net=config.dense_net,
             kernel_size=config.kernel_size,
-            star_gambit_spatial=config.star_gambit_spatial,
+            dense_net=config.dense_net,
             lr=config.lr,
             cv=config.cv,
+            star_gambit_spatial=config.star_gambit_spatial,
         )
         nn = neural_net.NNWrapper(Game, nnargs)
         nn.save_checkpoint(paths["checkpoint"], f"0000-{experiment_name}.pt")
 
     try:
         import aim
-        run = aim.Run(experiment=experiment_name, repo=aim_repo)
-        run.name = config.game
-        run["hparams"] = {
-            "network": config.network_name,
-            "panel_size": config.gating_panel_size,
-            "panel_win_rate": config.gating_panel_win_rate,
-            "best_win_rate": config.gating_best_win_rate,
-            "expected_opening_length": config.expected_opening_length,
-            "cpuct": config.cpuct,
-            "fpu_reduction": config.fpu_reduction,
-            "self_play_temp": config.self_play_temp,
-            "eval_temp": config.eval_temp,
-            "final_temp": config.final_temp,
-            "training_sample_rate": config.train_sample_rate,
-            "depth": config.depth,
-            "channels": config.channels,
-            "kernel_size": config.kernel_size,
-            "lr_milestone": config.lr_milestone,
-            "full_mcts_depth": config.selfplay_mcts_depth,
-            "fast_mcts_depth": config.fast_mcts_depth,
-        }
+        aim_hash_path = os.path.join(experiment_dir, ".aim_run_hash")
+        if start > 0 and os.path.exists(aim_hash_path):
+            run = aim.Run(run_hash=open(aim_hash_path).read().strip(), repo=aim_repo)
+        else:
+            run = aim.Run(experiment=experiment_name, repo=aim_repo)
+            run.name = config.game
+            run["hparams"] = {
+                "network": config.network_name,
+                "panel_size": config.gating_panel_size,
+                "panel_win_rate": config.gating_panel_win_rate,
+                "best_win_rate": config.gating_best_win_rate,
+                "cpuct": config.cpuct,
+                "fpu_reduction": config.fpu_reduction,
+                "self_play_temp": config.self_play_temp,
+                "eval_temp": config.eval_temp,
+                "final_temp": config.final_temp,
+                "training_sample_rate": config.train_sample_rate,
+                "depth": config.depth,
+                "channels": config.channels,
+                "kernel_size": config.kernel_size,
+                "lr_schedule": config.lr_schedule,
+                "full_mcts_depth": config.selfplay_mcts_depth,
+                "fast_mcts_depth": config.fast_mcts_depth,
+            }
+        with open(aim_hash_path, "w") as f:
+            f.write(run.hash)
     except ImportError:
         print("aim is used for nice web logging with graphs. I would advise `pip install aim`.")
         print("Using a dummy logger for now that does nothing.\n")
@@ -1052,30 +1089,37 @@ def main(config, experiment_dir, aim_repo=None):
 
         run = DummyRun()
 
-    total_agents = config.iterations + 1  # + base
-
-    start = config.start
+    # LR state for adaptive schedule
+    lr_state_path = os.path.join(experiment_dir, "lr_state.json")
 
     if start == 0:
         create_init_net()
+
+        # Read bootstrap source size from checkpoints (ground truth)
+        source_n = 0
+        if bootstrap_from:
+            source_checkpoint_dir = os.path.join(bootstrap_from, "checkpoint")
+            source_n = find_latest_checkpoint(source_checkpoint_dir)
+            if source_n == 0:
+                raise RuntimeError(f"No checkpoints found in bootstrap source: {bootstrap_from}")
+
+        total_agents = max(config.iterations, source_n) + 1
         wr = np.empty((total_agents, total_agents))
         wr[:] = np.nan
         elo = np.zeros(total_agents)
         current_best = 0
         total_train_steps = 0
+        lr_state = {
+            'current_lr': config.lr,
+            'num_drops': 0,
+            'last_drop_iter': -config.lr_min_between_drops,
+            'last_best_iter': 0,
+        }
 
         # Handle bootstrap from existing experiment
-        if config.bootstrap_from:
-            source_dir = config.bootstrap_from
+        if bootstrap_from:
+            source_dir = bootstrap_from
             source_config_path = os.path.join(source_dir, "config.yaml")
-
-            # Determine source final iteration from elo.csv
-            source_elo_path = os.path.join(source_dir, "elo.csv")
-            if os.path.exists(source_elo_path):
-                source_elo = np.genfromtxt(source_elo_path, delimiter=",")
-                source_n = len(source_elo)
-            else:
-                raise RuntimeError(f"No elo.csv in bootstrap source: {source_dir}")
 
             source_paths = config.resolve_paths(source_dir)
 
@@ -1088,18 +1132,20 @@ def main(config, experiment_dir, aim_repo=None):
                     if os.path.exists(src):
                         shutil.copy2(src, os.path.join(paths["reservoir"], fname))
 
-            # Copy elo/wr from source
+            # Copy elo/wr from source (if available)
+            source_elo_path = os.path.join(source_dir, "elo.csv")
             source_wr_path = os.path.join(source_dir, "win_rate.csv")
-            if os.path.exists(source_wr_path):
+            if os.path.exists(source_elo_path) and os.path.exists(source_wr_path):
+                source_elo = np.genfromtxt(source_elo_path, delimiter=",")
                 source_wr = np.genfromtxt(source_wr_path, delimiter=",")
-                copy_size = min(source_n, total_agents)
+                copy_size = min(len(source_elo), total_agents)
                 wr[:copy_size, :copy_size] = source_wr[:copy_size, :copy_size]
                 elo[:copy_size] = source_elo[:copy_size]
 
             # Check if same architecture
             same_arch = True
             if os.path.exists(source_config_path):
-                source_cfg = load_config(source_config_path, {})
+                source_cfg = load_config(source_config_path, {}, warn=False)
                 same_arch = (
                     source_cfg.depth == config.depth
                     and source_cfg.channels == config.channels
@@ -1143,7 +1189,7 @@ def main(config, experiment_dir, aim_repo=None):
             start = source_n
 
             # Calibrate bootstrap network ELO against source networks
-            compare_start = max(0, source_n - config.compare_past)
+            compare_start = max(0, source_n - config.bootstrap_compare_past)
             for past_iter in range(compare_start, source_n):
                 dest_cp = os.path.join(paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt")
                 if not os.path.exists(dest_cp):
@@ -1176,6 +1222,7 @@ def main(config, experiment_dir, aim_repo=None):
             delimiter=",",
         )
     else:
+        total_agents = config.iterations + 1
         tmp_wr = np.genfromtxt(os.path.join(experiment_dir, "win_rate.csv"), delimiter=",")
         wr = np.empty((total_agents, total_agents))
         wr[:] = np.nan
@@ -1189,6 +1236,16 @@ def main(config, experiment_dir, aim_repo=None):
         total_train_steps = int(
             np.genfromtxt(os.path.join(experiment_dir, "total_train_steps.txt"))
         )
+        if os.path.exists(lr_state_path):
+            with open(lr_state_path) as f:
+                lr_state = json.load(f)
+        else:
+            lr_state = {
+                'current_lr': config.lr,
+                'num_drops': 0,
+                'last_drop_iter': -config.lr_min_between_drops,
+                'last_best_iter': 0,
+            }
 
     postfix = {"best": current_best}
     panel = [current_best]
@@ -1283,14 +1340,18 @@ def main(config, experiment_dir, aim_repo=None):
                 oldest_iteration = max(0, i - hist_size)
                 run.track(hist_size, name="history", epoch=i, step=total_train_steps, context={"type": "window_size"})
                 run.track(oldest_iteration, name="history", epoch=i, step=total_train_steps, context={"type": "oldest_iteration"})
+                lr = get_lr(config, i, lr_state)
+                run.track(lr, name="learning_rate", epoch=i, step=total_train_steps)
                 v_loss, pi_loss, total_train_steps = train(
-                    config, paths, experiment_name, i, hist_size, run, total_train_steps
+                    config, paths, experiment_name, i, hist_size, run, total_train_steps, lr=lr
                 )
                 np.savetxt(
                     os.path.join(experiment_dir, "total_train_steps.txt"),
                     [total_train_steps],
                     delimiter=",",
                 )
+                with open(lr_state_path, 'w') as f:
+                    json.dump(lr_state, f)
                 postfix["vloss"] = v_loss
                 postfix["ploss"] = pi_loss
                 pbar.set_postfix(postfix)
@@ -1367,6 +1428,7 @@ def main(config, experiment_dir, aim_repo=None):
                     and best_win_rate > config.gating_best_win_rate
                 ):
                     current_best = next_net
+                    lr_state['last_best_iter'] = next_net
                     postfix["best"] = current_best
                     pbar.set_postfix(postfix)
                     panel.append(current_best)

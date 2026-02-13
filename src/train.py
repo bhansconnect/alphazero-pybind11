@@ -116,6 +116,9 @@ def main():
         if start == 0:
             print(f"Error: no checkpoints found in {checkpoint_dir}")
             sys.exit(1)
+        if start >= config.iterations:
+            print(f"Error: checkpoint is at iteration {start} but --iterations is {config.iterations}")
+            sys.exit(1)
 
         bootstrap_from = ""
 

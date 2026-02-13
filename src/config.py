@@ -112,6 +112,17 @@ class TrainConfig:
     bootstrap_window_passes: int = 2
     bootstrap_compare_past: int = 5
 
+    def validate(self):
+        if self.game not in GAME_REGISTRY:
+            raise ValueError(f"Unknown game: {self.game}")
+        valid_lr_schedules = {"constant", "step", "adaptive"}
+        if self.lr_schedule not in valid_lr_schedules:
+            raise ValueError(f"Unknown lr_schedule: {self.lr_schedule}")
+        if self.gating_panel_size < 1:
+            raise ValueError(f"gating_panel_size must be >= 1, got {self.gating_panel_size}")
+        if self.iterations < 1:
+            raise ValueError(f"iterations must be >= 1, got {self.iterations}")
+
     @property
     def network_name(self) -> str:
         return "densenet" if self.dense_net else "resnet"
@@ -217,10 +228,13 @@ def load_config(yaml_path: str, cli_overrides: dict, warn=True) -> TrainConfig:
             raise ValueError(f"Unknown config key: {key}")
         field_type = type(getattr(config, key))
         if field_type is list:
-            continue  # lists can't be set via CLI --key val
+            if warn:
+                print(f"Warning: cannot override list field '{key}' via CLI, use YAML instead")
+            continue
         elif field_type is bool:
             setattr(config, key, str(val).lower() in ("true", "1", "yes"))
         else:
             setattr(config, key, field_type(val))
 
+    config.validate()
     return config

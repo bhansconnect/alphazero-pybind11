@@ -139,3 +139,66 @@ def test_bootstrap_same_arch(tmp_path):
     # elo.csv should exist with data from source + new iterations
     new_elo = tmp_path / "data" / "connect4" / "bootstrapped" / "elo.csv"
     assert new_elo.exists()
+
+
+# ---------------------------------------------------------------------------
+# Resume + iterations validation
+# ---------------------------------------------------------------------------
+
+
+def test_resume_iterations_less_than_checkpoint(tmp_path):
+    """Resume with --iterations <= checkpoint iteration should error."""
+    import subprocess
+
+    aim_repo = str(tmp_path / "aim")
+
+    # Create a 2-iteration experiment
+    import game_runner
+    config = load_config(
+        os.path.join(CONFIGS_DIR, "connect4.yaml"),
+        {**FAST_OVERRIDES, "iterations": "2"},
+    )
+    exp_dir = str(tmp_path / "data" / "connect4" / "test-resume")
+    game_runner.main(config, exp_dir, aim_repo=aim_repo)
+
+    # Verify checkpoint at iter 2 exists
+    from config import find_latest_checkpoint
+    cp_dir = os.path.join(exp_dir, "checkpoint")
+    latest = find_latest_checkpoint(cp_dir)
+    assert latest >= 2
+
+    # Now try to resume with iterations <= latest checkpoint
+    result = subprocess.run(
+        ["python", "src/train.py", "--resume", exp_dir, "--iterations", "1"],
+        capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(__file__)),
+    )
+    assert result.returncode != 0
+    assert "checkpoint is at iteration" in result.stderr or "checkpoint is at iteration" in result.stdout
+
+
+def test_resume_iterations_greater_than_checkpoint(tmp_path):
+    """Resume with --iterations > checkpoint iteration should succeed (at least parse)."""
+    import game_runner
+
+    aim_repo = str(tmp_path / "aim")
+
+    # Create a 1-iteration experiment
+    config = load_config(
+        os.path.join(CONFIGS_DIR, "connect4.yaml"),
+        {**FAST_OVERRIDES, "iterations": "1"},
+    )
+    exp_dir = str(tmp_path / "data" / "connect4" / "test-resume-ok")
+    game_runner.main(config, exp_dir, aim_repo=aim_repo)
+
+    # Resume with more iterations should work
+    config2 = load_config(
+        os.path.join(exp_dir, "config.yaml"),
+        {"iterations": "2"},
+    )
+    from config import find_latest_checkpoint
+    start = find_latest_checkpoint(os.path.join(exp_dir, "checkpoint"))
+    assert start >= 1
+    assert start < config2.iterations  # This is the key validation
+
+    # Actually run 1 more iteration
+    game_runner.main(config2, exp_dir, start=start, aim_repo=aim_repo)

@@ -2,6 +2,8 @@ import glob
 import io
 import json
 import os
+import shutil
+import tempfile
 from collections import namedtuple
 import math
 import random
@@ -35,6 +37,19 @@ def load_compressed(path):
     with open(path, 'rb') as f:
         data = zstd.ZstdDecompressor().decompress(f.read())
     return torch.load(io.BytesIO(data), map_location="cpu", weights_only=True).float()
+
+
+def _atomic_save_compressed(tensor, path):
+    """Save tensor to path atomically via temp file."""
+    dir_name = os.path.dirname(path)
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+    os.close(fd)
+    try:
+        save_compressed(tensor, tmp_path)
+        os.replace(tmp_path, path)  # atomic on POSIX
+    except:
+        os.unlink(tmp_path)
+        raise
 
 
 def _load_hist_tensor(path):
@@ -713,10 +728,10 @@ def update_reservoir(config, paths, iteration, hist_size):
         all_pi = all_pi[indices]
         all_iters = all_iters[indices]
 
-    save_compressed(all_c, res_c_path)
-    save_compressed(all_v, os.path.join(reservoir_location, "v.ptz"))
-    save_compressed(all_pi, os.path.join(reservoir_location, "pi.ptz"))
-    save_compressed(all_iters.float(), os.path.join(reservoir_location, "meta.ptz"))
+    _atomic_save_compressed(all_c, res_c_path)
+    _atomic_save_compressed(all_v, os.path.join(reservoir_location, "v.ptz"))
+    _atomic_save_compressed(all_pi, os.path.join(reservoir_location, "pi.ptz"))
+    _atomic_save_compressed(all_iters, os.path.join(reservoir_location, "meta.ptz"))
 
     del new_c, new_v, new_pi, new_iters, all_c, all_v, all_pi, all_iters
     gc.collect()
@@ -1014,6 +1029,15 @@ def get_lr(config, iteration, lr_state):
         raise ValueError(f"Unknown lr_schedule: {config.lr_schedule}")
 
 
+def _default_lr_state(config):
+    return {
+        'current_lr': config.lr,
+        'num_drops': 0,
+        'last_drop_iter': -config.lr_min_between_drops,
+        'last_best_iter': 0,
+    }
+
+
 def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
     """Main training loop.
 
@@ -1109,12 +1133,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         elo = np.zeros(total_agents)
         current_best = 0
         total_train_steps = 0
-        lr_state = {
-            'current_lr': config.lr,
-            'num_drops': 0,
-            'last_drop_iter': -config.lr_min_between_drops,
-            'last_best_iter': 0,
-        }
+        lr_state = _default_lr_state(config)
 
         # Handle bootstrap from existing experiment
         if bootstrap_from:
@@ -1123,14 +1142,16 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             source_paths = config.resolve_paths(source_dir)
 
-            # Copy reservoir
-            import shutil
-            if os.path.exists(os.path.join(source_paths["reservoir"], "canonical.ptz")):
+            # Copy reservoir (all-or-nothing: all 4 files must exist)
+            reservoir_files = ("canonical.ptz", "v.ptz", "pi.ptz", "meta.ptz")
+            source_reservoir = source_paths["reservoir"]
+            if all(os.path.exists(os.path.join(source_reservoir, f)) for f in reservoir_files):
                 os.makedirs(paths["reservoir"], exist_ok=True)
-                for fname in ("canonical.ptz", "v.ptz", "pi.ptz", "meta.ptz"):
-                    src = os.path.join(source_paths["reservoir"], fname)
-                    if os.path.exists(src):
-                        shutil.copy2(src, os.path.join(paths["reservoir"], fname))
+                for fname in reservoir_files:
+                    shutil.copy2(
+                        os.path.join(source_reservoir, fname),
+                        os.path.join(paths["reservoir"], fname),
+                    )
 
             # Copy elo/wr from source (if available)
             source_elo_path = os.path.join(source_dir, "elo.csv")
@@ -1155,12 +1176,14 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 )
 
             if same_arch:
-                # Copy best checkpoint
-                source_checkpoints = sorted(glob.glob(os.path.join(source_paths["checkpoint"], "*.pt")))
-                if source_checkpoints:
-                    best_cp = source_checkpoints[-1]
+                # Copy best-gated checkpoint from source
+                best_source = source_n  # default to latest
+                if os.path.exists(source_elo_path):
+                    best_source = int(np.argmax(source_elo[:source_n + 1]))
+                cps = sorted(glob.glob(os.path.join(source_paths["checkpoint"], f"{best_source:04d}-*.pt")))
+                if cps:
                     dest_name = f"{source_n:04d}-{experiment_name}.pt"
-                    shutil.copy2(best_cp, os.path.join(paths["checkpoint"], dest_name))
+                    shutil.copy2(cps[-1], os.path.join(paths["checkpoint"], dest_name))
             else:
                 # Retrain on source data
                 reservoir_ds = load_reservoir(source_paths)
@@ -1199,7 +1222,6 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         cps = glob.glob(os.path.join(source_paths["checkpoint"], f"{past_iter:04d}-*.pt"))
                         source_cp = cps[0] if cps else None
                     if source_cp:
-                        import shutil
                         shutil.copy2(source_cp, dest_cp)
                     else:
                         continue
@@ -1213,6 +1235,13 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 gc.collect()
 
             elo = get_elo(elo, wr, source_n)
+
+            if os.path.exists(source_elo_path):
+                best_source_iter = int(np.argmax(source_elo[:source_n + 1]))
+                if elo[source_n] < elo[best_source_iter]:
+                    print(f"Warning: bootstrapped network (ELO {elo[source_n]:.0f}) is weaker than "
+                          f"source best at iter {best_source_iter} (ELO {elo[best_source_iter]:.0f}). "
+                          f"Training will continue and should improve.")
 
         np.savetxt(os.path.join(experiment_dir, "elo.csv"), elo, delimiter=",")
         np.savetxt(os.path.join(experiment_dir, "win_rate.csv"), wr, delimiter=",")
@@ -1240,12 +1269,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             with open(lr_state_path) as f:
                 lr_state = json.load(f)
         else:
-            lr_state = {
-                'current_lr': config.lr,
-                'num_drops': 0,
-                'last_drop_iter': -config.lr_min_between_drops,
-                'last_best_iter': 0,
-            }
+            lr_state = _default_lr_state(config)
 
     postfix = {"best": current_best}
     panel = [current_best]

@@ -386,9 +386,9 @@ class NNWrapper:
         with torch.no_grad():
             for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
                 canonical, target_vs, target_pis = batch
-                canonical = canonical.contiguous().to(self.device, non_blocking=True)
-                target_vs = target_vs.contiguous().to(self.device, non_blocking=True)
-                target_pis = target_pis.contiguous().to(self.device, non_blocking=True)
+                canonical = canonical.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
+                target_vs = target_vs.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
+                target_pis = target_pis.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
 
                 if self.use_autocast:
                     with torch.autocast(device_type=self.device.type, dtype=HALF_DTYPE):
@@ -407,9 +407,9 @@ class NNWrapper:
         with torch.no_grad():
             for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
                 canonical, target_vs, target_pis = batch
-                canonical = canonical.contiguous().to(self.device, non_blocking=True)
-                target_vs = target_vs.contiguous().to(self.device, non_blocking=True)
-                target_pis = target_pis.contiguous().to(self.device, non_blocking=True)
+                canonical = canonical.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
+                target_vs = target_vs.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
+                target_pis = target_pis.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
 
                 if self.use_autocast:
                     with torch.autocast(device_type=self.device.type, dtype=HALF_DTYPE):
@@ -447,9 +447,9 @@ class NNWrapper:
                 if current_step == steps_to_train:
                     break
                 canonical, target_vs, target_pis = batch
-                canonical = canonical.contiguous().to(self.device, non_blocking=True)
-                target_vs = target_vs.contiguous().to(self.device, non_blocking=True)
-                target_pis = target_pis.contiguous().to(self.device, non_blocking=True)
+                canonical = canonical.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
+                target_vs = target_vs.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
+                target_pis = target_pis.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
 
                 # reset grad
                 self.optimizer.zero_grad()

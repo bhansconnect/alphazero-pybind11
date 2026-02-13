@@ -112,6 +112,11 @@ class TrainConfig:
     bootstrap_window_passes: int = 2
     bootstrap_compare_past: int = 5
 
+    # Inference optimization (autocast + compile on GPU, skipped on CPU)
+    autocast: bool = True
+    half_storage: bool = True
+    torch_compile: bool = True
+
     def validate(self):
         if self.game not in GAME_REGISTRY:
             raise ValueError(f"Unknown game: {self.game}")

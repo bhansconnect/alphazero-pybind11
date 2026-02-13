@@ -1,9 +1,9 @@
 from collections import namedtuple
 import io
+import logging
 import os
 import torch
 from torch import optim, nn
-from torch.autograd import profiler
 from tqdm import tqdm
 import numpy as np
 import zstandard as zstd
@@ -11,6 +11,34 @@ import alphazero
 from tracy_utils import tracy_zone
 
 ZSTD_LEVEL = 3
+HALF_DTYPE = torch.float16
+
+
+def get_storage_dtype():
+    """Best half dtype for storage: bfloat16 if hardware supports it, else float16."""
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16
+
+
+def to_half_safe(tensor, dtype):
+    """Convert tensor to half dtype, falling back to float32 if values overflow.
+
+    Non-floating-point tensors (e.g. BatchNorm num_batches_tracked) are
+    returned unchanged.
+    """
+    if not tensor.is_floating_point():
+        return tensor
+    if tensor.numel() == 0:
+        return tensor.to(dtype)
+    info = torch.finfo(dtype)
+    max_val = tensor.abs().max().item()
+    if max_val > info.max:
+        logging.warning(
+            f"Tensor max {max_val:.1f} exceeds {dtype} range ({info.max}), keeping float32"
+        )
+        return tensor
+    return tensor.to(dtype)
 
 # This is an autotuner for network speed.
 torch.backends.cudnn.benchmark = True
@@ -198,52 +226,48 @@ class NNArch(nn.Module):
             self.pi_fc1 = nn.Linear(in_x * in_y * 32, game.NUM_MOVES())
             self.pi_softmax = nn.LogSoftmax(1)
 
-    @tracy_zone
     def forward(self, s):
         # s: batch_size x num_channels x board_x x board_y
-        with profiler.record_function("conv-layers"):
-            if not self.dense_net:
-                s = self.conv1(s)
-                s = self.bn1(s)
-            s = self.conv_layers(s)
+        if not self.dense_net:
+            s = self.conv1(s)
+            s = self.bn1(s)
+        s = self.conv_layers(s)
 
-        with profiler.record_function("v-head"):
-            v = self.v_conv(s)
-            v = self.v_bn(v)
-            v = self.v_relu(v)
-            v = self.v_flatten(v)
-            v = self.v_fc1(v)
-            v = self.v_fc1_relu(v)
-            v = self.v_fc2(v)
-            v = self.v_softmax(v)
+        v = self.v_conv(s)
+        v = self.v_bn(v)
+        v = self.v_relu(v)
+        v = self.v_flatten(v)
+        v = self.v_fc1(v)
+        v = self.v_fc1_relu(v)
+        v = self.v_fc2(v)
+        v = self.v_softmax(v)
 
-        with profiler.record_function("pi-head"):
-            pi = self.pi_conv(s)
-            pi = self.pi_bn(pi)
-            pi = self.pi_relu(pi)
+        pi = self.pi_conv(s)
+        pi = self.pi_bn(pi)
+        pi = self.pi_relu(pi)
 
-            if self.star_gambit_spatial:
-                # Spatial policy head for Star Gambit
-                # s_flat for global actions, pi for spatial
-                s_flat = self.pi_flatten(pi)
+        if self.star_gambit_spatial:
+            # Spatial policy head for Star Gambit
+            # s_flat for global actions, pi for spatial
+            s_flat = self.pi_flatten(pi)
 
-                # Spatial actions: (B, 32, H, W) -> (B, 10, H, W) -> (B, H, W, 10) -> (B, H*W*10)
-                pi_spatial = self.pi_conv2(pi)
-                pi_spatial = self.pi_bn2(pi_spatial)
-                pi_spatial = pi_spatial.permute(0, 2, 3, 1)  # (B, H, W, 10)
-                batch_size = pi_spatial.shape[0]
-                pi_spatial = pi_spatial.reshape(batch_size, -1)  # (B, H*W*10)
+            # Spatial actions: (B, 32, H, W) -> (B, 10, H, W) -> (B, H, W, 10) -> (B, H*W*10)
+            pi_spatial = self.pi_conv2(pi)
+            pi_spatial = self.pi_bn2(pi_spatial)
+            pi_spatial = pi_spatial.permute(0, 2, 3, 1)  # (B, H, W, 10)
+            batch_size = pi_spatial.shape[0]
+            pi_spatial = pi_spatial.reshape(batch_size, -1)  # (B, H*W*10)
 
-                # Global actions: deploy + end_turn
-                pi_global = self.pi_global(s_flat)  # (B, 19)
+            # Global actions: deploy + end_turn
+            pi_global = self.pi_global(s_flat)  # (B, 19)
 
-                # Concatenate: spatial + global
-                pi = torch.cat([pi_spatial, pi_global], dim=1)  # (B, H*W*10 + 19)
-                pi = self.pi_softmax(pi)
-            else:
-                pi = self.pi_flatten(pi)
-                pi = self.pi_fc1(pi)
-                pi = self.pi_softmax(pi)
+            # Concatenate: spatial + global
+            pi = torch.cat([pi_spatial, pi_global], dim=1)  # (B, H*W*10 + 19)
+            pi = self.pi_softmax(pi)
+        else:
+            pi = self.pi_flatten(pi)
+            pi = self.pi_fc1(pi)
+            pi = self.pi_softmax(pi)
 
         return v, pi
 
@@ -259,6 +283,17 @@ class NNWrapper:
         self.device = get_device()
         self.cv = args.cv
         self.nnet.to(self.device)
+        self.use_autocast = False
+
+    def enable_inference_optimizations(self, autocast=True, compile=True):
+        """Optimize model for inference on GPU. No-op on CPU."""
+        is_gpu = self.device.type in ('cuda', 'mps')
+        self.use_autocast = autocast and is_gpu
+        if compile and is_gpu:
+            try:
+                self.nnet = torch.compile(self.nnet, mode="reduce-overhead")
+            except Exception:
+                pass  # graceful fallback
 
     def set_lr(self, lr):
         """Set learning rate on all optimizer parameter groups."""
@@ -398,8 +433,12 @@ class NNWrapper:
         batch = batch.contiguous().to(self.device, non_blocking=True)
         self.nnet.eval()
         with torch.no_grad():
-            v, pi = self.nnet(batch)
-            res = (torch.exp(v), torch.exp(pi))
+            if self.use_autocast:
+                with torch.autocast(device_type=self.device.type, dtype=HALF_DTYPE):
+                    v, pi = self.nnet(batch)
+            else:
+                v, pi = self.nnet(batch)
+            res = (torch.exp(v).float(), torch.exp(pi).float())
         # GPU sync for accurate Tracy timing when profiling is enabled
         if alphazero.tracy_is_enabled():
             if self.device.type == 'cuda':
@@ -423,7 +462,8 @@ class NNWrapper:
 
     @tracy_zone
     def save_checkpoint(
-        self, folder=os.path.join("data", "checkpoint"), filename="checkpoint.pt"
+        self, folder=os.path.join("data", "checkpoint"), filename="checkpoint.pt",
+        half_storage=True,
     ):
         filepath = os.path.join(folder, filename)
         os.makedirs(folder, exist_ok=True)
@@ -431,20 +471,23 @@ class NNWrapper:
         # Convert NNArgs namedtuple to dict for safe serialization
         args_dict = self.args._asdict()
 
-        # Convert model weights to bfloat16 for smaller checkpoints
-        state_dict_f16 = {
-            k: v.bfloat16() if v.is_floating_point() else v
-            for k, v in self.nnet.state_dict().items()
-        }
+        # Convert model weights to half-precision for smaller checkpoints
+        if half_storage:
+            dtype = get_storage_dtype()
+            state_dict_save = {
+                k: to_half_safe(v, dtype) for k, v in self.nnet.state_dict().items()
+            }
+        else:
+            state_dict_save = self.nnet.state_dict()
 
         buffer = io.BytesIO()
         torch.save(
             {
-                "state_dict": state_dict_f16,
+                "state_dict": state_dict_save,
                 "opt_state": self.optimizer.state_dict(),
                 "args": args_dict,  # Save as dict, not namedtuple
                 "game": self.game,
-                "version": "4.0",  # zstd-compressed, bfloat16 weights, no scheduler
+                "version": "4.0",  # zstd-compressed, half-precision weights, no scheduler
             },
             buffer,
         )
@@ -486,7 +529,7 @@ class NNWrapper:
         args = NNArgs(**args_dict)
 
         net = NNWrapper(checkpoint["game"], args)
-        # Convert bfloat16 weights back to float32 for training
+        # Convert half-precision weights back to float32 for training
         state_dict = {
             k: v.float() if v.is_floating_point() else v
             for k, v in checkpoint["state_dict"].items()

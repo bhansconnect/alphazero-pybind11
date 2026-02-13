@@ -10,7 +10,7 @@ import math
 import random
 import time
 import torch
-from torch.utils.data import TensorDataset, ConcatDataset, DataLoader
+from torch.utils.data import TensorDataset, ConcatDataset, DataLoader, IterableDataset
 import threading
 import tqdm
 import queue
@@ -33,10 +33,10 @@ def save_compressed(tensor, path, half_storage=True, zstd_level=1):
 
 
 def load_compressed(path):
-    """Load a .ptz file, returning float32 tensor."""
+    """Load a .ptz file, returning tensor in storage dtype (typically bfloat16)."""
     with open(path, 'rb') as f:
         data = zstd.ZstdDecompressor().decompress(f.read())
-    return torch.load(io.BytesIO(data), map_location="cpu", weights_only=True).float()
+    return torch.load(io.BytesIO(data), map_location="cpu", weights_only=True)
 
 
 def _atomic_save_compressed(tensor, path, half_storage=True, zstd_level=1):
@@ -74,6 +74,25 @@ def _glob_hist_files(location, pattern):
     if not files:
         files = sorted(glob.glob(os.path.join(location, pattern + ".pt")))
     return files
+
+
+def glob_file_triples(directory, pattern="*-canonical-*.ptz"):
+    """Glob for file triples (canonical, v, pi) and return (c_path, v_path, pi_path, size) tuples."""
+    c_files = sorted(glob.glob(os.path.join(directory, pattern)))
+    triples = []
+    for c_path in c_files:
+        v_path = c_path.replace("-canonical-", "-v-")
+        pi_path = c_path.replace("-canonical-", "-pi-")
+        size = int(c_path.rsplit("-", 1)[-1].split(".")[0])
+        triples.append((c_path, v_path, pi_path, size))
+    return triples
+
+
+def _replace_size_in_path(path, new_size):
+    """Replace the sample count in a history/reservoir filename."""
+    base, ext = os.path.splitext(path)
+    prefix = base.rsplit("-", 1)[0]
+    return f"{prefix}-{new_size}{ext}"
 
 
 GRArgs = namedtuple(
@@ -657,7 +676,7 @@ def iteration_loss(config, paths, experiment_name, iteration):
     c = _glob_hist_files(hist_location, f"{iteration:04d}-*-canonical-*")
     v = _glob_hist_files(hist_location, f"{iteration:04d}-*-v-*")
     p = _glob_hist_files(hist_location, f"{iteration:04d}-*-pi-*")
-    for j in range(len(c)):
+    for j in tqdm.trange(len(c), desc="Loading Iteration Data", leave=False):
         c_tensor = _load_hist_tensor(c[j])
         v_tensor = _load_hist_tensor(v[j])
         p_tensor = _load_hist_tensor(p[j])
@@ -679,52 +698,100 @@ def iteration_loss(config, paths, experiment_name, iteration):
 
 @tracy_zone
 def train(config, paths, experiment_name, iteration, hist_size, run, total_train_steps, lr=None):
+    """Index-then-extract training: pre-select samples, load one file at a time.
+
+    Memory bounded at ~1.5 GB regardless of window size.
+    """
     import neural_net
 
     Game = config.Game
     hist_location = paths["history"]
-    total_size = 0
-    datasets = []
-    file_triples = []
-    for i in range(max(0, iteration - hist_size), iteration + 1):
-        c = _glob_hist_files(hist_location, f"{i:04d}-*-canonical-*")
-        v = _glob_hist_files(hist_location, f"{i:04d}-*-v-*")
-        p = _glob_hist_files(hist_location, f"{i:04d}-*-pi-*")
-        for j in range(len(c)):
-            file_triples.append((c[j], v[j], p[j]))
+    bs = config.train_batch_size
 
-    for c_path, v_path, p_path in tqdm.tqdm(file_triples, desc="Loading Training Data", leave=False):
-        size = int(c_path.split("-")[-1].split(".")[0])
-        total_size += size
+    # Phase 1: Discover files and sizes from filenames (no loading)
+    file_triples = []
+    iter_range = range(max(0, iteration - hist_size), iteration + 1)
+    for i in tqdm.tqdm(iter_range, desc="Discovering Training Files", leave=False):
+        triples = glob_file_triples(hist_location, f"{i:04d}-*-canonical-*.ptz")
+        if not triples:
+            triples = glob_file_triples(hist_location, f"{i:04d}-*-canonical-*.pt")
+        file_triples.extend(triples)
+
+    sizes = [size for _, _, _, size in file_triples]
+    total_size = sum(sizes)
+
+    num_iters_in_window = min(hist_size, iteration + 1)
+    average_generation = total_size / num_iters_in_window
+    steps_to_train = int(math.ceil(average_generation / bs * config.train_sample_rate))
+    samples_needed = steps_to_train * bs
+
+    # Phase 2: Pre-select sample indices
+    if samples_needed >= total_size:
+        # Use all samples (early iterations)
+        selected_per_file = [list(range(s)) for s in sizes]
+    else:
+        # Generate sorted random indices, map to (file_idx, local_offset)
+        all_indices = sorted(random.sample(range(total_size), samples_needed))
+        cum_sizes = []
+        cum = 0
+        for s in sizes:
+            cum_sizes.append(cum)
+            cum += s
+        selected_per_file = [[] for _ in range(len(file_triples))]
+        fi = 0
+        for idx in all_indices:
+            while fi < len(cum_sizes) - 1 and idx >= cum_sizes[fi + 1]:
+                fi += 1
+            selected_per_file[fi].append(idx - cum_sizes[fi])
+
+    # Phase 3: Extract one file at a time
+    acc_c, acc_v, acc_pi = [], [], []
+    for i, (c_path, v_path, pi_path, size) in enumerate(
+        tqdm.tqdm(file_triples, desc="Extracting Training Samples", leave=False)
+    ):
+        indices = selected_per_file[i]
+        if not indices:
+            continue
         c_tensor = _load_hist_tensor(c_path)
         v_tensor = _load_hist_tensor(v_path)
-        p_tensor = _load_hist_tensor(p_path)
-        datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-        del c_tensor, v_tensor, p_tensor
+        pi_tensor = _load_hist_tensor(pi_path)
+        idx_tensor = torch.tensor(indices, dtype=torch.long)
+        acc_c.append(c_tensor[idx_tensor])
+        acc_v.append(v_tensor[idx_tensor])
+        acc_pi.append(pi_tensor[idx_tensor])
+        del c_tensor, v_tensor, pi_tensor
 
-    bs = config.train_batch_size
-    dataset = ConcatDataset(datasets)
+    c_data = torch.cat(acc_c)
+    v_data = torch.cat(acc_v)
+    pi_data = torch.cat(acc_pi)
+    del acc_c, acc_v, acc_pi
+
+    # Phase 4: Train
+    dataset = TensorDataset(c_data, v_data, pi_data)
     dataloader = DataLoader(dataset, batch_size=bs, shuffle=True, pin_memory=torch.cuda.is_available())
+    del c_data, v_data, pi_data
 
-    average_generation = total_size / min(hist_size, iteration + 1)
     nn = neural_net.NNWrapper.load_checkpoint(
         Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
     )
     if lr is not None:
         nn.set_lr(lr)
-    steps_to_train = int(math.ceil(average_generation / bs * config.train_sample_rate))
     v_loss, pi_loss = nn.train(
         dataloader, steps_to_train, run, iteration, total_train_steps
     )
     total_train_steps += steps_to_train
     nn.save_checkpoint(paths["checkpoint"], f"{iteration + 1:04d}-{experiment_name}.pt",
                        half_storage=config.half_storage, zstd_level=config.zstd_level)
-    del datasets, dataset, dataloader, nn
+    del dataset, dataloader, nn
     return v_loss, pi_loss, total_train_steps
 
 
 def update_reservoir(config, paths, iteration, hist_size):
-    """Merge evicted window data into the reservoir and delete old files."""
+    """Move evicted window data to reservoir and thin if over capacity.
+
+    Uses per-iteration .ptz files (same naming as history). Eviction is O(1)
+    via os.rename. Thinning uses age-weighted removal biased toward oldest data.
+    """
     hist_location = paths["history"]
     reservoir_location = paths["reservoir"]
 
@@ -734,88 +801,136 @@ def update_reservoir(config, paths, iteration, hist_size):
     if not evicted_iters:
         return
 
-    new_c, new_v, new_pi = [], [], []
-    new_iters = []
-    evicted_files = []
-    for it in evicted_iters:
-        c_files = _glob_hist_files(hist_location, f"{it:04d}-*-canonical-*")
-        v_files = _glob_hist_files(hist_location, f"{it:04d}-*-v-*")
-        p_files = _glob_hist_files(hist_location, f"{it:04d}-*-pi-*")
-        for j in range(len(c_files)):
-            evicted_files.append((it, c_files[j], v_files[j], p_files[j]))
+    # Move evicted files to reservoir (zero memory, O(1) per file)
+    os.makedirs(reservoir_location, exist_ok=True)
+    for it in tqdm.tqdm(evicted_iters, desc="Moving Evicted History", leave=False):
+        for pattern in (f"{it:04d}-*.ptz", f"{it:04d}-*.pt"):
+            for src in glob.glob(os.path.join(hist_location, pattern)):
+                dst = os.path.join(reservoir_location, os.path.basename(src))
+                os.rename(src, dst)
 
-    for it, c_path, v_path, p_path in tqdm.tqdm(evicted_files, desc="Loading Evicted History", leave=False):
-        ct = _load_hist_tensor(c_path)
-        new_c.append(ct)
-        new_v.append(_load_hist_tensor(v_path))
-        new_pi.append(_load_hist_tensor(p_path))
-        new_iters.append(torch.full((ct.shape[0],), it, dtype=torch.int16))
+    # Check if thinning is needed
+    reservoir_triples = glob_file_triples(reservoir_location)
+    # Also check for .pt files in reservoir (legacy)
+    reservoir_triples += glob_file_triples(reservoir_location, "*-canonical-*.pt")
+    reservoir_total = sum(s for _, _, _, s in reservoir_triples)
 
-    if not new_c:
+    capacity = 0
+    for i in range(oldest_in_window, iteration + 1):
+        for fn in glob.glob(os.path.join(hist_location, f"{i:04d}-*-canonical-*.pt*")):
+            capacity += int(fn.rsplit("-", 1)[-1].split(".")[0])
+
+    excess = reservoir_total - capacity
+    if excess <= 0:
         return
 
-    new_c = torch.cat(new_c)
-    new_v = torch.cat(new_v)
-    new_pi = torch.cat(new_pi)
-    new_iters = torch.cat(new_iters)
+    # Build per-iteration info from reservoir filenames
+    iter_info = {}   # iter_num -> total_samples
+    iter_files = {}  # iter_num -> [(c, v, pi, size), ...]
+    for c_path, v_path, pi_path, size in reservoir_triples:
+        iter_num = int(os.path.basename(c_path).split("-")[0])
+        iter_info[iter_num] = iter_info.get(iter_num, 0) + size
+        iter_files.setdefault(iter_num, []).append((c_path, v_path, pi_path, size))
 
-    os.makedirs(reservoir_location, exist_ok=True)
-    res_c_path = os.path.join(reservoir_location, "canonical.ptz")
-    if os.path.exists(res_c_path):
-        res_files = [
-            ("canonical", res_c_path),
-            ("v", os.path.join(reservoir_location, "v.ptz")),
-            ("pi", os.path.join(reservoir_location, "pi.ptz")),
-            ("meta", os.path.join(reservoir_location, "meta.ptz")),
-        ]
-        loaded = {}
-        for name, path in tqdm.tqdm(res_files, desc="Loading Reservoir", leave=False):
-            loaded[name] = load_compressed(path)
-        old_c = loaded["canonical"]
-        old_v = loaded["v"]
-        old_pi = loaded["pi"]
-        old_iters = loaded["meta"].to(torch.int16)
-        all_c = torch.cat([old_c, new_c])
-        all_v = torch.cat([old_v, new_v])
-        all_pi = torch.cat([old_pi, new_pi])
-        all_iters = torch.cat([old_iters, new_iters])
-        del old_c, old_v, old_pi, old_iters
-    else:
-        all_c, all_v, all_pi, all_iters = new_c, new_v, new_pi, new_iters
+    # Compute age-weighted removal targets (older → more removals per sample)
+    total_weight = 0.0
+    iter_weights = {}
+    for iter_num, iter_samples in iter_info.items():
+        age = iteration - iter_num
+        weight = ((1.0 / config.reservoir_recency_decay) ** age) * iter_samples
+        iter_weights[iter_num] = weight
+        total_weight += weight
 
-    # Compute capacity = total samples in current window
-    capacity = 0
-    for i in range(max(0, iteration - hist_size), iteration + 1):
-        for fn in glob.glob(os.path.join(hist_location, f"{i:04d}-*-canonical-*.pt*")):
-            capacity += int(fn.split("-")[-1].split(".")[0])
+    removals = {}
+    for iter_num, weight in iter_weights.items():
+        removals[iter_num] = round(excess * weight / total_weight)
 
-    if len(all_c) > capacity > 0:
-        ages = (iteration - all_iters.float()).clamp(min=0)
-        weights = config.reservoir_recency_decay ** ages
-        indices = torch.multinomial(weights, capacity, replacement=False)
-        all_c = all_c[indices]
-        all_v = all_v[indices]
-        all_pi = all_pi[indices]
-        all_iters = all_iters[indices]
+    # Process affected iterations (oldest first)
+    sorted_iters = sorted(removals.keys())
+    for iter_num in tqdm.tqdm(sorted_iters, desc="Thinning Reservoir", leave=False):
+        budget = removals[iter_num]
+        if budget <= 0:
+            continue
 
-    save_ops = [
-        (all_c, res_c_path),
-        (all_v, os.path.join(reservoir_location, "v.ptz")),
-        (all_pi, os.path.join(reservoir_location, "pi.ptz")),
-        (all_iters, os.path.join(reservoir_location, "meta.ptz")),
-    ]
-    for tensor, path in tqdm.tqdm(save_ops, desc="Saving Reservoir", leave=False):
-        _atomic_save_compressed(tensor, path, zstd_level=config.zstd_level)
+        iter_samples = iter_info[iter_num]
+        if budget >= iter_samples:
+            # Delete all files for this iteration
+            for c_path, v_path, pi_path, _ in iter_files[iter_num]:
+                for fp in (c_path, v_path, pi_path):
+                    if os.path.exists(fp):
+                        os.remove(fp)
+            continue
 
-    del new_c, new_v, new_pi, new_iters, all_c, all_v, all_pi, all_iters
+        # Distribute across batch files proportionally
+        remaining_budget = budget
+        for c_path, v_path, pi_path, file_size in iter_files[iter_num]:
+            if remaining_budget <= 0:
+                break
+            sub_budget = min(
+                round(budget * file_size / iter_samples),
+                remaining_budget, file_size
+            )
+            if sub_budget <= 0:
+                continue
+
+            keep = file_size - sub_budget
+            if keep <= 0:
+                for fp in (c_path, v_path, pi_path):
+                    if os.path.exists(fp):
+                        os.remove(fp)
+                remaining_budget -= file_size
+                continue
+
+            c_tensor = _load_hist_tensor(c_path)
+            v_tensor = _load_hist_tensor(v_path)
+            pi_tensor = _load_hist_tensor(pi_path)
+
+            perm = torch.randperm(file_size)[:keep]
+            c_tensor = c_tensor[perm]
+            v_tensor = v_tensor[perm]
+            pi_tensor = pi_tensor[perm]
+
+            new_c_path = _replace_size_in_path(c_path, keep)
+            new_v_path = _replace_size_in_path(v_path, keep)
+            new_pi_path = _replace_size_in_path(pi_path, keep)
+
+            # Save as .ptz (migrates any legacy .pt files)
+            if not new_c_path.endswith(".ptz"):
+                new_c_path = os.path.splitext(new_c_path)[0] + ".ptz"
+                new_v_path = os.path.splitext(new_v_path)[0] + ".ptz"
+                new_pi_path = os.path.splitext(new_pi_path)[0] + ".ptz"
+
+            _atomic_save_compressed(c_tensor, new_c_path, zstd_level=config.zstd_level)
+            _atomic_save_compressed(v_tensor, new_v_path, zstd_level=config.zstd_level)
+            _atomic_save_compressed(pi_tensor, new_pi_path, zstd_level=config.zstd_level)
+
+            # Remove old files if name changed
+            for old_fp, new_fp in ((c_path, new_c_path), (v_path, new_v_path), (pi_path, new_pi_path)):
+                if old_fp != new_fp and os.path.exists(old_fp):
+                    os.remove(old_fp)
+
+            remaining_budget -= sub_budget
+            del c_tensor, v_tensor, pi_tensor
+
     gc.collect()
-    for it in evicted_iters:
-        for fn in glob.glob(os.path.join(hist_location, f"{it:04d}-*.pt*")):
-            os.remove(fn)
 
 
 def load_reservoir(paths):
-    """Load reservoir as a TensorDataset, or None if no reservoir exists."""
+    """Load reservoir as a TensorDataset, or None if no reservoir exists.
+
+    Supports both per-iteration files (new format) and monolithic files (legacy).
+    """
+    # Try new per-iteration format first
+    triples = glob_file_triples(paths["reservoir"])
+    if triples:
+        cs, vs, pis = [], [], []
+        for c_path, v_path, pi_path, size in triples:
+            cs.append(load_compressed(c_path))
+            vs.append(load_compressed(v_path))
+            pis.append(load_compressed(pi_path))
+        return TensorDataset(torch.cat(cs), torch.cat(vs), torch.cat(pis))
+
+    # Fall back to old monolithic format
     res_c_path = os.path.join(paths["reservoir"], "canonical.ptz")
     if not os.path.exists(res_c_path):
         return None
@@ -840,6 +955,38 @@ def load_available_window(paths, start, end):
             datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
             del c_tensor, v_tensor, p_tensor
     return datasets
+
+
+class StreamingCompressedDataset(IterableDataset):
+    """Memory-bounded streaming dataset that loads one file at a time.
+
+    Yields pre-formed batches of (canonical, v, pi) tuples. Compatible with
+    nn.train() which iterates `for batch in batches` and unpacks the tuple.
+    Use with DataLoader(batch_size=None, num_workers=0).
+    """
+
+    def __init__(self, file_triples, batch_size, passes=1):
+        self.file_triples = file_triples  # [(c_path, v_path, pi_path, size), ...]
+        self.batch_size = batch_size
+        self.passes = passes
+
+    def __iter__(self):
+        for _ in range(self.passes):
+            file_order = list(range(len(self.file_triples)))
+            random.shuffle(file_order)
+            for fi in file_order:
+                c_path, v_path, pi_path, size = self.file_triples[fi]
+                c = _load_hist_tensor(c_path)
+                v = _load_hist_tensor(v_path)
+                pi = _load_hist_tensor(pi_path)
+                perm = torch.randperm(size)
+                c = c[perm]
+                v = v[perm]
+                pi = pi[perm]
+                for start in range(0, size, self.batch_size):
+                    end = min(start + self.batch_size, size)
+                    yield c[start:end], v[start:end], pi[start:end]
+                del c, v, pi
 
 
 @tracy_zone
@@ -1223,16 +1370,16 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             source_paths = config.resolve_paths(source_dir)
 
-            # Copy reservoir (all-or-nothing: all 4 files must exist)
-            reservoir_files = ("canonical.ptz", "v.ptz", "pi.ptz", "meta.ptz")
+            # Copy reservoir (per-iteration .ptz files)
             source_reservoir = source_paths["reservoir"]
-            if all(os.path.exists(os.path.join(source_reservoir, f)) for f in reservoir_files):
+            source_res_triples = glob_file_triples(source_reservoir)
+            if source_res_triples:
                 os.makedirs(paths["reservoir"], exist_ok=True)
-                for fname in reservoir_files:
-                    shutil.copy2(
-                        os.path.join(source_reservoir, fname),
-                        os.path.join(paths["reservoir"], fname),
-                    )
+                all_res_files = []
+                for c, v, p, _ in source_res_triples:
+                    all_res_files.extend([c, v, p])
+                for src in tqdm.tqdm(all_res_files, desc="Copying Reservoir", leave=False):
+                    shutil.copy2(src, os.path.join(paths["reservoir"], os.path.basename(src)))
 
             # Copy elo/wr from source (if available)
             source_elo_path = os.path.join(source_dir, "elo.csv")
@@ -1266,25 +1413,35 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     dest_name = f"{source_n:04d}-{experiment_name}.pt"
                     shutil.copy2(cps[-1], os.path.join(paths["checkpoint"], dest_name))
             else:
-                # Retrain on source data
-                reservoir_ds = load_reservoir(source_paths)
-                window_datasets = load_available_window(source_paths, 0, source_n)
+                # Retrain on source data using streaming (bounded memory)
+                reservoir_files = glob_file_triples(source_paths["reservoir"])
+                window_files = []
+                for wi in range(0, source_n):
+                    triples = glob_file_triples(source_paths["history"], f"{wi:04d}-*-canonical-*.ptz")
+                    if not triples:
+                        triples = glob_file_triples(source_paths["history"], f"{wi:04d}-*-canonical-*.pt")
+                    window_files.extend(triples)
+                all_files = reservoir_files + window_files
+
                 nn = neural_net.NNWrapper.load_checkpoint(
                     Game, paths["checkpoint"], f"0000-{experiment_name}.pt"
                 )
-                all_datasets = ([reservoir_ds] if reservoir_ds else []) + window_datasets
-                if all_datasets:
-                    combined = ConcatDataset(all_datasets)
-                    dataloader = DataLoader(combined, batch_size=config.train_batch_size, shuffle=True, pin_memory=torch.cuda.is_available())
-                    steps_p1 = int(math.ceil(len(combined) / config.train_batch_size)) * config.bootstrap_full_passes
-                    nn.train(dataloader, steps_p1, run, source_n, total_train_steps)
+
+                if all_files:
+                    total_samples = sum(s for _, _, _, s in all_files)
+                    bbs = config.train_batch_size
+                    streaming_ds = StreamingCompressedDataset(all_files, bbs, passes=config.bootstrap_full_passes)
+                    dl = DataLoader(streaming_ds, batch_size=None, num_workers=0)
+                    steps_p1 = int(math.ceil(total_samples / bbs)) * config.bootstrap_full_passes
+                    nn.train(dl, steps_p1, run, source_n, total_train_steps)
                     total_train_steps += steps_p1
 
-                    if window_datasets:
-                        window_only = ConcatDataset(window_datasets)
-                        dataloader2 = DataLoader(window_only, batch_size=config.train_batch_size, shuffle=True, pin_memory=torch.cuda.is_available())
-                        steps_p2 = int(math.ceil(len(window_only) / config.train_batch_size)) * config.bootstrap_window_passes
-                        nn.train(dataloader2, steps_p2, run, source_n, total_train_steps)
+                    if window_files:
+                        window_total = sum(s for _, _, _, s in window_files)
+                        streaming_ds2 = StreamingCompressedDataset(window_files, bbs, passes=config.bootstrap_window_passes)
+                        dl2 = DataLoader(streaming_ds2, batch_size=None, num_workers=0)
+                        steps_p2 = int(math.ceil(window_total / bbs)) * config.bootstrap_window_passes
+                        nn.train(dl2, steps_p2, run, source_n, total_train_steps)
                         total_train_steps += steps_p2
 
                 nn.save_checkpoint(paths["checkpoint"], f"{source_n:04d}-{experiment_name}.pt",
@@ -1295,7 +1452,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             # Calibrate bootstrap network ELO against source networks
             compare_start = max(0, source_n - config.bootstrap_compare_past)
-            for past_iter in range(compare_start, source_n):
+            for past_iter in tqdm.tqdm(range(compare_start, source_n), desc="Calibrating ELO", leave=False):
                 dest_cp = os.path.join(paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt")
                 if not os.path.exists(dest_cp):
                     # Copy from source (try exact name first, then glob)

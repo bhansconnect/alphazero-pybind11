@@ -13,11 +13,8 @@ dependencies = [
     "pyyaml>=6.0",
     "tqdm>=4.60",
     "aim>=3.0",
+    "matplotlib>=3.7",
 ]
-
-[project.optional-dependencies]
-aim = ["aim>=3.0"]
-plot = ["matplotlib>=3.7"]
 
 [dependency-groups]
 build = ["meson-python>=0.16.0", "meson>=1.0.0", "ninja>=1.8.2", "pybind11>=2.12"]

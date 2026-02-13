@@ -54,9 +54,9 @@ class TrainConfig:
     temp_decay_half_life: int = 10
 
     # Self-play
-    self_play_batch_size: int = 256
+    self_play_batch_size: int = 1024
     self_play_concurrent_batch_mult: int = 2
-    self_play_chunks: int = 4
+    self_play_chunks: int = 1
 
     # Training
     train_batch_size: int = 1024

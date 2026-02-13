@@ -5,15 +5,10 @@ channels: 16
 kernel_size: 3
 
 star_gambit_spatial: true
+temp_decay_half_life: 8
 selfplay_mcts_depth: 120
 fast_mcts_depth: 30
 compare_mcts_depth: 30
 
-self_play_batch_size: 1024
-self_play_chunks: 1
-
-temp_decay_half_life: 12
-gating_panel_win_rate: 0.51
-gating_best_win_rate: 0.51
-
-iterations: 400
+lr_schedule: "adaptive"
+iterations: 800

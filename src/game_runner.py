@@ -385,7 +385,7 @@ def get_elo(past_elo, win_rates, new_agent):
     mask = ~np.isnan(win_rates[new_agent])
     for _ in tqdm.trange(iters, leave=False):
         rates = np.clip(win_rates[new_agent, mask], 0.001, 0.999)
-        x = _ELO_ALPHA * (past_elo[mask] - past_elo[new_agent])
+        x = _ELO_ALPHA * (past_elo[new_agent] - past_elo[mask])
         # Clamp to avoid overflow in exp (sigmoid saturates beyond ~700)
         x_safe = np.clip(x, -500, 500)
         probs = np.where(x_safe >= 0, 1.0 / (1.0 + np.exp(-x_safe)),
@@ -497,38 +497,42 @@ def exploit_symmetries(config, paths, iteration):
             ))
         return result
 
-    # Process per-file with threaded symmetry computation
+    # Flatten all samples across all files into a single executor.map() call
+    # to eliminate inter-file serialization gaps
     sample_count = sum(len(ds.tensors[0]) for ds in datasets)
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for ds in tqdm.tqdm(datasets, desc="Creating Symmetric Samples", leave=False):
+
+    def _all_samples():
+        for ds in datasets:
             c_t, v_t, p_t = ds.tensors
-            n = len(c_t)
-            # Submit all samples in this file to the thread pool
-            futures = executor.map(
-                _compute_symmetries,
-                ((c_t[i], v_t[i], p_t[i]) for i in range(n)),
-                chunksize=max(1, n // (max_workers * 4)),
-            )
-            # Collect results in order, write to output buffer
-            for sym_list in futures:
-                for c_sym, v_sym, p_sym in sym_list:
-                    c_out[i_out] = c_sym
-                    v_out[i_out] = v_sym
-                    p_out[i_out] = p_sym
-                    i_out += 1
-                    if maybe_save(
-                        config,
-                        c_out,
-                        v_out,
-                        p_out,
-                        i_out,
-                        batch_out,
-                        iteration,
-                        location=tmp_hist,
-                        name="syms",
-                    ):
-                        i_out = 0
-                        batch_out += 1
+            for i in range(len(c_t)):
+                yield (c_t[i], v_t[i], p_t[i])
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = executor.map(
+            _compute_symmetries,
+            _all_samples(),
+            chunksize=max(1, sample_count // (max_workers * 4)),
+        )
+        for sym_list in tqdm.tqdm(futures, total=sample_count,
+                                   desc="Creating Symmetric Samples", leave=False):
+            for c_sym, v_sym, p_sym in sym_list:
+                c_out[i_out] = c_sym
+                v_out[i_out] = v_sym
+                p_out[i_out] = p_sym
+                i_out += 1
+                if maybe_save(
+                    config,
+                    c_out,
+                    v_out,
+                    p_out,
+                    i_out,
+                    batch_out,
+                    iteration,
+                    location=tmp_hist,
+                    name="syms",
+                ):
+                    i_out = 0
+                    batch_out += 1
 
     maybe_save(
         config,

@@ -26,7 +26,7 @@ cd alphazero-pybind11
 uv sync
 
 # Editable install (builds the C++ extension)
-NINJA=$(pwd)/.venv/bin/ninja uv pip install --no-build-isolation -e .
+NINJA=$(pwd)/.venv/bin/ninja uv pip install --python .venv/bin/python --no-build-isolation -e .
 ```
 
 That's it. `uv sync` automatically downloads Python 3.11 and installs all dependencies (including PyTorch with CUDA on Linux or MPS on macOS). The editable install builds the C++ extension.

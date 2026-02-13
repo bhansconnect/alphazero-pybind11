@@ -2,6 +2,7 @@ from collections import namedtuple
 import io
 import logging
 import os
+import threading
 import torch
 from torch import optim, nn
 from tqdm import tqdm
@@ -272,6 +273,56 @@ class NNArch(nn.Module):
         return v, pi
 
 
+class _CUDAGraphInference:
+    """Cache CUDA graphs per batch-size bucket for fast inference."""
+    _record_lock = threading.Lock()
+
+    def __init__(self, model, input_shape, device, use_autocast):
+        self.model = model
+        self.input_shape = input_shape
+        self.device = device
+        self.use_autocast = use_autocast
+        self._cache = {}  # bucket_size -> (graph, static_input, static_v, static_pi)
+        self._lock = threading.Lock()
+
+    def __call__(self, batch):
+        bs = batch.shape[0]
+        bucket = 1
+        while bucket < bs:
+            bucket *= 2
+        if bucket not in self._cache:
+            with _CUDAGraphInference._record_lock:
+                if bucket not in self._cache:
+                    self._record(bucket)
+        with self._lock:
+            graph, static_input, static_v, static_pi = self._cache[bucket]
+            static_input[:bs].copy_(batch)
+            graph.replay()
+            return static_v[:bs].clone(), static_pi[:bs].clone()
+
+    def _forward(self, x):
+        if self.use_autocast:
+            with torch.autocast(device_type='cuda', dtype=HALF_DTYPE):
+                v, pi = self.model(x)
+        else:
+            v, pi = self.model(x)
+        return torch.exp(v).float(), torch.exp(pi).float()
+
+    def _record(self, bucket_size):
+        static_input = torch.zeros(
+            bucket_size, *self.input_shape, device=self.device
+        )
+        # Warmup (required before CUDA graph capture)
+        with torch.no_grad():
+            for _ in range(3):
+                self._forward(static_input)
+        # Record
+        g = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(g), torch.no_grad():
+            static_v, static_pi = self._forward(static_input)
+        self._cache[bucket_size] = (g, static_input, static_v, static_pi)
+
+
 class NNWrapper:
     def __init__(self, game, args):
         self.game = game
@@ -284,6 +335,7 @@ class NNWrapper:
         self.cv = args.cv
         self.nnet.to(self.device)
         self.use_autocast = False
+        self._graph_inference = None
 
     def enable_inference_optimizations(self, autocast=True, compile=True):
         """Optimize model for inference on GPU. No-op on CPU."""
@@ -291,9 +343,39 @@ class NNWrapper:
         self.use_autocast = autocast and is_gpu
         if compile and is_gpu:
             try:
+                if self.device.type == 'cuda':
+                    cap = torch.cuda.get_device_capability(self.device)
+                    if cap[0] < 7:
+                        # Triton requires CC >= 7.0; manual JIT + CUDA graphs instead
+                        logging.getLogger(__name__).info(
+                            "CUDA capability %d.%d < 7.0: using JIT trace + CUDA graphs",
+                            *cap,
+                        )
+                        self._apply_jit_and_cuda_graphs()
+                        return
                 self.nnet = torch.compile(self.nnet, mode="reduce-overhead")
             except Exception:
                 pass  # graceful fallback
+
+    def _apply_jit_and_cuda_graphs(self):
+        """JIT trace + CUDA graph caching for older GPUs (CC < 7.0)."""
+        try:
+            in_shape = self.game.CANONICAL_SHAPE()
+            dummy = torch.randn(1, *in_shape, device=self.device)
+            self.nnet.eval()
+            with torch.no_grad():
+                traced = torch.jit.trace(self.nnet, dummy)
+                traced = torch.jit.freeze(traced)
+                traced(dummy)  # trigger optimizations
+            self.nnet = traced
+            self._graph_inference = _CUDAGraphInference(
+                self.nnet, in_shape, self.device, self.use_autocast
+            )
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                "JIT trace + CUDA graphs failed, falling back to eager: %s", e
+            )
+            self._graph_inference = None
 
     def set_lr(self, lr):
         """Set learning rate on all optimizer parameter groups."""
@@ -431,6 +513,11 @@ class NNWrapper:
     @tracy_zone
     def process(self, batch):
         batch = batch.contiguous().to(self.device, non_blocking=True)
+        if self._graph_inference is not None:
+            res = self._graph_inference(batch)
+            if alphazero.tracy_is_enabled() and self.device.type == 'cuda':
+                torch.cuda.synchronize()
+            return res
         self.nnet.eval()
         with torch.no_grad():
             if self.use_autocast:

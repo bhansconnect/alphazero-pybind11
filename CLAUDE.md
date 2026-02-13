@@ -13,7 +13,7 @@ This project uses [uv](https://docs.astral.sh/uv/) for Python dependency managem
 uv sync
 
 # Editable install (builds the C++ extension)
-uv pip install --no-build-isolation -e .
+NINJA=$(pwd)/.venv/bin/ninja uv pip install --no-build-isolation -e .
 ```
 
 **Always use `uv run` to execute Python and build commands.** This ensures the correct environment is used without manual activation.
@@ -28,7 +28,7 @@ uv run meson setup build --buildtype release
 uv run ninja -C build test
 
 # Rebuild Python package after C++ changes
-uv pip install --no-build-isolation -e .
+NINJA=$(pwd)/.venv/bin/ninja uv pip install --no-build-isolation -e .
 ```
 
 ## Key Files
@@ -102,7 +102,7 @@ uv run meson setup build -Dtracy_enabled=true --buildtype=release --reconfigure
 uv run ninja -C build
 
 # Reinstall Python package
-uv pip install --no-build-isolation -e .
+NINJA=$(pwd)/.venv/bin/ninja uv pip install --no-build-isolation -e .
 ```
 
 ### Running Tracy

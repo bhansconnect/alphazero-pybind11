@@ -22,7 +22,7 @@ from neural_net import get_device, get_storage_dtype, to_half_safe
 from config import load_config, find_latest_checkpoint
 from tracy_utils import tracy_zone, tracy_thread, TracyZone, tracy_frame
 
-ZSTD_LEVEL = 3
+ZSTD_LEVEL = 1
 
 
 def save_compressed(tensor, path, half_storage=True):
@@ -688,18 +688,22 @@ def train(config, paths, experiment_name, iteration, hist_size, run, total_train
     hist_location = paths["history"]
     total_size = 0
     datasets = []
+    file_triples = []
     for i in range(max(0, iteration - hist_size), iteration + 1):
         c = _glob_hist_files(hist_location, f"{i:04d}-*-canonical-*")
         v = _glob_hist_files(hist_location, f"{i:04d}-*-v-*")
         p = _glob_hist_files(hist_location, f"{i:04d}-*-pi-*")
         for j in range(len(c)):
-            size = int(c[j].split("-")[-1].split(".")[0])
-            total_size += size
-            c_tensor = _load_hist_tensor(c[j])
-            v_tensor = _load_hist_tensor(v[j])
-            p_tensor = _load_hist_tensor(p[j])
-            datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-            del c_tensor, v_tensor, p_tensor
+            file_triples.append((c[j], v[j], p[j]))
+
+    for c_path, v_path, p_path in tqdm.tqdm(file_triples, desc="Loading Training Data", leave=False):
+        size = int(c_path.split("-")[-1].split(".")[0])
+        total_size += size
+        c_tensor = _load_hist_tensor(c_path)
+        v_tensor = _load_hist_tensor(v_path)
+        p_tensor = _load_hist_tensor(p_path)
+        datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
+        del c_tensor, v_tensor, p_tensor
 
     bs = config.train_batch_size
     dataset = ConcatDataset(datasets)
@@ -735,16 +739,20 @@ def update_reservoir(config, paths, iteration, hist_size):
 
     new_c, new_v, new_pi = [], [], []
     new_iters = []
+    evicted_files = []
     for it in evicted_iters:
         c_files = _glob_hist_files(hist_location, f"{it:04d}-*-canonical-*")
         v_files = _glob_hist_files(hist_location, f"{it:04d}-*-v-*")
         p_files = _glob_hist_files(hist_location, f"{it:04d}-*-pi-*")
         for j in range(len(c_files)):
-            ct = _load_hist_tensor(c_files[j])
-            new_c.append(ct)
-            new_v.append(_load_hist_tensor(v_files[j]))
-            new_pi.append(_load_hist_tensor(p_files[j]))
-            new_iters.append(torch.full((ct.shape[0],), it, dtype=torch.int16))
+            evicted_files.append((it, c_files[j], v_files[j], p_files[j]))
+
+    for it, c_path, v_path, p_path in tqdm.tqdm(evicted_files, desc="Loading Evicted History", leave=False):
+        ct = _load_hist_tensor(c_path)
+        new_c.append(ct)
+        new_v.append(_load_hist_tensor(v_path))
+        new_pi.append(_load_hist_tensor(p_path))
+        new_iters.append(torch.full((ct.shape[0],), it, dtype=torch.int16))
 
     if not new_c:
         return
@@ -757,10 +765,19 @@ def update_reservoir(config, paths, iteration, hist_size):
     os.makedirs(reservoir_location, exist_ok=True)
     res_c_path = os.path.join(reservoir_location, "canonical.ptz")
     if os.path.exists(res_c_path):
-        old_c = load_compressed(res_c_path)
-        old_v = load_compressed(os.path.join(reservoir_location, "v.ptz"))
-        old_pi = load_compressed(os.path.join(reservoir_location, "pi.ptz"))
-        old_iters = load_compressed(os.path.join(reservoir_location, "meta.ptz")).to(torch.int16)
+        res_files = [
+            ("canonical", res_c_path),
+            ("v", os.path.join(reservoir_location, "v.ptz")),
+            ("pi", os.path.join(reservoir_location, "pi.ptz")),
+            ("meta", os.path.join(reservoir_location, "meta.ptz")),
+        ]
+        loaded = {}
+        for name, path in tqdm.tqdm(res_files, desc="Loading Reservoir", leave=False):
+            loaded[name] = load_compressed(path)
+        old_c = loaded["canonical"]
+        old_v = loaded["v"]
+        old_pi = loaded["pi"]
+        old_iters = loaded["meta"].to(torch.int16)
         all_c = torch.cat([old_c, new_c])
         all_v = torch.cat([old_v, new_v])
         all_pi = torch.cat([old_pi, new_pi])
@@ -784,10 +801,14 @@ def update_reservoir(config, paths, iteration, hist_size):
         all_pi = all_pi[indices]
         all_iters = all_iters[indices]
 
-    _atomic_save_compressed(all_c, res_c_path)
-    _atomic_save_compressed(all_v, os.path.join(reservoir_location, "v.ptz"))
-    _atomic_save_compressed(all_pi, os.path.join(reservoir_location, "pi.ptz"))
-    _atomic_save_compressed(all_iters, os.path.join(reservoir_location, "meta.ptz"))
+    save_ops = [
+        (all_c, res_c_path),
+        (all_v, os.path.join(reservoir_location, "v.ptz")),
+        (all_pi, os.path.join(reservoir_location, "pi.ptz")),
+        (all_iters, os.path.join(reservoir_location, "meta.ptz")),
+    ]
+    for tensor, path in tqdm.tqdm(save_ops, desc="Saving Reservoir", leave=False):
+        _atomic_save_compressed(tensor, path)
 
     del new_c, new_v, new_pi, new_iters, all_c, all_v, all_pi, all_iters
     gc.collect()

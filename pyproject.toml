@@ -6,7 +6,32 @@ build-backend = "mesonpy"
 name = "alphazero"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["zstandard>=0.19.0"]
+dependencies = [
+    "torch>=2.0",
+    "numpy",
+    "zstandard>=0.19.0",
+    "pyyaml",
+    "tqdm",
+    "aim",
+]
 
 [project.optional-dependencies]
-dev = ["ninja", "meson", "pybind11"]
+aim = ["aim"]
+plot = ["matplotlib"]
+
+[dependency-groups]
+build = ["meson-python>=0.16.0", "meson>=1.0.0", "ninja>=1.8.2", "pybind11"]
+dev = ["pytest", "ruff"]
+
+[tool.uv]
+default-groups = ["build", "dev"]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu124", marker = "platform_system == 'Linux'" },
+]

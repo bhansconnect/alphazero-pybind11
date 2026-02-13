@@ -88,7 +88,7 @@ def calc_elo(past_elo, win_rates):
 
 
 @tracy_zone
-def pit_agents(config, Game, players, mcts_depths, bs, name, tree_reuse=True):
+def pit_agents(config, Game, players, mcts_visits, bs, name, tree_reuse=True):
     """Play agents against each other across all seat permutations.
 
     Returns list of win rates per player index.
@@ -99,16 +99,16 @@ def pit_agents(config, Game, players, mcts_depths, bs, name, tree_reuse=True):
         cb = Game.NUM_PLAYERS()
         n = bs * cb
         ordered_players = [None] * num_players
-        ordered_depths = [None] * num_players
+        ordered_visits = [None] * num_players
         for j in range(num_players):
             ordered_players[j] = players[(j + i) % num_players]
-            ordered_depths[j] = mcts_depths[(j + i) % num_players]
+            ordered_visits[j] = mcts_visits[(j + i) % num_players]
 
         params = base_params(config, 0.5, bs, cb)
         params.max_cache_size = 0  # Disable cache in arena
         params.tree_reuse = tree_reuse
         params.games_to_play = n
-        params.mcts_depth = ordered_depths
+        params.mcts_visits = ordered_visits
         set_eval_types(params, ordered_players)
         pm = alphazero.PlayManager(Game(), params)
 

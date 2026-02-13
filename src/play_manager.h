@@ -53,7 +53,7 @@ struct PlayParams {
   uint32_t max_batch_size = 1;
   uint32_t max_cache_size = 0;
   uint8_t cache_shards = 1;
-  std::vector<uint32_t> mcts_depth{};
+  std::vector<uint32_t> mcts_visits{};
   float cpuct = 2.0;
   float start_temp = 1.0;
   float final_temp = 1.0;

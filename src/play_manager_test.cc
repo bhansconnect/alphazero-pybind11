@@ -13,7 +13,7 @@ TEST(PlayManager, Basic) {
   auto params = PlayParams{};
   params.games_to_play = 32;
   params.concurrent_games = 8;
-  params.mcts_depth = {10, 10};
+  params.mcts_visits = {10, 10};
   params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
   params.history_enabled = true;
   params.playout_cap_randomization = true;
@@ -35,7 +35,7 @@ TEST(PlayManager, MultiThreaded) {
   auto params = PlayParams{};
   params.games_to_play = 32 * workers;
   params.concurrent_games = 8 * workers;
-  params.mcts_depth = {10, 10};
+  params.mcts_visits = {10, 10};
   params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
 
   auto pm = PlayManager{std::make_unique<connect4_gs::Connect4GS>(), params};

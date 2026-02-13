@@ -20,9 +20,9 @@ CONFIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "co
 
 # Minimal overrides for fast testing
 FAST_OVERRIDES = {
-    "selfplay_mcts_depth": "8",
-    "fast_mcts_depth": "4",
-    "compare_mcts_depth": "4",
+    "selfplay_mcts_visits": "8",
+    "fast_mcts_visits": "4",
+    "compare_mcts_visits": "4",
     "self_play_batch_size": "4",
     "self_play_chunks": "1",
     "self_play_concurrent_batch_mult": "1",

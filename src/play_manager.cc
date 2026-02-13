@@ -12,8 +12,8 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
       params_(p),
       games_started_(params_.concurrent_games) {
   games_.reserve(params_.concurrent_games);
-  if (params_.mcts_depth.size() != base_gs_->num_players()) {
-    throw std::runtime_error{"You must specify an MCTS depth for each player"};
+  if (params_.mcts_visits.size() != base_gs_->num_players()) {
+    throw std::runtime_error{"You must specify MCTS visits for each player"};
   }
   for (auto i = 0U; i < params_.concurrent_games; ++i) {
     auto gd = GameData{};
@@ -62,7 +62,7 @@ void PlayManager::play() {
       mcts.process_result(*game.gs, game.v, game.pi,
                           params_.add_noise && !game.capped);
       auto goal_depth =
-          game.capped ? params_.playout_cap_depth : params_.mcts_depth[cp];
+          game.capped ? params_.playout_cap_depth : params_.mcts_visits[cp];
       if (mcts.depth() >= goal_depth) {
         // Actually play a move.
         auto temp = params_.start_temp;

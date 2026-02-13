@@ -12,7 +12,7 @@ void PlayGameSingleThreaded() {
   auto params = PlayParams{};
   params.games_to_play = 64;
   params.concurrent_games = 64;
-  params.mcts_depth = {250, 250};
+  params.mcts_visits = {250, 250};
   params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
   params.history_enabled = true;
   params.playout_cap_randomization = true;
@@ -28,7 +28,7 @@ void PlayGameMultiThreaded() {
   auto params = PlayParams{};
   params.games_to_play = 64;
   params.concurrent_games = 64;
-  params.mcts_depth = {250, 250};
+  params.mcts_visits = {250, 250};
   params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
   params.history_enabled = true;
   params.playout_cap_randomization = true;

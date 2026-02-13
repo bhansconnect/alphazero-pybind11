@@ -6,9 +6,9 @@ kernel_size: 3
 
 star_gambit_spatial: true
 temp_decay_half_life: 8
-selfplay_mcts_depth: 120
-fast_mcts_depth: 30
-compare_mcts_depth: 30
+selfplay_mcts_visits: 120
+fast_mcts_visits: 30
+compare_mcts_visits: 30
 
 lr_schedule: "adaptive"
 iterations: 800

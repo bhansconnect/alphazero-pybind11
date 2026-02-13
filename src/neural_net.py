@@ -11,7 +11,6 @@ import zstandard as zstd
 import alphazero
 from tracy_utils import tracy_zone
 
-ZSTD_LEVEL = 1
 HALF_DTYPE = torch.float16
 
 
@@ -561,7 +560,7 @@ class NNWrapper:
     @tracy_zone
     def save_checkpoint(
         self, folder=os.path.join("data", "checkpoint"), filename="checkpoint.pt",
-        half_storage=True,
+        half_storage=True, zstd_level=1,
     ):
         filepath = os.path.join(folder, filename)
         os.makedirs(folder, exist_ok=True)
@@ -590,7 +589,7 @@ class NNWrapper:
             buffer,
         )
         with open(filepath, 'wb') as f:
-            f.write(zstd.ZstdCompressor(level=ZSTD_LEVEL, threads=-1).compress(buffer.getvalue()))
+            f.write(zstd.ZstdCompressor(level=zstd_level, threads=-1).compress(buffer.getvalue()))
 
     @staticmethod
     @tracy_zone

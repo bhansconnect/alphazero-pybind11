@@ -22,17 +22,14 @@ from neural_net import get_device, get_storage_dtype, to_half_safe
 from config import load_config, find_latest_checkpoint
 from tracy_utils import tracy_zone, tracy_thread, TracyZone, tracy_frame
 
-ZSTD_LEVEL = 1
-
-
-def save_compressed(tensor, path, half_storage=True):
+def save_compressed(tensor, path, half_storage=True, zstd_level=1):
     """Save tensor with zstd compression, optionally as half-precision."""
     buffer = io.BytesIO()
     if half_storage:
         tensor = to_half_safe(tensor, get_storage_dtype())
     torch.save(tensor, buffer)
     with open(path, 'wb') as f:
-        f.write(zstd.ZstdCompressor(level=ZSTD_LEVEL, threads=-1).compress(buffer.getvalue()))
+        f.write(zstd.ZstdCompressor(level=zstd_level, threads=-1).compress(buffer.getvalue()))
 
 
 def load_compressed(path):
@@ -42,13 +39,13 @@ def load_compressed(path):
     return torch.load(io.BytesIO(data), map_location="cpu", weights_only=True).float()
 
 
-def _atomic_save_compressed(tensor, path, half_storage=True):
+def _atomic_save_compressed(tensor, path, half_storage=True, zstd_level=1):
     """Save tensor to path atomically via temp file."""
     dir_name = os.path.dirname(path)
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
     os.close(fd)
     try:
-        save_compressed(tensor, tmp_path, half_storage)
+        save_compressed(tensor, tmp_path, half_storage, zstd_level=zstd_level)
         os.replace(tmp_path, path)  # atomic on POSIX
     except:
         os.unlink(tmp_path)
@@ -421,7 +418,7 @@ def maybe_save(
     half_storage=True,
 ):
     if size == config.hist_size or (force and size > 0):
-        save_fn = (lambda t, path: save_compressed(t, path, half_storage)) if use_compression else torch.save
+        save_fn = (lambda t, path: save_compressed(t, path, half_storage, zstd_level=config.zstd_level)) if use_compression else torch.save
         ext = ".ptz" if use_compression else ".pt"
         save_fn(
             c[:size],
@@ -721,7 +718,7 @@ def train(config, paths, experiment_name, iteration, hist_size, run, total_train
     )
     total_train_steps += steps_to_train
     nn.save_checkpoint(paths["checkpoint"], f"{iteration + 1:04d}-{experiment_name}.pt",
-                       half_storage=config.half_storage)
+                       half_storage=config.half_storage, zstd_level=config.zstd_level)
     del datasets, dataset, dataloader, nn
     return v_loss, pi_loss, total_train_steps
 
@@ -808,7 +805,7 @@ def update_reservoir(config, paths, iteration, hist_size):
         (all_iters, os.path.join(reservoir_location, "meta.ptz")),
     ]
     for tensor, path in tqdm.tqdm(save_ops, desc="Saving Reservoir", leave=False):
-        _atomic_save_compressed(tensor, path)
+        _atomic_save_compressed(tensor, path, zstd_level=config.zstd_level)
 
     del new_c, new_v, new_pi, new_iters, all_c, all_v, all_pi, all_iters
     gc.collect()
@@ -1154,7 +1151,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         )
         nn = neural_net.NNWrapper(Game, nnargs)
         nn.save_checkpoint(paths["checkpoint"], f"0000-{experiment_name}.pt",
-                           half_storage=config.half_storage)
+                           half_storage=config.half_storage, zstd_level=config.zstd_level)
 
     try:
         import aim
@@ -1291,7 +1288,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         total_train_steps += steps_p2
 
                 nn.save_checkpoint(paths["checkpoint"], f"{source_n:04d}-{experiment_name}.pt",
-                                   half_storage=config.half_storage)
+                                   half_storage=config.half_storage, zstd_level=config.zstd_level)
 
             current_best = source_n
             start = source_n

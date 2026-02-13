@@ -6,25 +6,29 @@ This is a C++/Python AlphaZero implementation. The core game logic and MCTS are 
 
 ## Environment Setup
 
-This project uses a conda environment called `torch`:
+This project uses [uv](https://docs.astral.sh/uv/) for Python dependency management. uv manages the Python interpreter, dependencies, and the meson-python C++ extension build.
 
 ```bash
-conda activate torch
+# Install all dependencies + build tools (Python 3.11, torch, numpy, etc.)
+uv sync
+
+# Editable install (builds the C++ extension)
+uv pip install --no-build-isolation -e .
 ```
 
-The `.claude/settings.local.json` is configured to use this environment's Python.
+**Always use `uv run` to execute Python and build commands.** This ensures the correct environment is used without manual activation.
 
 ## Build Commands
 
 ```bash
 # Initial setup
-meson setup build --buildtype release
+uv run meson setup build --buildtype release
 
 # Build and test C++
-ninja -C build test
+uv run ninja -C build test
 
-# Install Python package (editable mode)
-pip install --no-build-isolation -e .
+# Rebuild Python package after C++ changes
+uv pip install --no-build-isolation -e .
 ```
 
 ## Key Files
@@ -58,22 +62,25 @@ pip install --no-build-isolation -e .
    - Create library target
    - Add to `link_with` in `extension_module`
 3. Export in `src/py_wrapper.cc`
-4. Rebuild: `ninja -C build`
+4. Rebuild: `uv run ninja -C build`
 
 ## Testing
 
 ```bash
 # C++ tests
-ninja -C build test
+uv run ninja -C build test
 
 # Python unit tests (fast)
-python -m pytest src/test_config.py src/test_game_ui.py src/test_mcts_analysis.py -v
+uv run python -m pytest src/test_config.py src/test_game_ui.py src/test_mcts_analysis.py -v
 
 # History & compression tests
-python -m pytest src/test_history.py -v
+uv run python -m pytest src/test_history.py -v
 
 # Full integration tests (slow, ~3-5 min)
-python -m pytest src/test_train.py -v
+uv run python -m pytest src/test_train.py -v
+
+# Run all tests (C++ + Python unit tests)
+uv run python test_all.py
 ```
 
 ## Data Directories
@@ -89,13 +96,13 @@ The codebase includes optional Tracy profiler integration for performance analys
 
 ```bash
 # Reconfigure with Tracy enabled
-meson setup build -Dtracy_enabled=true --buildtype=release --reconfigure
+uv run meson setup build -Dtracy_enabled=true --buildtype=release --reconfigure
 
 # Build
-ninja -C build
+uv run ninja -C build
 
 # Reinstall Python package
-pip install --no-build-isolation -e .
+uv pip install --no-build-isolation -e .
 ```
 
 ### Running Tracy

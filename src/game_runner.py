@@ -1130,6 +1130,9 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
         run = DummyRun()
 
+    import atexit
+    atexit.register(lambda: hasattr(run, 'close') and run.close())
+
     # LR state for adaptive schedule
     lr_state_path = os.path.join(experiment_dir, "lr_state.json")
 

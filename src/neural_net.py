@@ -387,15 +387,20 @@ class NNWrapper:
         self.nnet.eval()
         l_v = 0
         l_pi = 0
-        for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
-            canonical, target_vs, target_pis = batch
-            canonical = canonical.contiguous().to(self.device, non_blocking=True)
-            target_vs = target_vs.contiguous().to(self.device, non_blocking=True)
-            target_pis = target_pis.contiguous().to(self.device, non_blocking=True)
+        with torch.no_grad():
+            for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
+                canonical, target_vs, target_pis = batch
+                canonical = canonical.contiguous().to(self.device, non_blocking=True)
+                target_vs = target_vs.contiguous().to(self.device, non_blocking=True)
+                target_pis = target_pis.contiguous().to(self.device, non_blocking=True)
 
-            out_v, out_pi = self.nnet(canonical)
-            l_v += self.loss_v(target_vs, out_v).item()
-            l_pi += self.loss_pi(target_pis, out_pi).item()
+                if self.use_autocast:
+                    with torch.autocast(device_type=self.device.type, dtype=HALF_DTYPE):
+                        out_v, out_pi = self.nnet(canonical)
+                else:
+                    out_v, out_pi = self.nnet(canonical)
+                l_v += self.loss_v(target_vs, out_v).item()
+                l_pi += self.loss_pi(target_pis, out_pi).item()
         return l_v / len(dataset), l_pi / len(dataset)
 
     @tracy_zone
@@ -403,19 +408,24 @@ class NNWrapper:
         loss = np.zeros(size)
         self.nnet.eval()
         i = 0
-        for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
-            canonical, target_vs, target_pis = batch
-            canonical = canonical.contiguous().to(self.device, non_blocking=True)
-            target_vs = target_vs.contiguous().to(self.device, non_blocking=True)
-            target_pis = target_pis.contiguous().to(self.device, non_blocking=True)
+        with torch.no_grad():
+            for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
+                canonical, target_vs, target_pis = batch
+                canonical = canonical.contiguous().to(self.device, non_blocking=True)
+                target_vs = target_vs.contiguous().to(self.device, non_blocking=True)
+                target_pis = target_pis.contiguous().to(self.device, non_blocking=True)
 
-            out_v, out_pi = self.nnet(canonical)
-            l_v = self.sample_loss_v(target_vs, out_v)
-            l_pi = self.sample_loss_pi(target_pis, out_pi)
-            total_loss = l_pi + l_v
-            for sample_loss in total_loss:
-                loss[i] = sample_loss.detach()
-                i += 1
+                if self.use_autocast:
+                    with torch.autocast(device_type=self.device.type, dtype=HALF_DTYPE):
+                        out_v, out_pi = self.nnet(canonical)
+                else:
+                    out_v, out_pi = self.nnet(canonical)
+                l_v = self.sample_loss_v(target_vs, out_v)
+                l_pi = self.sample_loss_pi(target_pis, out_pi)
+                total_loss = l_pi + l_v
+                batch_len = total_loss.shape[0]
+                loss[i:i + batch_len] = total_loss.cpu().numpy()
+                i += batch_len
         return loss
 
     @tracy_zone

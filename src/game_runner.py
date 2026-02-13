@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 from collections import namedtuple
+from concurrent.futures import ThreadPoolExecutor
 import math
 import random
 import time
@@ -381,15 +382,15 @@ def get_elo(past_elo, win_rates, new_agent):
     if new_agent != 0:
         past_elo[new_agent] = past_elo[new_agent - 1]
     iters = 5000
+    mask = ~np.isnan(win_rates[new_agent])
     for _ in tqdm.trange(iters, leave=False):
-        mean_update = 0
-        for j in range(past_elo.shape[0]):
-            if not math.isnan(win_rates[new_agent, j]):
-                rate = win_rates[new_agent, j]
-                rate = max(0.001, rate)
-                rate = min(0.999, rate)
-                mean_update += rate - elo_prob(past_elo[j], past_elo[new_agent])
-        past_elo[new_agent] += mean_update * 32
+        rates = np.clip(win_rates[new_agent, mask], 0.001, 0.999)
+        x = _ELO_ALPHA * (past_elo[mask] - past_elo[new_agent])
+        # Clamp to avoid overflow in exp (sigmoid saturates beyond ~700)
+        x_safe = np.clip(x, -500, 500)
+        probs = np.where(x_safe >= 0, 1.0 / (1.0 + np.exp(-x_safe)),
+                         np.exp(x_safe) / (1.0 + np.exp(x_safe)))
+        past_elo[new_agent] += np.sum(rates - probs) * 32
     return past_elo
 
 
@@ -469,9 +470,6 @@ def exploit_symmetries(config, paths, iteration):
         datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
         del c_tensor, v_tensor, p_tensor
 
-    dataset = ConcatDataset(datasets)
-    sample_count = len(dataset)
-
     i_out = 0
     batch_out = 0
     cs = Game.CANONICAL_SHAPE()
@@ -479,31 +477,59 @@ def exploit_symmetries(config, paths, iteration):
     v_out = torch.zeros(config.hist_size, Game.NUM_PLAYERS() + 1)
     p_out = torch.zeros(config.hist_size, Game.NUM_MOVES())
 
-    for i in tqdm.trange(
-        sample_count, desc="Creating Symmetric Samples", leave=False
-    ):
-        c, v, pi = dataset[i]
+    max_workers = min(os.cpu_count() or 4, 8)
+    # Thread-local Game() instances to avoid any potential contention
+    _thread_local = threading.local()
+
+    def _compute_symmetries(args):
+        """Compute symmetries for a single sample. Runs in thread pool (GIL released by C++)."""
+        c, v, pi = args
+        if not hasattr(_thread_local, 'game'):
+            _thread_local.game = Game()
         ph = alphazero.PlayHistory(c, v, pi)
-        syms = Game().symmetries(ph)
+        syms = _thread_local.game.symmetries(ph)
+        result = []
         for sym in syms:
-            c_out[i_out] = torch.from_numpy(np.array(sym.canonical()))
-            v_out[i_out] = torch.from_numpy(np.array(sym.v()))
-            p_out[i_out] = torch.from_numpy(np.array(sym.pi()))
-            i_out += 1
-            if maybe_save(
-                config,
-                c_out,
-                v_out,
-                p_out,
-                i_out,
-                batch_out,
-                iteration,
-                location=tmp_hist,
-                name="syms",
-            ):
-                i_out = 0
-                batch_out += 1
-        del c, v, pi, ph, syms
+            result.append((
+                torch.from_numpy(np.array(sym.canonical())),
+                torch.from_numpy(np.array(sym.v())),
+                torch.from_numpy(np.array(sym.pi())),
+            ))
+        return result
+
+    # Process per-file with threaded symmetry computation
+    sample_count = sum(len(ds.tensors[0]) for ds in datasets)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for ds in tqdm.tqdm(datasets, desc="Creating Symmetric Samples", leave=False):
+            c_t, v_t, p_t = ds.tensors
+            n = len(c_t)
+            # Submit all samples in this file to the thread pool
+            futures = executor.map(
+                _compute_symmetries,
+                ((c_t[i], v_t[i], p_t[i]) for i in range(n)),
+                chunksize=max(1, n // (max_workers * 4)),
+            )
+            # Collect results in order, write to output buffer
+            for sym_list in futures:
+                for c_sym, v_sym, p_sym in sym_list:
+                    c_out[i_out] = c_sym
+                    v_out[i_out] = v_sym
+                    p_out[i_out] = p_sym
+                    i_out += 1
+                    if maybe_save(
+                        config,
+                        c_out,
+                        v_out,
+                        p_out,
+                        i_out,
+                        batch_out,
+                        iteration,
+                        location=tmp_hist,
+                        name="syms",
+                    ):
+                        i_out = 0
+                        batch_out += 1
+
     maybe_save(
         config,
         c_out,
@@ -517,7 +543,7 @@ def exploit_symmetries(config, paths, iteration):
         force=True,
     )
 
-    del datasets, dataset
+    del datasets
     del c_out, v_out, p_out
 
     gc.collect()
@@ -553,7 +579,7 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
 
     dataset = ConcatDataset(datasets)
     sample_count = len(dataset)
-    dataloader = DataLoader(dataset, batch_size=config.train_batch_size, shuffle=False)
+    dataloader = DataLoader(dataset, batch_size=config.train_batch_size, shuffle=False, pin_memory=torch.cuda.is_available())
 
     nn = neural_net.NNWrapper.load_checkpoint(
         Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
@@ -574,28 +600,41 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
     for fn in glob.glob(os.path.join(hist_location, f"{iteration:04d}-*.pt*")):
         os.remove(fn)
 
-    for i in tqdm.trange(sample_count, desc="Resampling Data", leave=False):
-        sample_weight = 0.5 + (loss[i] / total_loss) * 0.5 * sample_count
-        for _ in range(math.floor(sample_weight)):
-            c, v, pi = dataset[i]
-            c_out[i_out] = c
-            v_out[i_out] = v
-            p_out[i_out] = pi
-            i_out += 1
+    # Compute copy counts vectorized
+    weights = 0.5 + (loss / total_loss) * 0.5 * sample_count
+    int_w = np.floor(weights).astype(np.int64)
+    frac_w = weights - int_w
+    frac_mask = np.random.random(sample_count) < frac_w
+    copies = int_w + frac_mask.astype(np.int64)
+
+    # Process per-file for memory safety
+    sample_idx = 0
+    for ds in tqdm.tqdm(datasets, desc="Resampling Data", leave=False):
+        c_t, v_t, p_t = ds.tensors
+        n = len(c_t)
+        ds_copies = copies[sample_idx:sample_idx + n]
+        expanded_idx = np.repeat(np.arange(n), ds_copies)
+        if len(expanded_idx) == 0:
+            sample_idx += n
+            continue
+        c_exp = c_t[expanded_idx]
+        v_exp = v_t[expanded_idx]
+        p_exp = p_t[expanded_idx]
+        # Write expanded samples to output buffer in chunks
+        pos = 0
+        while pos < len(expanded_idx):
+            space = config.hist_size - i_out
+            chunk = min(space, len(expanded_idx) - pos)
+            c_out[i_out:i_out + chunk] = c_exp[pos:pos + chunk]
+            v_out[i_out:i_out + chunk] = v_exp[pos:pos + chunk]
+            p_out[i_out:i_out + chunk] = p_exp[pos:pos + chunk]
+            i_out += chunk
+            pos += chunk
             if maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True, half_storage=config.half_storage):
                 i_out = 0
                 batch_out += 1
-            del c, v, pi
-        if random.random() < sample_weight - math.floor(sample_weight):
-            c, v, pi = dataset[i]
-            c_out[i_out] = c
-            v_out[i_out] = v
-            p_out[i_out] = pi
-            i_out += 1
-            if maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True, half_storage=config.half_storage):
-                i_out = 0
-                batch_out += 1
-            del c, v, pi
+        del c_exp, v_exp, p_exp, expanded_idx
+        sample_idx += n
 
     maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True, force=True, half_storage=config.half_storage)
 
@@ -625,7 +664,7 @@ def iteration_loss(config, paths, experiment_name, iteration):
         del c_tensor, v_tensor, p_tensor
 
     dataset = ConcatDataset(datasets)
-    dataloader = DataLoader(dataset, batch_size=config.train_batch_size, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=config.train_batch_size, shuffle=True, pin_memory=torch.cuda.is_available())
 
     nn = neural_net.NNWrapper.load_checkpoint(
         Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
@@ -660,7 +699,7 @@ def train(config, paths, experiment_name, iteration, hist_size, run, total_train
 
     bs = config.train_batch_size
     dataset = ConcatDataset(datasets)
-    dataloader = DataLoader(dataset, batch_size=bs, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=bs, shuffle=True, pin_memory=torch.cuda.is_available())
 
     average_generation = total_size / min(hist_size, iteration + 1)
     nn = neural_net.NNWrapper.load_checkpoint(
@@ -1214,14 +1253,14 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 all_datasets = ([reservoir_ds] if reservoir_ds else []) + window_datasets
                 if all_datasets:
                     combined = ConcatDataset(all_datasets)
-                    dataloader = DataLoader(combined, batch_size=config.train_batch_size, shuffle=True)
+                    dataloader = DataLoader(combined, batch_size=config.train_batch_size, shuffle=True, pin_memory=torch.cuda.is_available())
                     steps_p1 = int(math.ceil(len(combined) / config.train_batch_size)) * config.bootstrap_full_passes
                     nn.train(dataloader, steps_p1, run, source_n, total_train_steps)
                     total_train_steps += steps_p1
 
                     if window_datasets:
                         window_only = ConcatDataset(window_datasets)
-                        dataloader2 = DataLoader(window_only, batch_size=config.train_batch_size, shuffle=True)
+                        dataloader2 = DataLoader(window_only, batch_size=config.train_batch_size, shuffle=True, pin_memory=torch.cuda.is_available())
                         steps_p2 = int(math.ceil(len(window_only) / config.train_batch_size)) * config.bootstrap_window_passes
                         nn.train(dataloader2, steps_p2, run, source_n, total_train_steps)
                         total_train_steps += steps_p2
@@ -1490,3 +1529,6 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             run.track(total_time, name="time_seconds", epoch=i, step=total_train_steps, context={"stage": "total"})
 
             tracy_frame()
+
+    if hasattr(run, 'close'):
+        run.close()

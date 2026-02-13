@@ -1,5 +1,7 @@
 """Game UI base class and registry for pluggable play interfaces."""
 
+import numpy as np
+
 
 class GameUI:
     """Base class for game-specific play UI."""
@@ -29,6 +31,23 @@ class GameUI:
     def show_help(self, gs):
         """Print game-specific help text."""
         print("Enter action ID (integer). Type 'help' for valid moves.")
+
+    def display_actions_menu(self, gs, probs, valids, wld=None, top_n=5):
+        """Display action menu with probabilities. Base: top-N summary."""
+        valid_indices = np.where(np.asarray(valids) > 0)[0]
+        if len(valid_indices) == 0:
+            return
+        sorted_idx = valid_indices[np.argsort(probs[valid_indices])[::-1]]
+        if wld is not None:
+            print(f"  WLD: {wld}")
+        print("  Top moves:")
+        for idx in sorted_idx[:top_n]:
+            desc = self.format_move(gs, idx)
+            print(f"  {idx:4d}: {desc}  [{probs[idx]*100:5.1f}%]")
+
+    def select_variant(self) -> str | None:
+        """Optionally offer variant selection at startup. Returns game name or None."""
+        return None
 
 
 # Registry mapping game names to UI factory functions.

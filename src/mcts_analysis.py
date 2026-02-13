@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MCTS Threshold Analysis for Star Gambit.
+"""MCTS Threshold Analysis -- game-generic.
 
 Determines the optimal MCTS visit count for self-play and evaluation by:
 1. Running an Elo tournament between different visit count configurations
@@ -12,25 +12,29 @@ import sys
 
 # macOS nano zone allocator corrupts heap when C++ threads run inside Python.
 # Must be set before process starts (before first malloc), so re-exec if needed.
-if sys.platform == "darwin" and os.environ.get("MallocNanoZone") != "0":
+if __name__ == "__main__" and sys.platform == "darwin" and os.environ.get("MallocNanoZone") != "0":
     os.environ["MallocNanoZone"] = "0"
     os.execve(sys.executable, [sys.executable] + sys.argv, os.environ)
+import glob
 import math
 import gc
+import re
 import numpy as np
 import torch
 import tqdm
 
 import alphazero
 import neural_net
+from config import TrainConfig, GAME_REGISTRY, load_config
 from game_runner import (
     GameRunner, GRArgs, RandPlayer, PlayoutPlayer, base_params, elo_prob,
-    set_eval_types, CPUCT, FPU_REDUCTION, EVAL_TEMP, FINAL_TEMP, TEMP_DECAY_HALF_LIFE,
+    set_eval_types,
 )
-from monrad import pit_agents, calc_elo
-from star_gambit_play import discover_networks, select_checkpoint_from_run
+from tournament import pit_agents, calc_elo
 
 np.set_printoptions(precision=3, suppress=True)
+
+CONFIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "configs")
 
 # --- Constants ---
 DEFAULT_VISIT_COUNTS = [1, 25, 50, 100, 200, 400, 800]
@@ -39,13 +43,13 @@ TOURNAMENT_CONCURRENT_BATCHES = 2
 ANALYSIS_GAMES = 64
 
 
-def calc_temp(turn):
+def calc_temp(config, turn):
     """Compute temperature with exponential decay (matches game_runner)."""
     ln2 = 0.693
-    ld = ln2 / TEMP_DECAY_HALF_LIFE
-    temp = EVAL_TEMP - FINAL_TEMP
+    ld = ln2 / config.temp_decay_half_life
+    temp = config.eval_temp - config.final_temp
     temp *= math.exp(-ld * turn)
-    temp += FINAL_TEMP
+    temp += config.final_temp
     return temp
 
 
@@ -77,96 +81,121 @@ def top_k_agreement(p, q, k):
     return len(top_p & top_q) / k
 
 
+# --- Game discovery ---
+
+def get_available_games():
+    """Return list of all available game names from the registry."""
+    return sorted(GAME_REGISTRY.keys())
+
+
+def discover_experiment_checkpoints(game_name, base="data"):
+    """Discover checkpoints from experiment directories for a game.
+
+    Returns: {experiment_name: [(iter_num, full_path), ...]}
+    Each experiment's checkpoints sorted by iteration descending.
+    """
+    game_dir = os.path.join(base, game_name)
+    if not os.path.isdir(game_dir):
+        return {}
+
+    experiments = {}
+    for exp_name in sorted(os.listdir(game_dir)):
+        checkpoint_dir = os.path.join(game_dir, exp_name, "checkpoint")
+        if not os.path.isdir(checkpoint_dir):
+            continue
+
+        checkpoints = []
+        for pt_file in glob.glob(os.path.join(checkpoint_dir, "*.pt")):
+            filename = os.path.basename(pt_file)
+            match = re.match(r"^(\d+).*\.pt$", filename)
+            if match:
+                iter_num = int(match.group(1))
+                checkpoints.append((iter_num, pt_file))
+
+        if checkpoints:
+            checkpoints.sort(key=lambda x: x[0], reverse=True)
+            experiments[exp_name] = checkpoints
+
+    return experiments
+
+
+def select_checkpoint(checkpoints):
+    """Select a checkpoint interactively. Returns path, None (random), or 'playout'."""
+    latest_iter, latest_path = checkpoints[0]
+
+    print(f"\nCheckpoints (newest first):")
+    print(f"  l. Latest -> iter {latest_iter:04d}")
+    print(f"  r. Random policy")
+    print(f"  p. Playout policy")
+    print("  " + "-" * 40)
+
+    show = min(10, len(checkpoints))
+    for i in range(show):
+        iter_num, _ = checkpoints[i]
+        print(f"  {i}. iter {iter_num:04d}")
+    if len(checkpoints) > show:
+        print(f"  ... ({len(checkpoints) - show} more)")
+
+    while True:
+        choice = input("\nSelect checkpoint (Enter=latest): ").strip().lower()
+        if choice in ["", "l"]:
+            return latest_path
+        if choice == "r":
+            return None
+        if choice == "p":
+            return "playout"
+        try:
+            idx = int(choice)
+            if 0 <= idx < len(checkpoints):
+                return checkpoints[idx][1]
+            print(f"Enter 0-{len(checkpoints)-1}")
+        except ValueError:
+            print("Invalid input")
+
+
 # --- Phase 1: Interactive Configuration ---
 
-GAME_VARIANTS = {
-    "1": ("Skirmish", alphazero.StarGambitSkirmishGS),
-    "2": ("Clash", alphazero.StarGambitClashGS),
-    "3": ("Battle", alphazero.StarGambitBattleGS),
-}
-
-
 def interactive_config():
-    """Interactive configuration. Returns (Game, network_path, visit_counts, phases)."""
-    print("=== MCTS Threshold Analysis for Star Gambit ===\n")
+    """Interactive configuration. Returns (config, Game, network_path, visit_counts, phases, use_playout)."""
+    print("=== MCTS Threshold Analysis ===\n")
 
-    # Game variant
-    print("Select game variant:")
-    for k, (name, _) in GAME_VARIANTS.items():
-        print(f"  {k}. {name}")
-    choice = input("Variant [1]: ").strip() or "1"
-    if choice not in GAME_VARIANTS:
-        print(f"Invalid choice '{choice}', using Skirmish")
-        choice = "1"
-    variant_name, Game = GAME_VARIANTS[choice]
-    print(f"  -> {variant_name}\n")
+    # Game selection from registry
+    games = get_available_games()
+    print("Select game:")
+    for i, name in enumerate(games):
+        print(f"  {i + 1}. {name}")
+    choice = input(f"Game [1]: ").strip() or "1"
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(games):
+            game_name = games[idx]
+        else:
+            print(f"Invalid choice, using {games[0]}")
+            game_name = games[0]
+    except ValueError:
+        # Try matching by name
+        if choice in games:
+            game_name = choice
+        else:
+            print(f"Invalid choice, using {games[0]}")
+            game_name = games[0]
+    print(f"  -> {game_name}\n")
 
-    # Network selection
-    variants = discover_networks()
-    if not variants:
-        print("No checkpoints found in data/checkpoint/")
-        sys.exit(1)
-
-    # Variant selection
-    variant_names = list(variants.keys())
-    if len(variant_names) == 1:
-        selected_variant = variant_names[0]
-        print(f"Variant: {selected_variant}")
+    # Load config from YAML if available, else defaults
+    yaml_path = os.path.join(CONFIGS_DIR, f"{game_name}.yaml")
+    if os.path.exists(yaml_path):
+        config = load_config(yaml_path, {})
     else:
-        print("Available variants:")
-        for i, name in enumerate(variant_names):
-            runs = variants[name]
-            total_cpts = sum(len(cpts) for cpts in runs.values())
-            print(f"  {i + 1}. {name} ({len(runs)} run(s), {total_cpts} checkpoints)")
-        while True:
-            rc = input("\nSelect variant (number) [1]: ").strip()
-            if rc == "":
-                selected_variant = variant_names[0]
-                break
-            try:
-                idx = int(rc) - 1
-                if 0 <= idx < len(variant_names):
-                    selected_variant = variant_names[idx]
-                    break
-                print(f"Enter 1-{len(variant_names)}")
-            except ValueError:
-                print("Invalid input")
+        config = TrainConfig(game=game_name)
+    Game = config.Game
 
-    runs = variants[selected_variant]
-
-    # Run selection
-    run_names = sorted(runs.keys())
-    if len(run_names) == 1:
-        selected_run = run_names[0]
-        print(f"Run: {selected_run}")
-    else:
-        print("Available runs:")
-        for i, name in enumerate(run_names):
-            cpts = runs[name]
-            iter_range = f"{cpts[-1][0]:04d}-{cpts[0][0]:04d}"
-            print(f"  {i + 1}. {name} ({len(cpts)} checkpoints: {iter_range})")
-        while True:
-            rc = input("\nSelect run (number) [1]: ").strip()
-            if rc == "":
-                selected_run = run_names[0]
-                break
-            try:
-                idx = int(rc) - 1
-                if 0 <= idx < len(run_names):
-                    selected_run = run_names[idx]
-                    break
-                print(f"Enter 1-{len(run_names)}")
-            except ValueError:
-                print("Invalid input")
-
-    checkpoints = runs[selected_run]
-    network_path = select_checkpoint_from_run(checkpoints)
-    use_playout = False
-    if network_path == "playout":
+    # Network selection from experiment directories
+    experiments = discover_experiment_checkpoints(game_name)
+    if not experiments:
+        print(f"No checkpoints found in data/{game_name}/*/checkpoint/")
+        print("Will use random or playout policy.\n")
         network_path = None
-        use_playout = True
-        print("  -> Playout policy (random rollout)\n")
-    elif network_path is None:
+        use_playout = False
         playout_choice = input("Use playout (rollout) evaluation instead of uniform random? (y/n) [n]: ").strip().lower()
         if playout_choice == 'y':
             use_playout = True
@@ -174,7 +203,46 @@ def interactive_config():
         else:
             print("  -> Random policy (uniform)\n")
     else:
-        print(f"  -> {os.path.basename(network_path)}\n")
+        # Experiment selection
+        exp_names = list(experiments.keys())
+        if len(exp_names) == 1:
+            selected_exp = exp_names[0]
+            print(f"Experiment: {selected_exp}")
+        else:
+            print("Available experiments:")
+            for i, name in enumerate(exp_names):
+                cpts = experiments[name]
+                print(f"  {i + 1}. {name} ({len(cpts)} checkpoints, latest: iter {cpts[0][0]:04d})")
+            while True:
+                rc = input("\nSelect experiment (number) [1]: ").strip()
+                if rc == "":
+                    selected_exp = exp_names[0]
+                    break
+                try:
+                    idx = int(rc) - 1
+                    if 0 <= idx < len(exp_names):
+                        selected_exp = exp_names[idx]
+                        break
+                    print(f"Enter 1-{len(exp_names)}")
+                except ValueError:
+                    print("Invalid input")
+
+        checkpoints = experiments[selected_exp]
+        network_path = select_checkpoint(checkpoints)
+        use_playout = False
+        if network_path == "playout":
+            network_path = None
+            use_playout = True
+            print("  -> Playout policy (random rollout)\n")
+        elif network_path is None:
+            playout_choice = input("Use playout (rollout) evaluation instead of uniform random? (y/n) [n]: ").strip().lower()
+            if playout_choice == 'y':
+                use_playout = True
+                print("  -> Playout policy (random rollout)\n")
+            else:
+                print("  -> Random policy (uniform)\n")
+        else:
+            print(f"  -> {os.path.basename(network_path)}\n")
 
     # Visit counts
     print(f"Default visit counts: {DEFAULT_VISIT_COUNTS}")
@@ -200,12 +268,12 @@ def interactive_config():
         phases = {"tournament", "analysis"}
     print(f"  -> {phases}\n")
 
-    return Game, network_path, visit_counts, phases, use_playout
+    return config, Game, network_path, visit_counts, phases, use_playout
 
 
 # --- Phase 2: Elo Tournament (Round-Robin) ---
 
-def run_tournament(Game, network_path, visit_counts, use_playout=False):
+def run_tournament(config, Game, network_path, visit_counts, use_playout=False):
     """Run round-robin Elo tournament between visit count configs.
 
     Returns (elo_ratings, win_matrix) indexed by visit_counts order.
@@ -247,7 +315,7 @@ def run_tournament(Game, network_path, visit_counts, use_playout=False):
 
                 name = f"v{d1}-v{d2}"
                 win_rates = pit_agents(
-                    Game, players, depths,
+                    config, Game, players, depths,
                     TOURNAMENT_BATCH_SIZE, name,
                 )
                 win_matrix[i, j] = win_rates[0]
@@ -270,7 +338,7 @@ def run_tournament(Game, network_path, visit_counts, use_playout=False):
 
 # --- Phase 3: Policy & Value Analysis ---
 
-def run_analysis(Game, network_path, visit_counts, use_playout=False):
+def run_analysis(config, Game, network_path, visit_counts, use_playout=False):
     """Run policy & value convergence analysis with batched inference.
 
     Plays ANALYSIS_GAMES concurrently, batching all NN inference calls across
@@ -314,7 +382,7 @@ def run_analysis(Game, network_path, visit_counts, use_playout=False):
 
         # Create fresh MCTS for each active game's current position
         mcts_list = [
-            alphazero.MCTS(CPUCT, num_players, num_moves, 0.0, 1.4, FPU_REDUCTION)
+            alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.4, config.fpu_reduction)
             for _ in range(n)
         ]
 
@@ -391,7 +459,7 @@ def run_analysis(Game, network_path, visit_counts, use_playout=False):
             # Select move from max-visits policy with temperature
             if max_visits in pos_policies[slot]:
                 probs = pos_policies[slot][max_visits].copy()
-                temp = calc_temp(gs.current_turn())
+                temp = calc_temp(config, gs.current_turn())
                 if temp > 0 and temp != 1.0:
                     probs = np.power(probs + 1e-10, 1.0 / temp)
                     probs /= probs.sum()
@@ -850,17 +918,17 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
 
 
 def main():
-    Game, network_path, visit_counts, phases, use_playout = interactive_config()
+    config, Game, network_path, visit_counts, phases, use_playout = interactive_config()
 
     elo = None
     win_matrix = None
     metrics = None
 
     if "tournament" in phases:
-        elo, win_matrix = run_tournament(Game, network_path, visit_counts, use_playout)
+        elo, win_matrix = run_tournament(config, Game, network_path, visit_counts, use_playout)
 
     if "analysis" in phases:
-        metrics = run_analysis(Game, network_path, visit_counts, use_playout)
+        metrics = run_analysis(config, Game, network_path, visit_counts, use_playout)
 
     visualize_and_save(visit_counts, elo=elo, win_matrix=win_matrix, metrics=metrics)
 

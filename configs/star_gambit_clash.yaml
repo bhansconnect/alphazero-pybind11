@@ -1,0 +1,12 @@
+game: star_gambit_clash
+depth: 4
+channels: 16
+kernel_size: 3
+star_gambit_spatial: true
+selfplay_mcts_depth: 300
+fast_mcts_depth: 50
+compare_mcts_depth: 100
+self_play_batch_size: 128
+expected_opening_length: 12
+temp_decay_half_life: 10
+iterations: 400

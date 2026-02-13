@@ -1145,14 +1145,16 @@ def main(config, experiment_dir, aim_repo=None):
             # Calibrate bootstrap network ELO against source networks
             compare_start = max(0, source_n - config.compare_past)
             for past_iter in range(compare_start, source_n):
-                past_cp = os.path.join(source_paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt")
-                if not os.path.exists(past_cp):
-                    # Try to find a checkpoint with a different experiment name
-                    cps = glob.glob(os.path.join(source_paths["checkpoint"], f"{past_iter:04d}-*.pt"))
-                    if cps:
-                        # Copy it with our experiment name
+                dest_cp = os.path.join(paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt")
+                if not os.path.exists(dest_cp):
+                    # Copy from source (try exact name first, then glob)
+                    source_cp = os.path.join(source_paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt")
+                    if not os.path.exists(source_cp):
+                        cps = glob.glob(os.path.join(source_paths["checkpoint"], f"{past_iter:04d}-*.pt"))
+                        source_cp = cps[0] if cps else None
+                    if source_cp:
                         import shutil
-                        shutil.copy2(cps[0], os.path.join(paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt"))
+                        shutil.copy2(source_cp, dest_cp)
                     else:
                         continue
 

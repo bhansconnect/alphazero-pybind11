@@ -284,6 +284,7 @@ class _CUDAGraphInference:
         self.use_autocast = use_autocast
         self._cache = {}  # bucket_size -> (graph, static_input, static_v, static_pi)
         self._lock = threading.Lock()
+        self._pool = torch.cuda.graph_pool_handle()
 
     def __call__(self, batch):
         bs = batch.shape[0]
@@ -318,7 +319,7 @@ class _CUDAGraphInference:
                 self._forward(static_input)
         # Record
         g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g), torch.no_grad():
+        with torch.cuda.graph(g, pool=self._pool), torch.no_grad():
             static_v, static_pi = self._forward(static_input)
         self._cache[bucket_size] = (g, static_input, static_v, static_pi)
 

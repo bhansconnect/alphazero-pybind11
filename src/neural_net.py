@@ -11,7 +11,7 @@ import zstandard as zstd
 import alphazero
 from tracy_utils import tracy_zone
 
-ZSTD_LEVEL = 3
+ZSTD_LEVEL = 1
 HALF_DTYPE = torch.float16
 
 

@@ -117,6 +117,9 @@ class TrainConfig:
     half_storage: bool = True
     torch_compile: bool = True
 
+    # Compression
+    zstd_level: int = 1
+
     def validate(self):
         if self.game not in GAME_REGISTRY:
             raise ValueError(f"Unknown game: {self.game}")

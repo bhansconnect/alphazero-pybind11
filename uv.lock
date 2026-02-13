@@ -108,20 +108,13 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aim" },
+    { name = "matplotlib" },
     { name = "numpy" },
     { name = "pyyaml" },
     { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "sys_platform == 'linux'" },
     { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "tqdm" },
     { name = "zstandard" },
-]
-
-[package.optional-dependencies]
-aim = [
-    { name = "aim" },
-]
-plot = [
-    { name = "matplotlib" },
 ]
 
 [package.dev-dependencies]
@@ -139,8 +132,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aim", specifier = ">=3.0" },
-    { name = "aim", marker = "extra == 'aim'", specifier = ">=3.0" },
-    { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.7" },
+    { name = "matplotlib", specifier = ">=3.7" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "torch", marker = "sys_platform != 'linux'", specifier = ">=2.0" },
@@ -148,7 +140,6 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.60" },
     { name = "zstandard", specifier = ">=0.19.0" },
 ]
-provides-extras = ["aim", "plot"]
 
 [package.metadata.requires-dev]
 build = [

@@ -274,7 +274,7 @@ class NNArch(nn.Module):
 
 class _CUDAGraphInference:
     """Cache CUDA graphs per batch-size bucket for fast inference."""
-    _record_lock = threading.Lock()
+    _lock = threading.Lock()
 
     def __init__(self, model, input_shape, device, use_autocast):
         self.model = model
@@ -282,19 +282,15 @@ class _CUDAGraphInference:
         self.device = device
         self.use_autocast = use_autocast
         self._cache = {}  # bucket_size -> (graph, static_input, static_v, static_pi)
-        self._lock = threading.Lock()
-        self._pool = torch.cuda.graph_pool_handle()
 
     def __call__(self, batch):
         bs = batch.shape[0]
         bucket = 1
         while bucket < bs:
             bucket *= 2
-        if bucket not in self._cache:
-            with _CUDAGraphInference._record_lock:
-                if bucket not in self._cache:
-                    self._record(bucket)
-        with self._lock:
+        with _CUDAGraphInference._lock:
+            if bucket not in self._cache:
+                self._record(bucket)
             graph, static_input, static_v, static_pi = self._cache[bucket]
             static_input[:bs].copy_(batch)
             graph.replay()
@@ -318,7 +314,7 @@ class _CUDAGraphInference:
                 self._forward(static_input)
         # Record
         g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g, pool=self._pool), torch.no_grad():
+        with torch.cuda.graph(g), torch.no_grad():
             static_v, static_pi = self._forward(static_input)
         self._cache[bucket_size] = (g, static_input, static_v, static_pi)
 

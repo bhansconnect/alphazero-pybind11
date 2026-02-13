@@ -17,17 +17,19 @@ import numpy as np
 import gc
 import zstandard as zstd
 import alphazero
-from neural_net import get_device
+from neural_net import get_device, get_storage_dtype, to_half_safe
 from config import load_config, find_latest_checkpoint
 from tracy_utils import tracy_zone, tracy_thread, TracyZone, tracy_frame
 
 ZSTD_LEVEL = 3
 
 
-def save_compressed(tensor, path):
-    """Save tensor as bfloat16 + zstd compressed (.ptz)."""
+def save_compressed(tensor, path, half_storage=True):
+    """Save tensor with zstd compression, optionally as half-precision."""
     buffer = io.BytesIO()
-    torch.save(tensor.bfloat16(), buffer)
+    if half_storage:
+        tensor = to_half_safe(tensor, get_storage_dtype())
+    torch.save(tensor, buffer)
     with open(path, 'wb') as f:
         f.write(zstd.ZstdCompressor(level=ZSTD_LEVEL, threads=-1).compress(buffer.getvalue()))
 
@@ -39,13 +41,13 @@ def load_compressed(path):
     return torch.load(io.BytesIO(data), map_location="cpu", weights_only=True).float()
 
 
-def _atomic_save_compressed(tensor, path):
+def _atomic_save_compressed(tensor, path, half_storage=True):
     """Save tensor to path atomically via temp file."""
     dir_name = os.path.dirname(path)
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
     os.close(fd)
     try:
-        save_compressed(tensor, tmp_path)
+        save_compressed(tensor, tmp_path, half_storage)
         os.replace(tmp_path, path)  # atomic on POSIX
     except:
         os.unlink(tmp_path)
@@ -57,6 +59,15 @@ def _load_hist_tensor(path):
     if path.endswith(".ptz"):
         return load_compressed(path)
     return torch.load(path, map_location="cpu", mmap=True)
+
+
+def prepare_inference_model(nn, config):
+    """Apply inference optimizations from config."""
+    if hasattr(nn, 'enable_inference_optimizations'):
+        nn.enable_inference_optimizations(
+            autocast=config.autocast,
+            compile=config.torch_compile,
+        )
 
 
 def _glob_hist_files(location, pattern):
@@ -406,9 +417,10 @@ def maybe_save(
     name="",
     force=False,
     use_compression=False,
+    half_storage=True,
 ):
     if size == config.hist_size or (force and size > 0):
-        save_fn = save_compressed if use_compression else torch.save
+        save_fn = (lambda t, path: save_compressed(t, path, half_storage)) if use_compression else torch.save
         ext = ".ptz" if use_compression else ".pt"
         save_fn(
             c[:size],
@@ -570,7 +582,7 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
             v_out[i_out] = v
             p_out[i_out] = pi
             i_out += 1
-            if maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True):
+            if maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True, half_storage=config.half_storage):
                 i_out = 0
                 batch_out += 1
             del c, v, pi
@@ -580,12 +592,12 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
             v_out[i_out] = v
             p_out[i_out] = pi
             i_out += 1
-            if maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True):
+            if maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True, half_storage=config.half_storage):
                 i_out = 0
                 batch_out += 1
             del c, v, pi
 
-    maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True, force=True)
+    maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True, force=True, half_storage=config.half_storage)
 
     del datasets, dataset, dataloader, nn
     del c_out, v_out, p_out
@@ -661,7 +673,8 @@ def train(config, paths, experiment_name, iteration, hist_size, run, total_train
         dataloader, steps_to_train, run, iteration, total_train_steps
     )
     total_train_steps += steps_to_train
-    nn.save_checkpoint(paths["checkpoint"], f"{iteration + 1:04d}-{experiment_name}.pt")
+    nn.save_checkpoint(paths["checkpoint"], f"{iteration + 1:04d}-{experiment_name}.pt",
+                       half_storage=config.half_storage)
     del datasets, dataset, dataloader, nn
     return v_loss, pi_loss, total_train_steps
 
@@ -797,6 +810,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         nn = neural_net.NNWrapper.load_checkpoint(
             Game, paths["checkpoint"], f"{best:04d}-{experiment_name}.pt"
         )
+        prepare_inference_model(nn, config)
 
     players = [nn] * Game.NUM_PLAYERS()
     set_eval_types(params, players)
@@ -857,12 +871,14 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
     nn = neural_net.NNWrapper.load_checkpoint(
         Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
     )
+    prepare_inference_model(nn, config)
     if past_iter == 0:
         nn_past = RandPlayer()
     else:
         nn_past = neural_net.NNWrapper.load_checkpoint(
             Game, paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt"
         )
+        prepare_inference_model(nn_past, config)
     cb = Game.NUM_PLAYERS()
     if Game.NUM_PLAYERS() > 2:
         bs = batch_size
@@ -1073,7 +1089,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             star_gambit_spatial=config.star_gambit_spatial,
         )
         nn = neural_net.NNWrapper(Game, nnargs)
-        nn.save_checkpoint(paths["checkpoint"], f"0000-{experiment_name}.pt")
+        nn.save_checkpoint(paths["checkpoint"], f"0000-{experiment_name}.pt",
+                           half_storage=config.half_storage)
 
     try:
         import aim
@@ -1206,7 +1223,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         nn.train(dataloader2, steps_p2, run, source_n, total_train_steps)
                         total_train_steps += steps_p2
 
-                nn.save_checkpoint(paths["checkpoint"], f"{source_n:04d}-{experiment_name}.pt")
+                nn.save_checkpoint(paths["checkpoint"], f"{source_n:04d}-{experiment_name}.pt",
+                                   half_storage=config.half_storage)
 
             current_best = source_n
             start = source_n

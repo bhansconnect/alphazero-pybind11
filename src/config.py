@@ -43,9 +43,9 @@ class TrainConfig:
     # MCTS
     cpuct: float = 1.25
     fpu_reduction: float = 0.25
-    selfplay_mcts_depth: int = 100
-    fast_mcts_depth: int = 25
-    compare_mcts_depth: int = 50
+    selfplay_mcts_visits: int = 100
+    fast_mcts_visits: int = 25
+    compare_mcts_visits: int = 50
 
     # Temperature
     self_play_temp: float = 1.0
@@ -136,7 +136,7 @@ class TrainConfig:
     def auto_experiment_name(self) -> str:
         return (
             f"{self.network_name}-{self.depth}d-{self.channels}c"
-            f"-{self.kernel_size}k-{self.selfplay_mcts_depth}sims"
+            f"-{self.kernel_size}k-{self.selfplay_mcts_visits}sims"
         )
 
     @property

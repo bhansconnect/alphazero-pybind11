@@ -156,7 +156,7 @@ def main():
     print(f"Experiment: {os.path.basename(experiment_dir)}")
     print(f"Directory: {experiment_dir}")
     print(f"Network: {config.network_name} {config.depth}d {config.channels}c {config.kernel_size}k")
-    print(f"MCTS depth: {config.selfplay_mcts_depth}")
+    print(f"MCTS visits: {config.selfplay_mcts_visits}")
     print(f"Iterations: {start} -> {config.iterations}")
     print(f"LR schedule: {config.lr_schedule}")
     if bootstrap_from:

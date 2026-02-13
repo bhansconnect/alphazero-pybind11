@@ -194,7 +194,7 @@ Vector<float> MCTS::probs(const float temp) const noexcept {
   auto probs = Vector<float>{num_moves_};
 
   // When no visits have been made, return the prior policy from the root node.
-  // This enables mcts_depth=1 as a "raw policy" mode.
+  // This enables mcts_visits=1 as a "raw policy" mode.
   auto count_sum = counts.cast<float>().sum();
   if (count_sum == 0) {
     probs.setZero();

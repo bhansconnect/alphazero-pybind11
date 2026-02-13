@@ -28,10 +28,10 @@ def test_default_config():
     assert config.star_gambit_spatial is False
     assert config.cpuct == 1.25
     assert config.fpu_reduction == 0.25
-    assert config.selfplay_mcts_depth == 100
-    assert config.fast_mcts_depth == 25
-    assert config.compare_mcts_depth == 50
-    assert config.self_play_batch_size == 256
+    assert config.selfplay_mcts_visits == 100
+    assert config.fast_mcts_visits == 25
+    assert config.compare_mcts_visits == 50
+    assert config.self_play_batch_size == 1024
     assert config.train_batch_size == 1024
     assert config.iterations == 200
     assert config.lr_schedule == "constant"
@@ -70,7 +70,7 @@ def test_yaml_loading_star_gambit():
     assert config.channels == 16  # overridden
     assert config.kernel_size == 3  # overridden
     assert config.star_gambit_spatial is True  # overridden
-    assert config.selfplay_mcts_depth == 120  # overridden
+    assert config.selfplay_mcts_visits == 120  # overridden
     assert config.gating_panel_size == 1  # default preserved
 
 
@@ -166,7 +166,7 @@ def test_network_name():
 def test_auto_experiment_name():
     """auto_experiment_name formats correctly."""
     config = TrainConfig(
-        dense_net=True, depth=4, channels=12, kernel_size=5, selfplay_mcts_depth=100
+        dense_net=True, depth=4, channels=12, kernel_size=5, selfplay_mcts_visits=100
     )
     assert config.auto_experiment_name == "densenet-4d-12c-5k-100sims"
 
@@ -385,12 +385,12 @@ def test_parse_bootstrap_with_overrides():
     """--bootstrap + overrides don't consume values as config."""
     args, overrides = _parse([
         "--bootstrap", "data/connect4/exp1",
-        "--selfplay_mcts_depth", "30",
-        "--fast-mcts-depth", "1",
+        "--selfplay_mcts_visits", "30",
+        "--fast-mcts-visits", "1",
     ])
     assert args.config is None
     assert args.bootstrap == "data/connect4/exp1"
-    assert overrides == {"selfplay_mcts_depth": "30", "fast_mcts_depth": "1"}
+    assert overrides == {"selfplay_mcts_visits": "30", "fast_mcts_visits": "1"}
 
 
 def test_parse_hyphen_underscore_normalization():

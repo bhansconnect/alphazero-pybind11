@@ -791,7 +791,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     n = bs * cb * config.self_play_chunks
     params = base_params(config, config.self_play_temp, bs, cb)
     params.games_to_play = n
-    params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+    params.mcts_visits = [depth] * Game.NUM_PLAYERS()
     params.self_play = True
     params.history_enabled = True
     params.add_noise = True
@@ -890,7 +890,7 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
         ):
             params = base_params(config, config.eval_temp, bs, cb)
             params.games_to_play = n
-            params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+            params.mcts_visits = [depth] * Game.NUM_PLAYERS()
             players = [nn_past] * Game.NUM_PLAYERS()
             players[i] = nn
             set_eval_types(params, players)
@@ -927,7 +927,7 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
         ):
             params = base_params(config, config.eval_temp, bs, cb)
             params.games_to_play = n
-            params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+            params.mcts_visits = [depth] * Game.NUM_PLAYERS()
             players = [nn] * Game.NUM_PLAYERS()
             players[i] = nn_past
             set_eval_types(params, players)
@@ -974,7 +974,7 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
         ):
             params = base_params(config, config.eval_temp, bs, cb)
             params.games_to_play = n
-            params.mcts_depth = [depth] * Game.NUM_PLAYERS()
+            params.mcts_visits = [depth] * Game.NUM_PLAYERS()
             players = [nn_past] * Game.NUM_PLAYERS()
             players[i] = nn
             set_eval_types(params, players)
@@ -1115,8 +1115,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 "channels": config.channels,
                 "kernel_size": config.kernel_size,
                 "lr_schedule": config.lr_schedule,
-                "full_mcts_depth": config.selfplay_mcts_depth,
-                "fast_mcts_depth": config.fast_mcts_depth,
+                "full_mcts_visits": config.selfplay_mcts_visits,
+                "fast_mcts_visits": config.fast_mcts_visits,
             }
         with open(aim_hash_path, "w") as f:
             f.write(run.hash)
@@ -1245,7 +1245,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         continue
 
                 nn_rate, draw_rate, _, _, _, _, _, _ = play_past(
-                    config, paths, experiment_name, config.compare_mcts_depth,
+                    config, paths, experiment_name, config.compare_mcts_visits,
                     source_n, past_iter, config.past_compare_batch_size
                 )
                 wr[source_n, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
@@ -1307,7 +1307,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 if past_iter != i and math.isnan(wr[i, past_iter]):
                     nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy, bench_mpt, bench_vm = play_past(
                         config, paths, experiment_name,
-                        config.compare_mcts_depth, i, past_iter, config.past_compare_batch_size
+                        config.compare_mcts_visits, i, past_iter, config.past_compare_batch_size
                     )
                     wr[i, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
                     wr[past_iter, i] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
@@ -1338,8 +1338,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     self_play(
                         config, paths, experiment_name,
                         current_best, i,
-                        config.selfplay_mcts_depth,
-                        config.fast_mcts_depth,
+                        config.selfplay_mcts_visits,
+                        config.fast_mcts_visits,
                     )
                 )
                 for j in range(len(win_rates) - 1):
@@ -1422,7 +1422,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 ):
                     nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy, gate_mpt, gate_vm = play_past(
                         config, paths, experiment_name,
-                        config.compare_mcts_depth, next_net, gate_net, config.gate_compare_batch_size
+                        config.compare_mcts_visits, next_net, gate_net, config.gate_compare_batch_size
                     )
                     panel_nn_rate += nn_rate
                     panel_draw_rate += draw_rate

@@ -19,6 +19,12 @@ from star_gambit_play import (
 )
 import numpy as np
 
+VARIANT_MAP = {
+    "1": "star_gambit_skirmish",
+    "2": "star_gambit_clash",
+    "3": "star_gambit_battle",
+}
+
 
 class StarGambitUI(GameUI):
     """Rich UI for Star Gambit with hex grid, unit selection, move naming."""
@@ -67,3 +73,16 @@ class StarGambitUI(GameUI):
     def show_help(self, gs):
         """Print Star Gambit help."""
         sg_print_help()
+
+    def display_actions_menu(self, gs, probs, valids, wld=None, top_n=5):
+        """Grouped action menu: Moves / Fire / Deploy / End Turn."""
+        print_actions_menu(valids, self.cfg, gs, probs=probs, wld=wld)
+
+    def select_variant(self) -> str | None:
+        """Offer Skirmish/Clash/Battle selection."""
+        print("Select variant:")
+        print("  1. Skirmish (3v3)")
+        print("  2. Clash (6v6)")
+        print("  3. Battle (9v9)")
+        choice = input("Variant [1]: ").strip() or "1"
+        return VARIANT_MAP.get(choice, "star_gambit_skirmish")

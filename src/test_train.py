@@ -88,3 +88,58 @@ def test_config_saved_to_experiment_dir(tmp_path):
     assert config_path.exists()
     reloaded = load_config(str(config_path), {})
     assert reloaded.game == "connect4"
+
+
+def test_bootstrap_same_arch(tmp_path):
+    """Bootstrap from existing experiment with same architecture.
+
+    Full E2E: source training -> bootstrap -> verify artifacts -> continue training.
+    """
+    import game_runner
+
+    aim_repo = str(tmp_path / "aim")
+
+    # --- Phase 1: Create source experiment (2 iterations) ---
+    source_config = load_config(
+        os.path.join(CONFIGS_DIR, "connect4.yaml"),
+        {**FAST_OVERRIDES, "iterations": "2"},
+    )
+    source_dir = str(tmp_path / "data" / "connect4" / "source")
+    game_runner.main(source_config, source_dir, aim_repo=aim_repo)
+
+    # Verify source produced expected artifacts
+    source_ckpt = tmp_path / "data" / "connect4" / "source" / "checkpoint"
+    assert source_ckpt.exists()
+    source_pts = sorted(source_ckpt.glob("*.pt"))
+    assert len(source_pts) >= 2, f"Source needs >= 2 checkpoints, got {len(source_pts)}"
+    source_elo = tmp_path / "data" / "connect4" / "source" / "elo.csv"
+    assert source_elo.exists(), "Source must have elo.csv"
+
+    # --- Phase 2: Bootstrap new experiment from source ---
+    bootstrap_config = load_config(
+        os.path.join(CONFIGS_DIR, "connect4.yaml"),
+        {
+            **FAST_OVERRIDES,
+            "iterations": "4",  # Will run iterations 2 & 3 after bootstrap at iter 2
+            "bootstrap_from": source_dir,
+        },
+    )
+    new_dir = str(tmp_path / "data" / "connect4" / "bootstrapped")
+    game_runner.main(bootstrap_config, new_dir, aim_repo=aim_repo)
+
+    # --- Phase 3: Verify bootstrap artifacts ---
+    new_ckpt = tmp_path / "data" / "connect4" / "bootstrapped" / "checkpoint"
+    assert new_ckpt.exists()
+    new_pts = list(new_ckpt.glob("*.pt"))
+    # Should have: initial + copied source + newly trained ones
+    assert len(new_pts) >= 3, f"Expected >= 3 checkpoints, got {len(new_pts)}"
+
+    # config.yaml should record bootstrap_from
+    new_config_path = tmp_path / "data" / "connect4" / "bootstrapped" / "config.yaml"
+    assert new_config_path.exists()
+    new_config = load_config(str(new_config_path), {})
+    assert new_config.bootstrap_from == source_dir
+
+    # elo.csv should exist with data from source + new iterations
+    new_elo = tmp_path / "data" / "connect4" / "bootstrapped" / "elo.csv"
+    assert new_elo.exists()

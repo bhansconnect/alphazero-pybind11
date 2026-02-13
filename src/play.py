@@ -550,9 +550,17 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.config, {})
-    Game = config.Game
     ui = get_game_ui(config.game)
 
+    # Offer variant selection for games that support it (e.g., Star Gambit)
+    variant = ui.select_variant()
+    if variant and variant != config.game:
+        variant_yaml = os.path.join(os.path.dirname(args.config), f"{variant}.yaml")
+        if os.path.exists(variant_yaml):
+            config = load_config(variant_yaml, {})
+            ui = get_game_ui(config.game)
+
+    Game = config.Game
     print(f"=== {config.game} Interactive Player ===\n")
 
     gs = Game()
@@ -642,10 +650,7 @@ def main():
                     break
 
                 print(f"\nAI (P{current}) [{source}]")
-                if wld is not None:
-                    print(f"  WLD: {wld}")
-                print("  Top moves:")
-                print(format_probs_summary(probs, valids, ui, ctx.game, top_n=5))
+                ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
 
                 # Pause in AI vs AI to let user watch
                 if ctx.players[0].is_ai and ctx.players[1].is_ai:
@@ -660,10 +665,7 @@ def main():
                 # Manual mode: show AI suggestions, human picks
                 probs, source, sims, wld = get_ai_probs(ctx, current, valids)
                 print(f"\nAI (P{current}) suggests [{source}]:")
-                if wld is not None:
-                    print(f"  WLD: {wld}")
-                print("  Top moves:")
-                print(format_probs_summary(probs, valids, ui, ctx.game, top_n=5))
+                ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
 
                 while True:
                     cmd = input(f"\nPlayer {current} (AI-assisted) move: ").strip()
@@ -720,9 +722,7 @@ def main():
             ):
                 probs, source, _, wld = get_ai_probs(ctx, current, valids)
                 print(f"\nHints [{source}]:")
-                if wld is not None:
-                    print(f"  WLD: {wld}")
-                print(format_probs_summary(probs, valids, ui, ctx.game, top_n=5))
+                ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
 
             while True:
                 cmd = input(f"\nPlayer {current} move: ").strip()

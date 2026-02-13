@@ -30,10 +30,14 @@ pip install --no-build-isolation -e .
 ## Key Files
 
 ### Python Entry Points
-- `src/game_runner.py` - Main training loop
+- `src/train.py` - CLI entry point for training
+- `src/game_runner.py` - Training loop implementation
 - `src/neural_net.py` - Neural network implementation
-- `src/monrad.py` / `src/roundrobin.py` - Tournament runners
-- `src/play_agent.py` - Play against a trained network
+- `src/config.py` - YAML-based training configuration (TrainConfig, GAME_REGISTRY)
+- `src/tournament.py` - Tournament runner (monrad & round-robin)
+- `src/play.py` - Unified interactive play agent
+- `src/mcts_analysis.py` - MCTS threshold analysis (game-generic)
+- `src/game_ui.py` / `src/star_gambit_ui.py` - Pluggable game UI framework
 
 ### C++ Core
 - `src/game_state.h` - Game interface (implement this to add new games)
@@ -62,8 +66,14 @@ pip install --no-build-isolation -e .
 # C++ tests
 ninja -C build test
 
-# Python training test (Star Gambit)
-python src/star_gambit_train_test.py
+# Python unit tests (fast)
+python -m pytest src/test_config.py src/test_game_ui.py src/test_mcts_analysis.py -v
+
+# History & compression tests
+python -m pytest src/test_history.py -v
+
+# Full integration tests (slow, ~3-5 min)
+python -m pytest src/test_train.py -v
 ```
 
 ## Data Directories
@@ -129,7 +139,7 @@ tracy_frame()
 ### Instrumented Components
 
 **C++:** play_manager (high-level thread zones only)
-**Python:** game_runner (with training stage zones), neural_net, play_agent, monrad, roundrobin
+**Python:** game_runner (with training stage zones), neural_net, play, tournament
 
 **Training Stages:** Each training iteration has Tracy zones for: history, elo, selfplay, symmetries, resampling, training, gating
 

@@ -17,9 +17,9 @@ torch.backends.cudnn.benchmark = True
 
 NNArgs = namedtuple(
     "NNArgs",
-    ["num_channels", "depth", "kernel_size", "lr_milestone", "dense_net", "lr", "cv",
+    ["num_channels", "depth", "kernel_size", "dense_net", "lr", "cv",
      "star_gambit_spatial"],
-    defaults=(40, False, 0.01, 1.5, False),
+    defaults=(False, 0.01, 1.5, False),
 )
 
 
@@ -29,7 +29,6 @@ def nnargs_from_config(config):
         num_channels=config.channels,
         depth=config.depth,
         kernel_size=config.kernel_size,
-        lr_milestone=config.lr_milestone,
         dense_net=config.dense_net,
         lr=config.lr,
         cv=config.cv,
@@ -257,23 +256,14 @@ class NNWrapper:
         self.optimizer = optim.SGD(
             self.nnet.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-3
         )
-
-        def lr_lambda(epoch):
-            if epoch < 5:
-                return 1 / 3
-            elif epoch > args.lr_milestone:
-                return 1 / 10
-            else:
-                return 1
-
-        self.scheduler = torch.optim.lr_scheduler.LambdaLR(
-            self.optimizer, lr_lambda=lr_lambda
-        )
-        # self.scheduler = optim.lr_scheduler.MultiStepLR(
-        #     self.optimizer, milestones=args.lr_milestones, gamma=0.1)
         self.device = get_device()
         self.cv = args.cv
         self.nnet.to(self.device)
+
+    def set_lr(self, lr):
+        """Set learning rate on all optimizer parameter groups."""
+        for pg in self.optimizer.param_groups:
+            pg['lr'] = lr
 
     @tracy_zone
     def losses(self, dataset):
@@ -396,7 +386,6 @@ class NNWrapper:
         nnet_dict.update(merged_states)
         self.nnet.load_state_dict(nnet_dict)
 
-        self.scheduler.step()
         pbar.close()
         return v_loss / steps_to_train, pi_loss / steps_to_train
 
@@ -453,10 +442,9 @@ class NNWrapper:
             {
                 "state_dict": state_dict_f16,
                 "opt_state": self.optimizer.state_dict(),
-                "sch_state": self.scheduler.state_dict(),
                 "args": args_dict,  # Save as dict, not namedtuple
                 "game": self.game,
-                "version": "3.0",  # zstd-compressed, bfloat16 weights
+                "version": "4.0",  # zstd-compressed, bfloat16 weights, no scheduler
             },
             buffer,
         )
@@ -492,8 +480,10 @@ class NNWrapper:
             f"Mismatching game type when loading model: got: {checkpoint['game'].__name__} want: {Game.__name__}"
         )
 
-        # Reconstruct NNArgs from dict
-        args = NNArgs(**checkpoint["args"])
+        # Reconstruct NNArgs from dict, dropping removed fields
+        args_dict = checkpoint["args"]
+        args_dict.pop("lr_milestone", None)
+        args = NNArgs(**args_dict)
 
         net = NNWrapper(checkpoint["game"], args)
         # Convert bfloat16 weights back to float32 for training
@@ -503,7 +493,6 @@ class NNWrapper:
         }
         net.nnet.load_state_dict(state_dict)
         net.optimizer.load_state_dict(checkpoint["opt_state"])
-        net.scheduler.load_state_dict(checkpoint["sch_state"])
         return net
 
 

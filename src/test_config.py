@@ -468,3 +468,54 @@ def test_stale_keys_do_not_corrupt_config(tmp_path):
     assert config.game == "connect4"
     assert not hasattr(config, "lr_milestone")
     assert not hasattr(config, "bootstrap_from")
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+
+def test_validate_invalid_lr_schedule(tmp_path):
+    """Invalid lr_schedule raises ValueError."""
+    yaml_path = str(tmp_path / "bad_lr.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\nlr_schedule: cosine\n")
+    with pytest.raises(ValueError, match="Unknown lr_schedule"):
+        load_config(yaml_path, {})
+
+
+def test_validate_gating_panel_size_zero(tmp_path):
+    """gating_panel_size: 0 raises ValueError."""
+    yaml_path = str(tmp_path / "bad_panel.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\ngating_panel_size: 0\n")
+    with pytest.raises(ValueError, match="gating_panel_size must be >= 1"):
+        load_config(yaml_path, {})
+
+
+def test_validate_iterations_zero(tmp_path):
+    """iterations: 0 raises ValueError."""
+    yaml_path = str(tmp_path / "bad_iter.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\niterations: 0\n")
+    with pytest.raises(ValueError, match="iterations must be >= 1"):
+        load_config(yaml_path, {})
+
+
+def test_validate_unknown_game(tmp_path):
+    """Unknown game raises ValueError."""
+    yaml_path = str(tmp_path / "bad_game.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: nonexistent_game\n")
+    with pytest.raises(ValueError, match="Unknown game"):
+        load_config(yaml_path, {})
+
+
+def test_list_cli_override_warns(tmp_path, capsys):
+    """CLI override of list field prints warning."""
+    yaml_path = str(tmp_path / "config.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\n")
+    load_config(yaml_path, {"lr_steps": "[[0, 0.01]]"})
+    captured = capsys.readouterr()
+    assert "cannot override list field 'lr_steps' via CLI" in captured.out

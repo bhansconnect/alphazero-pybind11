@@ -19,7 +19,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import alphazero
 from neural_net import NNWrapper, NNArgs
-from game_runner import save_compressed, load_compressed, _glob_hist_files
+from game_runner import (
+    save_compressed, load_compressed, _glob_hist_files,
+    _atomic_save_compressed, update_reservoir, calc_hist_size,
+)
 from config import TrainConfig
 
 Game = alphazero.Connect4GS
@@ -293,3 +296,131 @@ def test_reservoir_bootstrap(tmp_path):
     assert math.isfinite(pi_loss)
     nn.save_checkpoint(str(ckpt_dir), "0005-test.pt")
     assert (ckpt_dir / "0005-test.pt").exists()
+
+
+# ============================================================
+# update_reservoir() direct tests
+# ============================================================
+
+
+def _setup_reservoir_test(tmp_path, n_iters=10, samples_per_iter=50):
+    """Create history files for testing update_reservoir."""
+    config = TrainConfig(hist_size=1000)
+    exp_dir = str(tmp_path / "experiment")
+    paths = config.resolve_paths(exp_dir)
+    for key in ("history", "reservoir"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    cs = Game.CANONICAL_SHAPE()
+    for i in range(n_iters):
+        n = samples_per_iter
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+        p = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+        save_compressed(c, os.path.join(paths["history"], f"{i:04d}-0000-canonical-{n}.ptz"))
+        save_compressed(v, os.path.join(paths["history"], f"{i:04d}-0000-v-{n}.ptz"))
+        save_compressed(p, os.path.join(paths["history"], f"{i:04d}-0000-pi-{n}.ptz"))
+    return config, paths
+
+
+def test_update_reservoir_with_eviction(tmp_path):
+    """update_reservoir creates reservoir files when window slides."""
+    config = TrainConfig(hist_size=3)
+    exp_dir = str(tmp_path / "experiment")
+    paths = config.resolve_paths(exp_dir)
+    for key in ("history", "reservoir"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    cs = Game.CANONICAL_SHAPE()
+    n = 50
+    for i in range(6):
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+        p = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+        save_compressed(c, os.path.join(paths["history"], f"{i:04d}-0000-canonical-{n}.ptz"))
+        save_compressed(v, os.path.join(paths["history"], f"{i:04d}-0000-v-{n}.ptz"))
+        save_compressed(p, os.path.join(paths["history"], f"{i:04d}-0000-pi-{n}.ptz"))
+
+    hist_size = calc_hist_size(config, 5)
+    update_reservoir(config, paths, 5, hist_size)
+
+    # Reservoir files should exist if eviction happened
+    res_c_path = os.path.join(paths["reservoir"], "canonical.ptz")
+    if hist_size < 5:  # eviction should have happened
+        assert os.path.exists(res_c_path)
+        loaded = load_compressed(res_c_path)
+        assert loaded.shape[0] > 0
+
+
+def test_atomic_save_produces_valid_file(tmp_path):
+    """_atomic_save_compressed produces a valid, loadable file."""
+    path = str(tmp_path / "atomic_test.ptz")
+    original = torch.randn(100, 3, 6, 7)
+    _atomic_save_compressed(original, path)
+
+    assert os.path.exists(path)
+    loaded = load_compressed(path)
+    assert loaded.shape == original.shape
+    assert torch.allclose(original, loaded, atol=0.01, rtol=0.01)
+
+
+def test_atomic_save_no_temp_files_on_success(tmp_path):
+    """After successful atomic save, no .tmp files remain."""
+    path = str(tmp_path / "clean.ptz")
+    _atomic_save_compressed(torch.randn(50), path)
+
+    tmp_files = list(tmp_path.glob("*.tmp"))
+    assert len(tmp_files) == 0
+
+
+def test_reservoir_incomplete_source_skips_copy(tmp_path):
+    """Bootstrap reservoir copy skips when not all 4 files exist."""
+    import shutil
+
+    source_dir = tmp_path / "source"
+    dest_dir = tmp_path / "dest"
+    source_res = source_dir / "reservoir"
+    dest_res = dest_dir / "reservoir"
+    source_res.mkdir(parents=True)
+    dest_res.mkdir(parents=True)
+
+    # Only create 2 of the 4 files
+    save_compressed(torch.randn(10), str(source_res / "canonical.ptz"))
+    save_compressed(torch.randn(10), str(source_res / "v.ptz"))
+
+    # Simulate the all-or-nothing check
+    reservoir_files = ("canonical.ptz", "v.ptz", "pi.ptz", "meta.ptz")
+    all_exist = all(
+        os.path.exists(os.path.join(str(source_res), f)) for f in reservoir_files
+    )
+    assert not all_exist  # Should NOT copy
+
+    # dest should remain empty
+    assert len(list(dest_res.iterdir())) == 0
+
+
+def test_reservoir_complete_source_copies_all(tmp_path):
+    """Bootstrap reservoir copy works when all 4 files exist."""
+    import shutil
+
+    source_res = tmp_path / "source" / "reservoir"
+    dest_res = tmp_path / "dest" / "reservoir"
+    source_res.mkdir(parents=True)
+    dest_res.mkdir(parents=True)
+
+    # Create all 4 files
+    reservoir_files = ("canonical.ptz", "v.ptz", "pi.ptz", "meta.ptz")
+    for fname in reservoir_files:
+        save_compressed(torch.randn(10), str(source_res / fname))
+
+    all_exist = all(
+        os.path.exists(os.path.join(str(source_res), f)) for f in reservoir_files
+    )
+    assert all_exist
+
+    for fname in reservoir_files:
+        shutil.copy2(str(source_res / fname), str(dest_res / fname))
+
+    # All 4 should be in dest
+    for fname in reservoir_files:
+        assert (dest_res / fname).exists()

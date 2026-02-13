@@ -257,6 +257,7 @@ def load_network(game_class, path, players, ctx):
         net = neural_net.NNWrapper.load_checkpoint(
             game_class, os.path.dirname(path), os.path.basename(path)
         )
+        net.enable_inference_optimizations()
         for p in players:
             ctx.players[p].network = net
             ctx.players[p].network_path = path

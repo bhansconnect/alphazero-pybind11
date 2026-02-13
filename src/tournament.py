@@ -220,16 +220,14 @@ def load_agent(Game, agent_name, model_path, mcts_visits, rand_agents):
         return RandPlayer(), agent_name
     # Network agent - agent_name is either a filename or full path
     if os.path.isabs(agent_name) or os.path.exists(agent_name):
-        return (
-            neural_net.NNWrapper.load_checkpoint(
-                Game, os.path.dirname(agent_name), os.path.basename(agent_name)
-            ),
-            mcts_visits,
+        nn = neural_net.NNWrapper.load_checkpoint(
+            Game, os.path.dirname(agent_name), os.path.basename(agent_name)
         )
-    return (
-        neural_net.NNWrapper.load_checkpoint(Game, model_path, agent_name),
-        mcts_visits,
-    )
+        nn.enable_inference_optimizations()
+        return nn, mcts_visits
+    nn = neural_net.NNWrapper.load_checkpoint(Game, model_path, agent_name)
+    nn.enable_inference_optimizations()
+    return nn, mcts_visits
 
 
 # ---------------------------------------------------------------------------

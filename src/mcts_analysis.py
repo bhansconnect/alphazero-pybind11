@@ -297,6 +297,7 @@ def run_tournament(config, Game, network_path, visit_counts, use_playout=False):
         net_dir = os.path.dirname(network_path)
         net_file = os.path.basename(network_path)
         agent = neural_net.NNWrapper.load_checkpoint(Game, net_dir, net_file)
+        agent.enable_inference_optimizations()
         def make_players():
             return [agent] * num_players
 
@@ -358,6 +359,7 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False):
         net_dir = os.path.dirname(network_path)
         net_file = os.path.basename(network_path)
         agent = neural_net.NNWrapper.load_checkpoint(Game, net_dir, net_file)
+        agent.enable_inference_optimizations()
 
     num_players = Game.NUM_PLAYERS()
     num_moves = Game.NUM_MOVES()

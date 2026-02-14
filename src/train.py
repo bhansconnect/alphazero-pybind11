@@ -14,6 +14,7 @@ Usage:
 import argparse
 import dataclasses
 import os
+import shutil
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -91,6 +92,25 @@ def parse_args():
     return args, overrides
 
 
+def _check_existing_experiment(experiment_dir, explicit_name):
+    """If an explicit experiment name collides with an existing directory, ask the user."""
+    if not explicit_name or not os.path.exists(experiment_dir):
+        return
+    print(f"\nWarning: experiment '{explicit_name}' already exists at {experiment_dir}")
+    print("  [o] Overwrite - delete all existing data and start fresh")
+    print("  [r] Resume    - continue from latest checkpoint")
+    print("  [a] Abort")
+    while True:
+        choice = input("\nChoice [o/r/a]: ").strip().lower()
+        if choice in ("o", "r", "a"):
+            break
+        print("Please enter 'o', 'r', or 'a'.")
+    if choice == "a":
+        print("Aborted.")
+        sys.exit(0)
+    return choice
+
+
 def main():
     args, overrides = parse_args()
 
@@ -135,8 +155,21 @@ def main():
             base=args.base_dir,
             explicit_name=args.experiment,
         )
-        start = 0
-        bootstrap_from = source_dir
+        choice = _check_existing_experiment(experiment_dir, args.experiment)
+        if choice == "o":
+            shutil.rmtree(experiment_dir)
+            start = 0
+            bootstrap_from = source_dir
+        elif choice == "r":
+            checkpoint_dir = os.path.join(experiment_dir, "checkpoint")
+            start = find_latest_checkpoint(checkpoint_dir)
+            if start == 0:
+                print(f"Error: no checkpoints found in {checkpoint_dir}, cannot resume")
+                sys.exit(1)
+            bootstrap_from = ""
+        else:
+            start = 0
+            bootstrap_from = source_dir
 
     else:
         # Fresh start
@@ -149,7 +182,18 @@ def main():
             base=args.base_dir,
             explicit_name=args.experiment,
         )
-        start = 0
+        choice = _check_existing_experiment(experiment_dir, args.experiment)
+        if choice == "o":
+            shutil.rmtree(experiment_dir)
+            start = 0
+        elif choice == "r":
+            checkpoint_dir = os.path.join(experiment_dir, "checkpoint")
+            start = find_latest_checkpoint(checkpoint_dir)
+            if start == 0:
+                print(f"Error: no checkpoints found in {checkpoint_dir}, cannot resume")
+                sys.exit(1)
+        else:
+            start = 0
         bootstrap_from = ""
 
     print(f"Game: {config.game}")

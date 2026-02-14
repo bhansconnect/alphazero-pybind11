@@ -65,6 +65,58 @@ TEST(ConcurrentQueue, MultiThreaded) {
 }
 
 // NOLINTNEXTLINE
+TEST(ConcurrentQueue, PopUptoFilledImmediate) {
+  auto queue = ConcurrentQueue<int>{};
+  for (auto i = 0; i < 5; ++i) {
+    queue.push(i);
+  }
+  auto result = queue.pop_upto_filled(5, 100ms);
+  EXPECT_EQ(result.size(), 5);
+  for (auto i = 0; i < 5; ++i) {
+    EXPECT_EQ(result[i], i);
+  }
+  EXPECT_EQ(queue.try_pop(), std::nullopt);
+}
+
+// NOLINTNEXTLINE
+TEST(ConcurrentQueue, PopUptoFilledPartialTimeout) {
+  auto queue = ConcurrentQueue<int>{};
+  for (auto i = 0; i < 3; ++i) {
+    queue.push(i);
+  }
+  auto start = std::chrono::steady_clock::now();
+  auto result = queue.pop_upto_filled(10, 50ms);
+  auto elapsed = std::chrono::steady_clock::now() - start;
+  EXPECT_EQ(result.size(), 3);
+  for (auto i = 0; i < 3; ++i) {
+    EXPECT_EQ(result[i], i);
+  }
+  // Should have waited at least ~50ms before returning partial
+  EXPECT_GE(elapsed, 40ms);
+  EXPECT_EQ(queue.try_pop(), std::nullopt);
+}
+
+// NOLINTNEXTLINE
+TEST(ConcurrentQueue, PopUptoFilledThreaded) {
+  auto queue = ConcurrentQueue<int>{};
+  constexpr auto N = 20;
+  auto producer = std::async(std::launch::async, [&] {
+    for (auto i = 0; i < N; ++i) {
+      queue.push(i);
+      std::this_thread::sleep_for(500us);
+    }
+  });
+  // Wait for all N items to accumulate
+  auto result = queue.pop_upto_filled(N, 500ms);
+  producer.wait();
+  // Should get all N (or close) since max_wait is generous
+  EXPECT_EQ(result.size(), N);
+  for (auto i = 0; i < static_cast<int>(result.size()); ++i) {
+    EXPECT_EQ(result[i], i);
+  }
+}
+
+// NOLINTNEXTLINE
 TEST(ConcurrentQueue, PollProperlyReleases) {
   auto done = std::atomic<bool>{};
   auto empty_queue = ConcurrentQueue<int>{};

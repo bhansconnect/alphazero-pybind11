@@ -34,6 +34,8 @@ struct GameData {
   Vector<float> v;
   Vector<float> pi;
   std::vector<PlayHistory> partial_history;
+  std::vector<uint8_t> seat_perm;  // per-game: physical_player → model_group
+  uint8_t perm_index = 0;
   bool initialized = false;
   bool capped = false;
   bool playthrough = false;
@@ -71,6 +73,8 @@ struct PlayParams {
   float resign_percent = 0.0;
   float resign_playthrough_percent = 0.0;
   std::vector<EvalType> eval_type{};  // per player, empty = all NN
+  std::vector<uint8_t> model_groups{};  // player → model_group_index (empty = identity)
+  std::vector<std::vector<uint8_t>> seat_perms{};  // list of permutations (empty = no rotation)
 };
 
 // This is a multithread safe game play manager.
@@ -83,7 +87,7 @@ class DLLEXPORT PlayManager {
   // play will keep playing games until all games are completed.
   void play();
 
-  void update_inferences(uint8_t player,
+  void update_inferences(uint8_t group,
                          const std::vector<uint32_t>& game_indices,
                          const Eigen::Ref<const Matrix<float>>& v,
                          const Eigen::Ref<const Matrix<float>>& pi);
@@ -108,6 +112,30 @@ class DLLEXPORT PlayManager {
                                                      size_t n) noexcept {
     return awaiting_inference_[player]->pop_upto(n, MAX_WAIT);
   }
+  [[nodiscard]] std::vector<uint32_t> pop_games_filled(uint32_t player,
+                                                        size_t n) noexcept {
+    return awaiting_inference_[player]->pop_upto_filled(n, MAX_WAIT);
+  }
+  template <class Rep, class Period>
+  [[nodiscard]] std::vector<uint32_t> pop_games_upto_timed(
+      uint32_t group, size_t n,
+      const std::chrono::duration<Rep, Period>& timeout) noexcept {
+    return awaiting_inference_[group]->pop_upto(n, timeout);
+  }
+
+  // Model group accessors
+  uint8_t num_model_groups() const noexcept { return num_model_groups_; }
+  size_t num_seat_perms() const noexcept { return seat_perms_.size(); }
+  const Vector<float>& perm_scores(size_t idx) const noexcept {
+    return perm_scores_[idx].scores;
+  }
+  uint32_t perm_games_completed(size_t idx) const noexcept {
+    return perm_scores_[idx].games_completed;
+  }
+
+  // GPU steal: set by GPU thread to signal batcher to hand off partial batches
+  void set_eager(bool e) noexcept { eager_.store(e, std::memory_order_relaxed); }
+  bool is_eager() const noexcept { return eager_.load(std::memory_order_relaxed); }
   [[nodiscard]] std::optional<PlayHistory> pop_hist() noexcept {
     return history_.pop(MAX_WAIT);
   }
@@ -147,7 +175,7 @@ class DLLEXPORT PlayManager {
   }
   size_t awaiting_mcts_count() const noexcept { return awaiting_mcts_.size(); }
   size_t awaiting_inference_count() const noexcept {
-    auto out = 0;
+    size_t out = 0;
     for (const auto& queue : awaiting_inference_) {
       out += queue->size();
     }
@@ -174,6 +202,23 @@ class DLLEXPORT PlayManager {
       out += cache.misses();
     }
     return out;
+  };
+  [[nodiscard]] size_t cache_evictions() const {
+    size_t out = 0;
+    for (auto& cache : caches_) {
+      out += cache.evictions();
+    }
+    return out;
+  };
+  [[nodiscard]] size_t cache_reinserts() const {
+    size_t out = 0;
+    for (auto& cache : caches_) {
+      out += cache.reinserts();
+    }
+    return out;
+  };
+  [[nodiscard]] size_t cache_max_size() const {
+    return params_.max_cache_size;
   };
 
  private:
@@ -202,7 +247,19 @@ class DLLEXPORT PlayManager {
   ConcurrentQueue<PlayHistory> history_;
 
   std::vector<Cache> caches_;
-  // Eventaully contain history, maybe store it in GameData.
+
+  std::vector<uint8_t> model_groups_;       // computed from params (never empty)
+  uint8_t num_model_groups_;
+  std::vector<uint32_t> mcts_visits_;       // per-model-group
+  std::vector<EvalType> eval_types_;        // per-model-group
+  std::vector<std::vector<uint8_t>> seat_perms_;  // computed from params (never empty)
+  std::atomic<bool> eager_{false};          // GPU steal: true = hand off partial batches
+
+  struct PermScores {
+    Vector<float> scores;
+    uint32_t games_completed = 0;
+  };
+  std::vector<PermScores> perm_scores_;
 };
 
 }  // namespace alphazero

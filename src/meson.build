@@ -162,7 +162,7 @@ test('gtest tests', concurrent_queue_test)
 lru_cache_test = executable(
   'lru_cache_test',
   'lru_cache_test.cc',
-  dependencies: [gtest_dep, absl_container_dep],
+  dependencies: [gtest_dep, absl_container_dep, absl_hash_dep],
   link_with: [],
 )
 test('gtest tests', lru_cache_test)

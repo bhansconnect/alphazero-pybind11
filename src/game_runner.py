@@ -777,7 +777,8 @@ def train(config, paths, experiment_name, iteration, hist_size, run, total_train
     if lr is not None:
         nn.set_lr(lr)
     v_loss, pi_loss = nn.train(
-        dataloader, steps_to_train, run, iteration, total_train_steps
+        dataloader, steps_to_train, run, iteration, total_train_steps,
+        ema_averaging=config.ema_averaging,
     )
     total_train_steps += steps_to_train
     nn.save_checkpoint(paths["checkpoint"], f"{iteration + 1:04d}-{experiment_name}.pt",
@@ -1228,13 +1229,12 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
 def get_lr(config, iteration, lr_state):
     """Compute learning rate for the current iteration."""
     if config.lr_schedule == "constant":
-        return config.lr
+        lr = config.lr
     elif config.lr_schedule == "step":
         lr = config.lr_steps[0][1] if config.lr_steps else config.lr
         for step_iter, step_lr in config.lr_steps:
             if iteration >= step_iter:
                 lr = step_lr
-        return lr
     elif config.lr_schedule == "adaptive":
         lr = lr_state['current_lr']
         can_drop = (
@@ -1248,9 +1248,15 @@ def get_lr(config, iteration, lr_state):
             lr_state['num_drops'] += 1
             lr_state['last_drop_iter'] = iteration
             lr_state['current_lr'] = lr
-        return lr
     else:
         raise ValueError(f"Unknown lr_schedule: {config.lr_schedule}")
+
+    # Apply window-fill warmup
+    if config.lr_warmup_target > 0 and iteration < config.lr_warmup_target:
+        warmup_factor = config.lr_warmup_floor + (1.0 - config.lr_warmup_floor) * (iteration + 1) / config.lr_warmup_target
+        lr *= warmup_factor
+
+    return lr
 
 
 def _default_lr_state(config):

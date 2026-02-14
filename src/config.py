@@ -117,6 +117,13 @@ class TrainConfig:
     half_storage: bool = True
     torch_compile: bool = True
 
+    # EMA weight averaging
+    ema_averaging: bool = True
+
+    # LR warmup
+    lr_warmup_target: int = 15       # iterations to reach full LR
+    lr_warmup_floor: float = 0.2     # minimum LR fraction during warmup
+
     # Compression
     zstd_level: int = 1
 

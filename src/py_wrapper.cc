@@ -244,6 +244,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def("resign_scores", &PlayManager::resign_scores)
       .def("games_completed", &PlayManager::games_completed)
       .def("remaining_games", &PlayManager::remaining_games)
+      .def("stop", &PlayManager::stop)
+      .def("stopped", &PlayManager::stopped)
       .def("awaiting_inference_count", &PlayManager::awaiting_inference_count)
       .def("awaiting_mcts_count", &PlayManager::awaiting_mcts_count)
       .def("hist_count", &PlayManager::hist_count)

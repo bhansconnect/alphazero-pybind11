@@ -92,7 +92,10 @@ class DLLEXPORT PlayManager {
   [[nodiscard]] const Vector<float> resign_scores() const noexcept {
     return resign_scores_;
   }
+  void stop() noexcept { stopped_.store(true, std::memory_order_relaxed); }
+  bool stopped() const noexcept { return stopped_.load(std::memory_order_relaxed); }
   [[nodiscard]] uint32_t remaining_games() const noexcept {
+    if (stopped_.load(std::memory_order_relaxed)) return 0;
     return params_.games_to_play - games_completed_;
   }
   [[nodiscard]] uint32_t games_completed() const noexcept {
@@ -191,6 +194,7 @@ class DLLEXPORT PlayManager {
   uint64_t full_move_count_ = 0;
   uint64_t fast_move_count_ = 0;
   std::atomic<uint32_t> games_completed_ = 0;
+  std::atomic<bool> stopped_{false};
   Vector<float> resign_scores_;
 
   ConcurrentQueue<uint32_t> awaiting_mcts_;

@@ -49,7 +49,7 @@ void PlayManager::play() {
   AZ_ZONE_SCOPED;
   thread_local std::default_random_engine re{std::random_device{}()};
   thread_local std::uniform_real_distribution<float> dist{0.0F, 1.0F};
-  while (games_completed_ < params_.games_to_play) {
+  while (games_completed_ < params_.games_to_play && !stopped_.load(std::memory_order_relaxed)) {
     std::optional<uint32_t> i = awaiting_mcts_.pop(MAX_WAIT);
     if (!i.has_value()) {
       continue;

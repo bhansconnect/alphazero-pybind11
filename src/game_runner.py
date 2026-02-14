@@ -2,6 +2,7 @@ import glob
 import io
 import json
 import os
+import signal
 import shutil
 import tempfile
 from collections import namedtuple
@@ -207,6 +208,21 @@ class GameRunner:
 
     @tracy_zone
     def run(self):
+        interrupted = False
+        prev_handler = signal.getsignal(signal.SIGINT)
+        def _sigint_handler(sig, frame):
+            nonlocal interrupted
+            interrupted = True
+            self.pm.stop()
+        signal.signal(signal.SIGINT, _sigint_handler)
+        try:
+            self._run_inner()
+        finally:
+            signal.signal(signal.SIGINT, prev_handler)
+            if interrupted:
+                raise KeyboardInterrupt
+
+    def _run_inner(self):
         nn_players = set()
         for i in range(self.num_players):
             if not isinstance(self.players[i], (PlayoutPlayer, RandPlayer)):

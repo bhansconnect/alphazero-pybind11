@@ -11,13 +11,6 @@ import zstandard as zstd
 import alphazero
 from tracy_utils import tracy_zone
 
-def get_autocast_dtype():
-    """Device-preferred dtype for autocast: bfloat16 if supported, else float16."""
-    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
-        return torch.bfloat16
-    return torch.float16
-
-
 def get_storage_dtype():
     """Half dtype for storage. float16 is 8x more precise for [-1,1] data."""
     return torch.float16
@@ -278,11 +271,11 @@ class _CUDAGraphInference:
     """Cache CUDA graphs per batch-size bucket for fast inference."""
     _lock = threading.Lock()
 
-    def __init__(self, model, input_shape, device, use_autocast):
+    def __init__(self, model, input_shape, device, dtype):
         self.model = model
         self.input_shape = input_shape
         self.device = device
-        self.use_autocast = use_autocast
+        self.dtype = dtype
         self._cache = {}  # bucket_size -> (graph, static_input, static_v, static_pi)
 
     def __call__(self, batch):
@@ -299,16 +292,12 @@ class _CUDAGraphInference:
             return static_v[:bs].clone(), static_pi[:bs].clone()
 
     def _forward(self, x):
-        if self.use_autocast:
-            with torch.autocast(device_type='cuda', dtype=get_autocast_dtype()):
-                v, pi = self.model(x)
-        else:
-            v, pi = self.model(x)
+        v, pi = self.model(x)
         return torch.exp(v).float(), torch.exp(pi).float()
 
     def _record(self, bucket_size):
         static_input = torch.zeros(
-            bucket_size, *self.input_shape, device=self.device
+            bucket_size, *self.input_shape, device=self.device, dtype=self.dtype
         )
         # Warmup (required before CUDA graph capture)
         with torch.no_grad():
@@ -332,13 +321,44 @@ class NNWrapper:
         self.device = get_device()
         self.cv = args.cv
         self.nnet.to(self.device)
-        self.use_autocast = False
+        self._inference_dtype = torch.float32
+        self._nan_check_remaining = 0
         self._graph_inference = None
 
-    def enable_inference_optimizations(self, autocast=True, compile=True):
+    def to_inference_mode(self):
+        """Convert model to fp16 for inference. GPU only."""
+        self.nnet.eval()
+        # Check for values that would overflow fp16
+        fp16_max = torch.finfo(torch.float16).max
+        for name, param in list(self.nnet.named_parameters()) + list(self.nnet.named_buffers()):
+            if not param.is_floating_point():
+                continue
+            if param.numel() == 0:
+                continue
+            abs_max = param.data.abs().max().item()
+            if abs_max > fp16_max:
+                logging.warning(
+                    "Clamping %s (max %.1f) to fp16 range [-%g, %g]",
+                    name, abs_max, fp16_max, fp16_max,
+                )
+                param.data.clamp_(-fp16_max, fp16_max)
+        self.nnet.half()
+        self._inference_dtype = torch.float16
+        self._graph_inference = None
+        self._nan_check_remaining = 10
+
+    def to_training_mode(self):
+        """Convert model back to fp32 for training."""
+        self.nnet.float()
+        self.nnet.train()
+        self._inference_dtype = torch.float32
+        self._graph_inference = None
+
+    def enable_inference_optimizations(self, fp16=True, compile=True):
         """Optimize model for inference on GPU. No-op on CPU."""
         is_gpu = self.device.type in ('cuda', 'mps')
-        self.use_autocast = autocast and is_gpu
+        if fp16 and is_gpu:
+            self.to_inference_mode()
         if compile and is_gpu:
             try:
                 if self.device.type == 'cuda':
@@ -359,7 +379,7 @@ class NNWrapper:
         """JIT trace + CUDA graph caching for older GPUs (CC < 7.0)."""
         try:
             in_shape = self.game.CANONICAL_SHAPE()
-            dummy = torch.randn(1, *in_shape, device=self.device)
+            dummy = torch.randn(1, *in_shape, device=self.device, dtype=self._inference_dtype)
             self.nnet.eval()
             with torch.no_grad():
                 traced = torch.jit.trace(self.nnet, dummy)
@@ -367,7 +387,7 @@ class NNWrapper:
                 traced(dummy)  # trigger optimizations
             self.nnet = traced
             self._graph_inference = _CUDAGraphInference(
-                self.nnet, in_shape, self.device, self.use_autocast
+                self.nnet, in_shape, self.device, self._inference_dtype
             )
         except Exception as e:
             logging.getLogger(__name__).warning(
@@ -392,11 +412,7 @@ class NNWrapper:
                 target_vs = target_vs.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
                 target_pis = target_pis.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
 
-                if self.use_autocast:
-                    with torch.autocast(device_type=self.device.type, dtype=get_autocast_dtype()):
-                        out_v, out_pi = self.nnet(canonical)
-                else:
-                    out_v, out_pi = self.nnet(canonical)
+                out_v, out_pi = self.nnet(canonical)
                 l_v += self.loss_v(target_vs, out_v).item()
                 l_pi += self.loss_pi(target_pis, out_pi).item()
         return l_v / len(dataset), l_pi / len(dataset)
@@ -413,11 +429,7 @@ class NNWrapper:
                 target_vs = target_vs.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
                 target_pis = target_pis.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
 
-                if self.use_autocast:
-                    with torch.autocast(device_type=self.device.type, dtype=get_autocast_dtype()):
-                        out_v, out_pi = self.nnet(canonical)
-                else:
-                    out_v, out_pi = self.nnet(canonical)
+                out_v, out_pi = self.nnet(canonical)
                 l_v = self.sample_loss_v(target_vs, out_v)
                 l_pi = self.sample_loss_pi(target_pis, out_pi)
                 total_loss = l_pi + l_v
@@ -428,6 +440,8 @@ class NNWrapper:
 
     @tracy_zone
     def train(self, batches, steps_to_train, run, epoch, total_train_steps, ema_averaging=True):
+        if self._inference_dtype != torch.float32:
+            self.to_training_mode()
         self.nnet.train()
 
         v_loss = 0
@@ -520,7 +534,7 @@ class NNWrapper:
 
     @tracy_zone
     def process(self, batch):
-        batch = batch.contiguous().to(self.device, non_blocking=True)
+        batch = batch.contiguous().to(self.device, dtype=self._inference_dtype, non_blocking=True)
         if self._graph_inference is not None:
             res = self._graph_inference(batch)
             if alphazero.tracy_is_enabled() and self.device.type == 'cuda':
@@ -528,12 +542,12 @@ class NNWrapper:
             return res
         self.nnet.eval()
         with torch.no_grad():
-            if self.use_autocast:
-                with torch.autocast(device_type=self.device.type, dtype=get_autocast_dtype()):
-                    v, pi = self.nnet(batch)
-            else:
-                v, pi = self.nnet(batch)
+            v, pi = self.nnet(batch)
             res = (torch.exp(v).float(), torch.exp(pi).float())
+        if self._nan_check_remaining > 0:
+            self._nan_check_remaining -= 1
+            if torch.isnan(res[0]).any() or torch.isnan(res[1]).any():
+                logging.error("NaN detected in inference output — model weights may be corrupted")
         # GPU sync for accurate Tracy timing when profiling is enabled
         if alphazero.tracy_is_enabled():
             if self.device.type == 'cuda':

@@ -403,8 +403,8 @@ class NNWrapper:
     @tracy_zone
     def losses(self, dataset):
         self.nnet.eval()
-        l_v = 0
-        l_pi = 0
+        losses_v = []
+        losses_pi = []
         with torch.no_grad():
             for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
                 canonical, target_vs, target_pis = batch
@@ -413,15 +413,17 @@ class NNWrapper:
                 target_pis = target_pis.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
 
                 out_v, out_pi = self.nnet(canonical)
-                l_v += self.loss_v(target_vs, out_v).item()
-                l_pi += self.loss_pi(target_pis, out_pi).item()
-        return l_v / len(dataset), l_pi / len(dataset)
+                losses_v.append(self.loss_v(target_vs, out_v))
+                losses_pi.append(self.loss_pi(target_pis, out_pi))
+        n = len(dataset)
+        l_v = torch.stack(losses_v).sum().item() / n
+        l_pi = torch.stack(losses_pi).sum().item() / n
+        return l_v, l_pi
 
     @tracy_zone
     def sample_loss(self, dataset, size):
-        loss = np.zeros(size)
         self.nnet.eval()
-        i = 0
+        losses_gpu = []
         with torch.no_grad():
             for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
                 canonical, target_vs, target_pis = batch
@@ -432,11 +434,8 @@ class NNWrapper:
                 out_v, out_pi = self.nnet(canonical)
                 l_v = self.sample_loss_v(target_vs, out_v)
                 l_pi = self.sample_loss_pi(target_pis, out_pi)
-                total_loss = l_pi + l_v
-                batch_len = total_loss.shape[0]
-                loss[i:i + batch_len] = total_loss.cpu().numpy()
-                i += batch_len
-        return loss
+                losses_gpu.append(l_pi + l_v)
+        return torch.cat(losses_gpu).cpu().numpy()
 
     @tracy_zone
     def train(self, batches, steps_to_train, run, epoch, total_train_steps, ema_averaging=True):
@@ -479,22 +478,25 @@ class NNWrapper:
                 total_loss.backward()
                 self.optimizer.step()
 
+                v_val = l_v.item()
+                pi_val = l_pi.item()
+
                 run.track(
-                    l_v.item(),
+                    v_val,
                     name="loss",
                     epoch=epoch,
                     step=total_train_steps + current_step,
                     context={"type": "value"},
                 )
                 run.track(
-                    l_pi.item(),
+                    pi_val,
                     name="loss",
                     epoch=epoch,
                     step=total_train_steps + current_step,
                     context={"type": "policy"},
                 )
                 run.track(
-                    l_v.item() + l_pi.item(),
+                    v_val + pi_val,
                     name="loss",
                     epoch=epoch,
                     step=total_train_steps + current_step,
@@ -502,8 +504,8 @@ class NNWrapper:
                 )
 
                 # record loss and update progress bar.
-                pi_loss += l_pi.item()
-                v_loss += l_v.item()
+                pi_loss += pi_val
+                v_loss += v_val
                 current_step += 1
                 pbar.set_postfix(
                     {

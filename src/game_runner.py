@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 from collections import namedtuple
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import math
 import random
 import time
@@ -86,6 +86,49 @@ def glob_file_triples(directory, pattern="*-canonical-*.ptz"):
         size = int(c_path.rsplit("-", 1)[-1].split(".")[0])
         triples.append((c_path, v_path, pi_path, size))
     return triples
+
+
+def _load_triple(args):
+    """Load a single file triple. Runs in thread pool (GIL released by I/O + zstd)."""
+    c_path, v_path, pi_path = args
+    return (_load_hist_tensor(c_path), _load_hist_tensor(v_path), _load_hist_tensor(pi_path))
+
+
+def _parallel_load_triples(triples, num_workers, desc="Loading Data"):
+    """Load file triples in parallel, preserving input order.
+
+    Args:
+        triples: list of (c_path, v_path, pi_path[, ...]) tuples
+        num_workers: thread count (<=1 falls back to sequential)
+        desc: tqdm progress bar label
+    Returns:
+        list of (c_tensor, v_tensor, pi_tensor) in input order
+    """
+    work = [(t[0], t[1], t[2]) for t in triples]
+    if num_workers <= 1:
+        return [_load_triple(w) for w in tqdm.tqdm(work, desc=desc, leave=False)]
+
+    results = [None] * len(work)
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        future_to_idx = {executor.submit(_load_triple, w): i for i, w in enumerate(work)}
+        for future in tqdm.tqdm(
+            as_completed(future_to_idx),
+            total=len(future_to_idx), desc=desc, leave=False,
+        ):
+            results[future_to_idx[future]] = future.result()
+    return results
+
+
+def _load_and_select(args):
+    """Load a file triple and select subset by indices. Keeps only selected rows in memory."""
+    c_path, v_path, pi_path, indices = args
+    c = _load_hist_tensor(c_path)
+    v = _load_hist_tensor(v_path)
+    pi = _load_hist_tensor(pi_path)
+    idx = torch.tensor(indices, dtype=torch.long)
+    result = (c[idx], v[idx], pi[idx])
+    del c, v, pi
+    return result
 
 
 def _replace_size_in_path(path, new_size):
@@ -478,13 +521,11 @@ def exploit_symmetries(config, paths, iteration):
         glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-pi-*.pt"))
     )
 
-    datasets = []
-    for j in range(len(c_names)):
-        c_tensor = torch.load(c_names[j], map_location="cpu", mmap=True)
-        v_tensor = torch.load(v_names[j], map_location="cpu", mmap=True)
-        p_tensor = torch.load(p_names[j], map_location="cpu", mmap=True)
-        datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-        del c_tensor, v_tensor, p_tensor
+    loaded = _parallel_load_triples(
+        list(zip(c_names, v_names, p_names)), config.resolved_loader_threads, desc="Loading Symmetry Data"
+    )
+    datasets = [TensorDataset(ct, vt, pt) for ct, vt, pt in loaded]
+    del loaded
 
     i_out = 0
     batch_out = 0
@@ -589,13 +630,11 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
         glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-pi-*.pt"))
     )
 
-    datasets = []
-    for j in range(len(c_names)):
-        c_tensor = torch.load(c_names[j], map_location="cpu", mmap=True)
-        v_tensor = torch.load(v_names[j], map_location="cpu", mmap=True)
-        p_tensor = torch.load(p_names[j], map_location="cpu", mmap=True)
-        datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-        del c_tensor, v_tensor, p_tensor
+    loaded = _parallel_load_triples(
+        list(zip(c_names, v_names, p_names)), config.resolved_loader_threads, desc="Loading Resample Data"
+    )
+    datasets = [TensorDataset(ct, vt, pt) for ct, vt, pt in loaded]
+    del loaded
 
     dataset = ConcatDataset(datasets)
     sample_count = len(dataset)
@@ -672,16 +711,14 @@ def iteration_loss(config, paths, experiment_name, iteration):
 
     Game = config.Game
     hist_location = paths["history"]
-    datasets = []
     c = _glob_hist_files(hist_location, f"{iteration:04d}-*-canonical-*")
     v = _glob_hist_files(hist_location, f"{iteration:04d}-*-v-*")
     p = _glob_hist_files(hist_location, f"{iteration:04d}-*-pi-*")
-    for j in tqdm.trange(len(c), desc="Loading Iteration Data", leave=False):
-        c_tensor = _load_hist_tensor(c[j])
-        v_tensor = _load_hist_tensor(v[j])
-        p_tensor = _load_hist_tensor(p[j])
-        datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-        del c_tensor, v_tensor, p_tensor
+    loaded = _parallel_load_triples(
+        list(zip(c, v, p)), config.resolved_loader_threads, desc="Loading Iteration Data"
+    )
+    datasets = [TensorDataset(ct, vt, pt) for ct, vt, pt in loaded]
+    del loaded
 
     dataset = ConcatDataset(datasets)
     dataloader = DataLoader(dataset, batch_size=config.train_batch_size, shuffle=True, pin_memory=torch.cuda.is_available())
@@ -744,22 +781,30 @@ def train(config, paths, experiment_name, iteration, hist_size, run, total_train
                 fi += 1
             selected_per_file[fi].append(idx - cum_sizes[fi])
 
-    # Phase 3: Extract one file at a time
+    # Phase 3: Load files and extract selected indices (parallel)
+    work_items = [
+        (c_path, v_path, pi_path, selected_per_file[i])
+        for i, (c_path, v_path, pi_path, _) in enumerate(file_triples)
+        if selected_per_file[i]
+    ]
+
+    num_workers = config.resolved_loader_threads
     acc_c, acc_v, acc_pi = [], [], []
-    for i, (c_path, v_path, pi_path, size) in enumerate(
-        tqdm.tqdm(file_triples, desc="Extracting Training Samples", leave=False)
-    ):
-        indices = selected_per_file[i]
-        if not indices:
-            continue
-        c_tensor = _load_hist_tensor(c_path)
-        v_tensor = _load_hist_tensor(v_path)
-        pi_tensor = _load_hist_tensor(pi_path)
-        idx_tensor = torch.tensor(indices, dtype=torch.long)
-        acc_c.append(c_tensor[idx_tensor])
-        acc_v.append(v_tensor[idx_tensor])
-        acc_pi.append(pi_tensor[idx_tensor])
-        del c_tensor, v_tensor, pi_tensor
+    if num_workers <= 1:
+        for item in tqdm.tqdm(work_items, desc="Extracting Training Samples", leave=False):
+            c, v, pi = _load_and_select(item)
+            acc_c.append(c); acc_v.append(v); acc_pi.append(pi)
+    else:
+        results = [None] * len(work_items)
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_idx = {executor.submit(_load_and_select, item): i for i, item in enumerate(work_items)}
+            for future in tqdm.tqdm(
+                as_completed(future_to_idx), total=len(future_to_idx),
+                desc="Extracting Training Samples", leave=False,
+            ):
+                results[future_to_idx[future]] = future.result()
+        for c, v, pi in results:
+            acc_c.append(c); acc_v.append(v); acc_pi.append(pi)
 
     c_data = torch.cat(acc_c)
     v_data = torch.cat(acc_v)
@@ -916,7 +961,7 @@ def update_reservoir(config, paths, iteration, hist_size):
     gc.collect()
 
 
-def load_reservoir(paths):
+def load_reservoir(paths, num_workers=1):
     """Load reservoir as a TensorDataset, or None if no reservoir exists.
 
     Supports both per-iteration files (new format) and monolithic files (legacy).
@@ -924,11 +969,10 @@ def load_reservoir(paths):
     # Try new per-iteration format first
     triples = glob_file_triples(paths["reservoir"])
     if triples:
-        cs, vs, pis = [], [], []
-        for c_path, v_path, pi_path, size in triples:
-            cs.append(load_compressed(c_path))
-            vs.append(load_compressed(v_path))
-            pis.append(load_compressed(pi_path))
+        loaded = _parallel_load_triples(triples, num_workers, desc="Loading Reservoir")
+        cs = [ct for ct, _, _ in loaded]
+        vs = [vt for _, vt, _ in loaded]
+        pis = [pt for _, _, pt in loaded]
         return TensorDataset(torch.cat(cs), torch.cat(vs), torch.cat(pis))
 
     # Fall back to old monolithic format
@@ -941,21 +985,17 @@ def load_reservoir(paths):
     return TensorDataset(c, v, pi)
 
 
-def load_available_window(paths, start, end):
+def load_available_window(paths, start, end, num_workers=1):
     """Load whatever window history files exist across an iteration range."""
     hist_location = paths["history"]
-    datasets = []
+    all_triples = []
     for i in range(start, end):
         c = _glob_hist_files(hist_location, f"{i:04d}-*-canonical-*")
         v = _glob_hist_files(hist_location, f"{i:04d}-*-v-*")
         p = _glob_hist_files(hist_location, f"{i:04d}-*-pi-*")
-        for j in range(len(c)):
-            c_tensor = _load_hist_tensor(c[j])
-            v_tensor = _load_hist_tensor(v[j])
-            p_tensor = _load_hist_tensor(p[j])
-            datasets.append(TensorDataset(c_tensor, v_tensor, p_tensor))
-            del c_tensor, v_tensor, p_tensor
-    return datasets
+        all_triples.extend(zip(c, v, p))
+    loaded = _parallel_load_triples(all_triples, num_workers, desc="Loading Window")
+    return [TensorDataset(ct, vt, pt) for ct, vt, pt in loaded]
 
 
 class StreamingCompressedDataset(IterableDataset):

@@ -127,6 +127,9 @@ class TrainConfig:
     # Compression
     zstd_level: int = 1
 
+    # Parallel file loading
+    loader_threads: int = -1  # -1 = os.cpu_count()
+
     def validate(self):
         if self.game not in GAME_REGISTRY:
             raise ValueError(f"Unknown game: {self.game}")
@@ -161,6 +164,10 @@ class TrainConfig:
     @property
     def resolved_data_workers(self) -> int:
         return os.cpu_count() - 1 if self.data_workers == -1 else self.data_workers
+
+    @property
+    def resolved_loader_threads(self) -> int:
+        return os.cpu_count() if self.loader_threads == -1 else self.loader_threads
 
     def resolve_experiment_dir(self, base="data", explicit_name=None) -> str:
         """Resolve experiment directory path.

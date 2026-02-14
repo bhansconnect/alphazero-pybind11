@@ -11,13 +11,15 @@ import zstandard as zstd
 import alphazero
 from tracy_utils import tracy_zone
 
-HALF_DTYPE = torch.float16
+def get_autocast_dtype():
+    """Device-preferred dtype for autocast: bfloat16 if supported, else float16."""
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16
 
 
 def get_storage_dtype():
-    """Best half dtype for storage: bfloat16 if hardware supports it, else float16."""
-    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
-        return torch.bfloat16
+    """Half dtype for storage. float16 is 8x more precise for [-1,1] data."""
     return torch.float16
 
 
@@ -298,7 +300,7 @@ class _CUDAGraphInference:
 
     def _forward(self, x):
         if self.use_autocast:
-            with torch.autocast(device_type='cuda', dtype=HALF_DTYPE):
+            with torch.autocast(device_type='cuda', dtype=get_autocast_dtype()):
                 v, pi = self.model(x)
         else:
             v, pi = self.model(x)
@@ -391,7 +393,7 @@ class NNWrapper:
                 target_pis = target_pis.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
 
                 if self.use_autocast:
-                    with torch.autocast(device_type=self.device.type, dtype=HALF_DTYPE):
+                    with torch.autocast(device_type=self.device.type, dtype=get_autocast_dtype()):
                         out_v, out_pi = self.nnet(canonical)
                 else:
                     out_v, out_pi = self.nnet(canonical)
@@ -412,7 +414,7 @@ class NNWrapper:
                 target_pis = target_pis.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
 
                 if self.use_autocast:
-                    with torch.autocast(device_type=self.device.type, dtype=HALF_DTYPE):
+                    with torch.autocast(device_type=self.device.type, dtype=get_autocast_dtype()):
                         out_v, out_pi = self.nnet(canonical)
                 else:
                     out_v, out_pi = self.nnet(canonical)
@@ -425,7 +427,7 @@ class NNWrapper:
         return loss
 
     @tracy_zone
-    def train(self, batches, steps_to_train, run, epoch, total_train_steps):
+    def train(self, batches, steps_to_train, run, epoch, total_train_steps, ema_averaging=True):
         self.nnet.train()
 
         v_loss = 0
@@ -438,12 +440,13 @@ class NNWrapper:
         while current_step < steps_to_train:
             for batch in batches:
                 if (
-                    steps_to_train // 4 > 0
+                    ema_averaging
+                    and steps_to_train // 4 > 0
                     and current_step % (steps_to_train // 4) == 0
                     and current_step != 0
                 ):
-                    # Snapshot model weights
-                    past_states.append(dict(self.nnet.named_parameters()))
+                    # Snapshot model weights (clone to avoid aliasing)
+                    past_states.append({k: v.data.clone() for k, v in self.nnet.named_parameters()})
                 if current_step == steps_to_train:
                     break
                 canonical, target_vs, target_pis = batch
@@ -497,17 +500,16 @@ class NNWrapper:
                 )
                 pbar.update()
 
-        # Perform expontential averaging of network weights.
-        past_states.append(dict(self.nnet.named_parameters()))
-        merged_states = past_states[0]
-        for state in past_states[1:]:
-            for k in merged_states.keys():
-                merged_states[k].data = (
-                    merged_states[k].data * 0.75 + state[k].data * 0.25
-                )
-        nnet_dict = self.nnet.state_dict()
-        nnet_dict.update(merged_states)
-        self.nnet.load_state_dict(nnet_dict)
+        # Perform exponential averaging of network weights.
+        if ema_averaging and past_states:
+            past_states.append({k: v.data.clone() for k, v in self.nnet.named_parameters()})
+            merged_states = past_states[0]
+            for state in past_states[1:]:
+                for k in merged_states.keys():
+                    merged_states[k] = merged_states[k] * 0.75 + state[k] * 0.25
+            nnet_dict = self.nnet.state_dict()
+            nnet_dict.update(merged_states)
+            self.nnet.load_state_dict(nnet_dict)
 
         pbar.close()
         return v_loss / steps_to_train, pi_loss / steps_to_train
@@ -527,7 +529,7 @@ class NNWrapper:
         self.nnet.eval()
         with torch.no_grad():
             if self.use_autocast:
-                with torch.autocast(device_type=self.device.type, dtype=HALF_DTYPE):
+                with torch.autocast(device_type=self.device.type, dtype=get_autocast_dtype()):
                     v, pi = self.nnet(batch)
             else:
                 v, pi = self.nnet(batch)

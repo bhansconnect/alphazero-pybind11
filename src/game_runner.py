@@ -1322,7 +1322,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
     Game = config.Game
     paths = config.resolve_paths(experiment_dir)
-    experiment_name = config.auto_experiment_name
+    experiment_name = os.path.basename(experiment_dir)
 
     # Ensure all directories exist
     for key in ("checkpoint", "history", "tmp_history", "reservoir"):

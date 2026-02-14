@@ -15,6 +15,57 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
   if (params_.mcts_visits.size() != base_gs_->num_players()) {
     throw std::runtime_error{"You must specify MCTS visits for each player"};
   }
+
+  // 1. Compute model_groups_
+  if (params_.model_groups.empty()) {
+    for (auto i = 0U; i < base_gs_->num_players(); ++i)
+      model_groups_.push_back(i);
+  } else {
+    model_groups_ = params_.model_groups;
+  }
+  num_model_groups_ =
+      *std::max_element(model_groups_.begin(), model_groups_.end()) + 1;
+
+  // 2. Convert mcts_visits to per-model-group
+  mcts_visits_.resize(num_model_groups_, 0);
+  for (auto i = 0U; i < base_gs_->num_players(); ++i)
+    mcts_visits_[model_groups_[i]] = params_.mcts_visits[i];
+
+  // 3. Convert eval_type to per-model-group (if set)
+  if (!params_.eval_type.empty()) {
+    eval_types_.resize(num_model_groups_, EvalType::NN);
+    for (auto i = 0U; i < base_gs_->num_players(); ++i)
+      eval_types_[model_groups_[i]] = params_.eval_type[i];
+  }
+
+  // 4. Compute seat permutations
+  if (params_.seat_perms.empty()) {
+    seat_perms_.push_back(model_groups_);
+  } else {
+    seat_perms_ = params_.seat_perms;
+  }
+
+  // 5. Create per-model-group queues and caches
+  for (auto i = 0U; i < num_model_groups_; ++i) {
+    awaiting_inference_.push_back(
+        std::make_unique<ConcurrentQueue<uint32_t>>());
+  }
+  if (params_.max_cache_size > 0) {
+    auto per_group = params_.max_cache_size / num_model_groups_;
+    for (auto i = 0U; i < num_model_groups_; ++i)
+      caches_.push_back(
+          Cache{per_group, params_.cache_shards, per_group});
+  }
+
+  // 6. Init per-perm score tracking
+  for (size_t p = 0; p < seat_perms_.size(); ++p) {
+    PermScores ps;
+    ps.scores = Vector<float>{base_gs_->num_players() + 1};
+    ps.scores.setZero();
+    perm_scores_.push_back(std::move(ps));
+  }
+
+  // 7. Init games with seat permutations
   for (auto i = 0U; i < params_.concurrent_games; ++i) {
     auto gd = GameData{};
     gd.gs = base_gs_->copy();
@@ -29,15 +80,12 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     gd.pi = Vector<float>{base_gs_->num_moves()};
     gd.v.setZero();
     gd.pi.setZero();
+    gd.perm_index = i % seat_perms_.size();
+    gd.seat_perm = seat_perms_[gd.perm_index];
     games_.push_back(std::move(gd));
     awaiting_mcts_.push(i);
   }
-  for (auto i = 0U; i < base_gs_->num_players(); ++i) {
-    caches_.push_back(Cache{params_.max_cache_size / (base_gs_->num_players()),
-                            params_.cache_shards});
-    awaiting_inference_.push_back(
-        std::make_unique<ConcurrentQueue<uint32_t>>());
-  }
+
   scores_ = Vector<float>{base_gs_->num_players() + 1};
   scores_.setZero();
   resign_scores_ = Vector<float>{base_gs_->num_players() + 1};
@@ -61,8 +109,9 @@ void PlayManager::play() {
       auto& mcts = game.mcts[cp];
       mcts.process_result(*game.gs, game.v, game.pi,
                           params_.add_noise && !game.capped);
+      auto group = game.seat_perm[cp];
       auto goal_depth =
-          game.capped ? params_.playout_cap_depth : params_.mcts_visits[cp];
+          game.capped ? params_.playout_cap_depth : mcts_visits_[group];
       if (mcts.depth() >= goal_depth) {
         // Actually play a move.
         auto temp = params_.start_temp;
@@ -150,6 +199,8 @@ void PlayManager::play() {
           {
             std::unique_lock<std::mutex> lock{game_end_mutex_};
             scores_ += scores.value();
+            perm_scores_[game.perm_index].scores += scores.value();
+            ++perm_scores_[game.perm_index].games_completed;
             if (resign_score.has_value()) {
               resign_scores_ += resign_score.value();
             }
@@ -175,6 +226,9 @@ void PlayManager::play() {
             if (games_started_ >= params_.games_to_play) {
               continue;
             }
+            // Assign next perm for new game.
+            game.perm_index = games_started_ % seat_perms_.size();
+            game.seat_perm = seat_perms_[game.perm_index];
             ++games_started_;
           }
           // Setup next game.
@@ -219,8 +273,10 @@ void PlayManager::play() {
 
     // Non-NN players: evaluate inline before minimize_storage so that
     // playout rollouts retain full game state (repetition history, etc.).
-    if (!params_.eval_type.empty() && params_.eval_type[cp] != EvalType::NN) {
-      if (params_.eval_type[cp] == EvalType::PLAYOUT) {
+    auto group = game.seat_perm[cp];
+    auto et = eval_types_.empty() ? EvalType::NN : eval_types_[group];
+    if (et != EvalType::NN) {
+      if (et == EvalType::PLAYOUT) {
         std::tie(game.v, game.pi) = playout_eval(*leaf);
       } else {
         std::tie(game.v, game.pi) = dumb_eval(*leaf);
@@ -235,18 +291,16 @@ void PlayManager::play() {
     leaf->minimize_storage();
     game.leaf = std::move(leaf);
     if (params_.max_cache_size > 0) {
-      auto opt = caches_[cp].find(game.leaf);
-      if (opt.has_value()) {
-        std::tie(game.v, game.pi) = opt.value();
+      if (caches_[group].find_into(game.leaf, game.v, game.pi)) {
         awaiting_mcts_.push(i.value());
         continue;
       }
     }
-    awaiting_inference_[cp]->push(i.value());
+    awaiting_inference_[group]->push(i.value());
   }
 }
 
-void PlayManager::update_inferences(const uint8_t player,
+void PlayManager::update_inferences(const uint8_t group,
                                     const std::vector<uint32_t>& game_indices,
                                     const Eigen::Ref<const Matrix<float>>& v,
                                     const Eigen::Ref<const Matrix<float>>& pi) {
@@ -263,7 +317,7 @@ void PlayManager::update_inferences(const uint8_t player,
     }
   }
   if (params_.max_cache_size > 0) {
-    caches_[player].insert_many(keys, values);
+    caches_[group].insert_many(keys, values);
   }
   awaiting_mcts_.push_many(game_indices);
 }

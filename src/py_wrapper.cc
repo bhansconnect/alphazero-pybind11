@@ -1,4 +1,5 @@
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 #include "brandubh_gs.h"
@@ -229,7 +230,9 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("resign_percent", &PlayParams::resign_percent)
       .def_readwrite("resign_playthrough_percent",
                      &PlayParams::resign_playthrough_percent)
-      .def_readwrite("eval_type", &PlayParams::eval_type);
+      .def_readwrite("eval_type", &PlayParams::eval_type)
+      .def_readwrite("model_groups", &PlayParams::model_groups)
+      .def_readwrite("seat_perms", &PlayParams::seat_perms);
 
   py::class_<PlayManager>(m, "PlayManager")
       .def(py::init([](const GameState* gs, PlayParams params) {
@@ -299,25 +302,33 @@ PYBIND11_MODULE(alphazero, m) {
             return current;
           },
           py::call_guard<py::gil_scoped_release>())
+      .def("num_model_groups", &PlayManager::num_model_groups)
+      .def("num_seat_perms", &PlayManager::num_seat_perms)
+      .def("perm_scores", &PlayManager::perm_scores,
+           py::return_value_policy::reference_internal)
+      .def("perm_games_completed", &PlayManager::perm_games_completed)
+      .def("set_eager", &PlayManager::set_eager)
+      .def("cache_evictions", &PlayManager::cache_evictions)
+      .def("cache_reinserts", &PlayManager::cache_reinserts)
+      .def("cache_max_size", &PlayManager::cache_max_size)
+      .def("cache_size", &PlayManager::cache_size)
       .def(
           "build_batch",
-          [](PlayManager& pm, uint32_t player, py::array_t<float>& batch,
-             uint32_t concurrent_batches) {
+          [](PlayManager& pm, uint32_t group, py::array_t<float>& batch) {
             const auto mbs = pm.params().max_batch_size;
-            const auto max_bs = [&]() {
-              auto remaining_ratio =
-                  static_cast<float>(pm.remaining_games()) / concurrent_batches;
-              return std::min(
-                  mbs, static_cast<uint32_t>(std::ceil(remaining_ratio)));
-            };
             auto out = std::vector<uint32_t>{};
             out.reserve(mbs);
             auto raw = batch.mutable_unchecked<4>();
             auto dimensions_checked = false;
             auto current = 0U;
-            while (current < max_bs()) {
-              const auto indices =
-                  pm.pop_games_upto(player, max_bs() - current);
+
+            auto max_bs = [&]() -> uint32_t {
+              auto remaining = pm.remaining_games();
+              return std::min(mbs, remaining > 0 ? remaining : 1U);
+            };
+
+            // Helper: copy canonical to batch tensor via memcpy
+            auto copy_to_batch = [&](const std::vector<uint32_t>& indices) {
               for (const auto i : indices) {
                 const auto& canonical = pm.game_data(i).canonical;
                 if (!dimensions_checked) {
@@ -326,20 +337,31 @@ PYBIND11_MODULE(alphazero, m) {
                       batch.shape(2) != canonical.dimension(1) ||
                       batch.shape(3) != canonical.dimension(2)) {
                     throw std::runtime_error{"Improper batch size"};
-                  } else {
-                    dimensions_checked = true;
                   }
+                  dimensions_checked = true;
                 }
-                for (auto j = 0L; j < canonical.dimension(0); ++j) {
-                  for (auto k = 0L; k < canonical.dimension(1); ++k) {
-                    for (auto l = 0L; l < canonical.dimension(2); ++l) {
-                      raw(current, j, k, l) = canonical(j, k, l);
-                    }
-                  }
-                }
+                std::memcpy(&raw(current, 0, 0, 0), canonical.data(),
+                            canonical.size() * sizeof(float));
                 out.push_back(i);
                 ++current;
               }
+            };
+
+            constexpr auto SUB_TIMEOUT = std::chrono::microseconds{500};
+            constexpr auto MAX_EMPTY = 20u;  // ~10ms
+            auto empty_count = 0u;
+            while (current < max_bs()) {
+              if (pm.is_eager() && current > 0) break;
+              if (pm.remaining_games() == 0) break;
+
+              auto indices = pm.pop_games_upto_timed(
+                  group, max_bs() - current, SUB_TIMEOUT);
+              if (indices.empty()) {
+                if (++empty_count >= MAX_EMPTY) break;
+                continue;
+              }
+              empty_count = 0;
+              copy_to_batch(indices);
             }
             return out;
           },

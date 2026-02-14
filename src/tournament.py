@@ -40,6 +40,7 @@ from game_runner import (
     base_params,
     elo_prob,
     set_eval_types,
+    set_model_groups,
 )
 from network_selector import (
     discover_runs,
@@ -89,45 +90,74 @@ def calc_elo(past_elo, win_rates):
 
 @tracy_zone
 def pit_agents(config, Game, players, mcts_visits, bs, name, tree_reuse=True):
-    """Play agents against each other across all seat permutations.
+    """Play agents against each other across all seat permutations in one run.
 
     Returns list of win rates per player index.
     """
     num_players = Game.NUM_PLAYERS()
-    win_rates = [0] * num_players
-    for i in tqdm.trange(num_players, leave=False, desc=name):
-        cb = Game.NUM_PLAYERS()
-        n = bs * cb
-        ordered_players = [None] * num_players
-        ordered_visits = [None] * num_players
-        for j in range(num_players):
-            ordered_players[j] = players[(j + i) % num_players]
-            ordered_visits[j] = mcts_visits[(j + i) % num_players]
+    cb = num_players
 
-        params = base_params(config, 0.5, bs, cb)
-        params.max_cache_size = 0  # Disable cache in arena
-        params.tree_reuse = tree_reuse
-        params.games_to_play = n
-        params.mcts_visits = ordered_visits
-        set_eval_types(params, ordered_players)
-        pm = alphazero.PlayManager(Game(), params)
+    # Build model groups from player identity
+    params = base_params(config, 0.5, bs, cb)
+    params.max_cache_size = 0  # Disable cache in arena
+    params.tree_reuse = tree_reuse
+    params.mcts_visits = list(mcts_visits) if not isinstance(mcts_visits, list) else mcts_visits
+    # Expand scalar mcts_visits to per-player
+    if len(params.mcts_visits) == 1:
+        params.mcts_visits = params.mcts_visits * num_players
+    elif not isinstance(params.mcts_visits, list):
+        params.mcts_visits = [params.mcts_visits] * num_players
 
-        grargs = GRArgs(
-            title=f"{name}({i + 1}/{num_players})",
-            game=Game,
-            max_batch_size=bs,
-            concurrent_batches=cb,
-            result_workers=2,
-        )
-        gr = GameRunner(ordered_players, pm, grargs)
-        gr.run()
-        scores = pm.scores()
-        for j in range(num_players):
-            wins = scores[j] + scores[-1] / num_players
-            win_rates[(j + i) % num_players] += wins / n
-        gc.collect()
+    set_model_groups(params, players)
+    model_groups = list(params.model_groups)
+
+    # Generate seat permutations (all rotations)
+    seat_perms = []
+    for i in range(num_players):
+        perm = [model_groups[(j + i) % num_players] for j in range(num_players)]
+        seat_perms.append(perm)
+    params.seat_perms = seat_perms
+
+    n = bs * cb * num_players  # all perms at once
+    params.games_to_play = n
+    set_eval_types(params, players)
+
+    # Build unique players list for GameRunner
+    # (deduplicate by model group)
+    seen_groups = {}
+    unique_players = [None] * num_players
+    for i, p in enumerate(players):
+        g = model_groups[i]
+        if g not in seen_groups:
+            seen_groups[g] = i
+        unique_players[i] = players[seen_groups[g]]
+
+    pm = alphazero.PlayManager(Game(), params)
+    grargs = GRArgs(
+        title=name,
+        game=Game,
+        max_batch_size=bs,
+    )
+    gr = GameRunner(unique_players, pm, grargs)
+    gr.run()
+
+    # Extract per-perm results
+    win_rates = [0.0] * num_players
+    for perm_idx in range(pm.num_seat_perms()):
+        perm_scores = pm.perm_scores(perm_idx)
+        perm_games = pm.perm_games_completed(perm_idx)
+        if perm_games == 0:
+            continue
+        rotation = perm_idx  # perm_idx corresponds to rotation offset
+        for seat in range(num_players):
+            original_player = (seat + rotation) % num_players
+            wins = perm_scores[seat] + perm_scores[num_players] / num_players
+            win_rates[original_player] += wins / perm_games
+
     for i in range(num_players):
         win_rates[i] /= num_players
+
+    gc.collect()
     return win_rates
 
 

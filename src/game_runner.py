@@ -148,13 +148,35 @@ GRArgs = namedtuple(
         "iteration",
         "data_save_size",
         "data_folder",
-        "concurrent_batches",
-        "batch_workers",
-        "nn_workers",
-        "result_workers",
         "mcts_workers",
+        "record_batch_metrics",
     ],
-    defaults=(0, 30_000, None, 0, 0, 1, 1, os.cpu_count() - 1),
+    defaults=(0, 30_000, None, os.cpu_count() - 1, False),
+)
+
+
+SelfPlayResult = namedtuple(
+    "SelfPlayResult",
+    [
+        "win_rates",
+        "hit_rate",
+        "game_length",
+        "resign_win_rates",
+        "resign_rate",
+        "avg_depth",
+        "avg_entropy",
+        "fast_avg_depth",
+        "fast_avg_entropy",
+        "avg_mpt",
+        "avg_vm",
+        "saturation",
+        "churn_rate",
+        "avg_batch_size",
+        "median_batch_size",
+        "min_batch_size",
+        "max_batch_size",
+        "theoretical_hr",
+    ],
 )
 
 
@@ -165,46 +187,47 @@ class GameRunner:
         self.args = args
         self.device = get_device()
         self.num_players = self.args.game.NUM_PLAYERS()
-        self.batch_workers = self.args.batch_workers
-        if self.batch_workers == 0:
-            self.batch_workers = self.num_players
-        self.concurrent_batches = self.args.concurrent_batches
-        if self.concurrent_batches == 0:
-            self.concurrent_batches = self.num_players
-        if self.batch_workers % self.num_players != 0:
-            raise Exception(
-                "batch workers should be a multiple of the number of players"
-            )
-        if self.concurrent_batches % self.batch_workers != 0:
-            raise Exception(
-                "concurrent batches should be a multiple of the number of batch workers"
-            )
         if len(self.players) != self.num_players:
             raise Exception("There must be a player for each player")
-        self.ready_queues = []
-        for i in range(self.batch_workers):
-            self.ready_queues.append(queue.SimpleQueue())
-        self.batch_queue = queue.SimpleQueue()
-        self.result_queue = queue.SimpleQueue()
+
+        self.num_model_groups = self.pm.num_model_groups()
+
+        # Build model_group → model mapping for GPU inference
+        model_groups = list(self.pm.params().model_groups)
+        self._group_models = [None] * self.num_model_groups
+        for i, p in enumerate(self.players):
+            if not isinstance(p, (RandPlayer, PlayoutPlayer)):
+                g = model_groups[i]
+                if self._group_models[g] is None:
+                    self._group_models[g] = p
+
+        # NN model groups (groups that actually need GPU inference)
+        self._nn_groups = [g for g in range(self.num_model_groups)
+                           if self._group_models[g] is not None]
+
+        # Pipeline queues
+        self.gpu_ready_queue = queue.SimpleQueue()
+        self.gpu_result_queue = queue.SimpleQueue()
+        self.buffer_pool = queue.SimpleQueue()
         self.monitor_queue = queue.SimpleQueue()
         self.saved_samples = 0
+        self._batch_lock = threading.Lock()
+        self._batch_sizes = []
+        self._inference_times = []
+
+        # Buffer pool: 1 per batcher thread + 1 GPU + 1 result worker
         cs = self.args.game.CANONICAL_SHAPE()
+        num_buffers = len(self._nn_groups) + 2
+        for _ in range(num_buffers):
+            buf = torch.zeros(self.args.max_batch_size, cs[0], cs[1], cs[2])
+            if str(self.device) == "cuda":
+                buf = buf.pin_memory()
+            self.buffer_pool.put(buf)
+
+        # History buffers
         self.hist_canonical = torch.zeros(self.args.data_save_size, cs[0], cs[1], cs[2])
         self.hist_v = torch.zeros(self.args.data_save_size, self.num_players + 1)
         self.hist_pi = torch.zeros(self.args.data_save_size, self.args.game.NUM_MOVES())
-        shape = (self.args.max_batch_size, cs[0], cs[1], cs[2])
-        self.batches = []
-        self.v = []
-        self.pi = []
-        for i in range(self.concurrent_batches):
-            self.batches.append(torch.zeros(shape))
-            self.v.append(torch.zeros((self.num_players + 1)))
-            self.pi.append(torch.zeros((self.args.game.NUM_MOVES())))
-            if str(self.device) == "cuda":
-                self.batches[i].pin_memory()
-                self.v[i].pin_memory()
-                self.pi[i].pin_memory()
-            self.ready_queues[i % self.num_players].put(i)
 
     @tracy_zone
     def run(self):
@@ -223,30 +246,22 @@ class GameRunner:
                 raise KeyboardInterrupt
 
     def _run_inner(self):
-        nn_players = set()
-        for i in range(self.num_players):
-            if not isinstance(self.players[i], (PlayoutPlayer, RandPlayer)):
-                nn_players.add(i)
+        self._batch_sizes.clear()
+        self._inference_times.clear()
+        # Check if any model group has an NN model
+        has_nn = any(m is not None for m in self._group_models)
 
-        batch_workers = []
-        for i in range(self.batch_workers):
-            player = i % self.num_players
-            if player not in nn_players:
-                continue
-            batch_workers.append(
-                threading.Thread(
-                    target=self.batch_builder, args=(player,)
-                )
-            )
-            batch_workers[-1].start()
-        result_workers = []
-        for i in range(self.args.result_workers):
-            result_workers.append(threading.Thread(target=self.result_processor))
-            result_workers[i].start()
-        player_workers = []
-        for i in range(self.num_players):
-            player_workers.append(threading.Thread(target=self.player_executor))
-            player_workers[i].start()
+        if has_nn:
+            batcher_threads = []
+            for g in self._nn_groups:
+                t = threading.Thread(target=self.batcher, args=(g,))
+                t.start()
+                batcher_threads.append(t)
+            gpu_thread = threading.Thread(target=self.gpu_loop)
+            gpu_thread.start()
+            result_thread = threading.Thread(target=self.result_worker)
+            result_thread.start()
+
         mcts_workers = []
         for i in range(self.args.mcts_workers):
             mcts_workers.append(threading.Thread(target=self.pm.play))
@@ -258,14 +273,13 @@ class GameRunner:
             hist_saver = threading.Thread(target=self.hist_saver)
             hist_saver.start()
 
-        for bw in batch_workers:
-            bw.join()
-        for rw in result_workers:
-            rw.join()
-        for pw in player_workers:
-            pw.join()
         for mw in mcts_workers:
             mw.join()
+        if has_nn:
+            for bt in batcher_threads:
+                bt.join()
+            gpu_thread.join()
+            result_thread.join()
         monitor.join()
         if self.pm.params().history_enabled:
             hist_saver.join()
@@ -277,92 +291,157 @@ class GameRunner:
         last_update = time.time()
         n = self.pm.params().games_to_play
         pbar = tqdm.tqdm(total=n, unit="games", desc=self.args.title, leave=False)
+
+        def _build_postfix():
+            hr = 0
+            hits = self.pm.cache_hits()
+            misses = self.pm.cache_misses()
+            total = hits + misses
+            if total > 0:
+                hr = hits / total
+            postfix = {"cache hr": f"{hr:.3f}"}
+            max_cache = self.pm.cache_max_size()
+            if max_cache > 0:
+                cache_sz = self.pm.cache_size()
+                sat = cache_sz / max_cache
+                evictions = self.pm.cache_evictions()
+                churn = evictions / hits if hits > 0 else 0
+                reinserts = self.pm.cache_reinserts()
+                thr = (hits + reinserts) / total if total > 0 else 0
+                postfix["sat"] = f"{sat:.2f}"
+                postfix["churn"] = f"{churn:.2f}"
+                postfix["thr"] = f"{thr:.3f}"
+            if self.args.record_batch_metrics:
+                with self._batch_lock:
+                    sizes = list(self._batch_sizes)
+                    inf_times = list(self._inference_times)
+                if sizes:
+                    sizes.sort()
+                    n_bs = len(sizes)
+                    postfix["bs"] = f"{sizes[0]}/{sizes[n_bs//2]}/{sizes[-1]}"
+                if inf_times:
+                    inf_times.sort()
+                    n_it = len(inf_times)
+                    postfix["nn_ms"] = (
+                        f"{inf_times[0]*1000:.1f}/"
+                        f"{inf_times[n_it//2]*1000:.1f}/"
+                        f"{inf_times[-1]*1000:.1f}"
+                    )
+            completed = self.pm.games_completed()
+            num_perms = self.pm.num_seat_perms()
+            if completed > 0 and num_perms > 1:
+                seat_perms = self.pm.params().seat_perms
+                num_groups = self.pm.num_model_groups()
+                group_wins = [0.0] * (num_groups + 1)  # last = draws
+                total_games = 0
+                for perm_idx in range(num_perms):
+                    ps = self.pm.perm_scores(perm_idx)
+                    pg = self.pm.perm_games_completed(perm_idx)
+                    if pg == 0:
+                        continue
+                    total_games += pg
+                    perm = seat_perms[perm_idx]
+                    for seat in range(self.num_players):
+                        group_wins[perm[seat]] += ps[seat]
+                    group_wins[-1] += ps[self.num_players]
+                if total_games > 0:
+                    win_rates = [gw / total_games for gw in group_wins]
+                else:
+                    win_rates = [0] * (num_groups + 1)
+            else:
+                scores = self.pm.scores()
+                win_rates = [0] * len(scores)
+                if completed > 0:
+                    for i in range(len(scores)):
+                        win_rates[i] = scores[i] / completed
+            postfix["wr"] = list(map(lambda x: f"{x:0.3f}", win_rates))
+            return postfix, completed
+
         while self.pm.remaining_games() > 0:
             try:
                 self.monitor_queue.get(timeout=1)
             except queue.Empty:
                 continue
             if time.time() - last_update > 1:
-                hr = 0
-                hits = self.pm.cache_hits()
-                total = hits + self.pm.cache_misses()
-                if total > 0:
-                    hr = hits / total
-                completed = self.pm.games_completed()
-                scores = self.pm.scores()
-                win_rates = [0] * len(scores)
-                if completed > 0:
-                    for i in range(len(scores)):
-                        win_rates[i] = scores[i] / completed
-                win_rates = list(map(lambda x: f"{x:0.3f}", win_rates))
-                pbar.set_postfix({"win rates": win_rates, "cache rate": hr})
+                postfix, completed = _build_postfix()
+                pbar.set_postfix(postfix)
                 pbar.update(completed - last_completed)
                 last_completed = completed
                 last_update = time.time()
-        hr = 0
-        hits = self.pm.cache_hits()
-        total = hits + self.pm.cache_misses()
-        if total > 0:
-            hr = hits / total
-        completed = self.pm.games_completed()
-        scores = self.pm.scores()
-        win_rates = [0] * len(scores)
-        for i in range(len(scores)):
-            win_rates[i] = scores[i] / completed
-        win_rates = list(map(lambda x: f"{x:0.3f}", win_rates))
-        pbar.set_postfix({"win rates": win_rates, "cache hit": hr})
+
+        postfix, completed = _build_postfix()
+        pbar.set_postfix(postfix)
         pbar.update(n - last_completed)
         pbar.close()
 
     @tracy_zone
-    def batch_builder(self, player):
-        tracy_thread(f"batch_builder_{player}")
+    def batcher(self, group):
+        tracy_thread(f"batcher_{group}")
         while self.pm.remaining_games() > 0:
             try:
-                batch_index = self.ready_queues[player].get(timeout=1)
+                batch_tensor = self.buffer_pool.get(timeout=1)
             except queue.Empty:
                 continue
-            batch = self.batches[batch_index]
-            game_indices = self.pm.build_batch(
-                batch_index % self.num_players, batch, self.batch_workers
-            )
-            if len(game_indices) == 0:
-                self.ready_queues[player].put(batch_index)
+
+            game_indices = self.pm.build_batch(group, batch_tensor)
+            if not game_indices:
+                self.buffer_pool.put(batch_tensor)
                 continue
-            out = batch[: len(game_indices)]
-            out = out.contiguous().to(self.device, non_blocking=True)
-            self.batch_queue.put((out, batch_index, game_indices))
+
+            if self.args.record_batch_metrics:
+                with self._batch_lock:
+                    self._batch_sizes.append(len(game_indices))
+
+            gpu_tensor = batch_tensor[:len(game_indices)].to(
+                self.device, non_blocking=True
+            )
+            self.gpu_ready_queue.put((gpu_tensor, batch_tensor, game_indices, group))
 
     @tracy_zone
-    def player_executor(self):
-        tracy_thread("player_executor")
+    def gpu_loop(self):
+        tracy_thread("gpu_loop")
         while self.pm.remaining_games() > 0:
+            # Try non-blocking first — if batch already queued, grab immediately
             try:
-                batch, batch_index, game_indices = self.batch_queue.get(timeout=1)
+                gpu_tensor, batch_tensor, game_indices, group = (
+                    self.gpu_ready_queue.get_nowait()
+                )
             except queue.Empty:
-                continue
-            self.v[batch_index], self.pi[batch_index] = self.players[
-                batch_index % self.num_players
-            ].process(batch)
-            self.result_queue.put((batch_index, game_indices))
+                # No batch ready — signal batcher to hand off partial batch
+                self.pm.set_eager(True)
+                try:
+                    gpu_tensor, batch_tensor, game_indices, group = (
+                        self.gpu_ready_queue.get(timeout=1)
+                    )
+                except queue.Empty:
+                    self.pm.set_eager(False)
+                    continue
+                self.pm.set_eager(False)
+
+            model = self._group_models[group]
+            t0 = time.perf_counter()
+            v, pi = model.process(gpu_tensor)
+            dt = time.perf_counter() - t0
+            self.gpu_result_queue.put((batch_tensor, game_indices, v, pi, group))
+            if self.args.record_batch_metrics:
+                with self._batch_lock:
+                    self._inference_times.append(dt)
 
     @tracy_zone
-    def result_processor(self):
-        tracy_thread("result_processor")
+    def result_worker(self):
+        tracy_thread("result_worker")
         while self.pm.remaining_games() > 0:
             try:
-                batch_index, game_indices = self.result_queue.get(timeout=1)
+                batch_tensor, game_indices, v, pi, group = (
+                    self.gpu_result_queue.get(timeout=1)
+                )
             except queue.Empty:
                 continue
-            v = self.v[batch_index].cpu().numpy()
-            pi = self.pi[batch_index].cpu().numpy()
-            if v.size == 0 or pi.size == 0:
-                continue
-            self.pm.update_inferences(
-                batch_index % self.num_players, game_indices, v, pi
-            )
-            self.ready_queues[batch_index % self.num_players].put(batch_index)
-            self.monitor_queue.put(v.shape[0])
+            v_np = v.cpu().numpy()
+            pi_np = pi.cpu().numpy()
+            self.pm.update_inferences(group, game_indices, v_np, pi_np)
+            self.buffer_pool.put(batch_tensor)
+            self.monitor_queue.put(len(game_indices))
 
     @tracy_zone
     def hist_saver(self):
@@ -422,6 +501,23 @@ def set_eval_types(params, players):
         else:
             eval_types.append(alphazero.EvalType.NN)
     params.eval_type = eval_types
+
+
+def set_model_groups(params, players):
+    """Set model_groups on params based on model object identity.
+
+    Players sharing the same model object get the same group.
+    Non-NN groups get an unused inference queue (eval_type routes them
+    inline in C++, so the queue is never consumed).
+    """
+    model_ids = {}
+    groups = []
+    for p in players:
+        pid = id(p)
+        if pid not in model_ids:
+            model_ids[pid] = len(model_ids)
+        groups.append(model_ids[pid])
+    params.model_groups = groups
 
 
 def base_params(config, start_temp, bs, cb):
@@ -1063,7 +1159,6 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     params = base_params(config, config.self_play_temp, bs, cb)
     params.games_to_play = n
     params.mcts_visits = [depth] * Game.NUM_PLAYERS()
-    params.self_play = True
     params.history_enabled = True
     params.add_noise = True
     params.playout_cap_randomization = True
@@ -1084,6 +1179,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         prepare_inference_model(nn, config)
 
     players = [nn] * Game.NUM_PLAYERS()
+    set_model_groups(params, players)
     set_eval_types(params, players)
 
     pm = alphazero.PlayManager(Game(), params)
@@ -1092,9 +1188,8 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         game=Game,
         iteration=iteration,
         max_batch_size=bs,
-        concurrent_batches=cb,
-        result_workers=config.result_workers,
         data_folder=paths["tmp_history"],
+        record_batch_metrics=True,
     )
 
     gr = GameRunner(players, pm, grargs)
@@ -1111,10 +1206,13 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         resign_win_rates[i] = resign_scores[i] / rn
     resign_rate = rn / sn
     hits = pm.cache_hits()
-    total = hits + pm.cache_misses()
+    misses = pm.cache_misses()
+    total = hits + misses
     hr = 0
     if total > 0:
         hr = hits / total
+    reinserts = pm.cache_reinserts()
+    theoretical_hr = (hits + reinserts) / total if total > 0 else 0
     agl = pm.avg_game_length()
     avg_depth = pm.avg_leaf_depth()
     avg_entropy = pm.avg_search_entropy()
@@ -1122,8 +1220,36 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     fast_avg_entropy = pm.fast_avg_search_entropy()
     avg_mpt = pm.avg_moves_per_turn()
     avg_vm = pm.avg_valid_moves()
+    # Cache pressure metrics
+    max_cache = pm.cache_max_size()
+    cache_sz = pm.cache_size()
+    saturation = cache_sz / max_cache if max_cache > 0 else 0
+    evictions = pm.cache_evictions()
+    churn_rate = evictions / hits if hits > 0 else 0
+    # Batch size metrics
+    with gr._batch_lock:
+        sizes = gr._batch_sizes
+    if sizes:
+        sizes_sorted = sorted(sizes)
+        avg_batch_size = sum(sizes) / len(sizes)
+        min_batch_size = sizes_sorted[0]
+        max_batch_size = sizes_sorted[-1]
+        n_bs = len(sizes_sorted)
+        median_batch_size = (sizes_sorted[n_bs // 2] + sizes_sorted[(n_bs - 1) // 2]) / 2
+    else:
+        avg_batch_size = min_batch_size = max_batch_size = median_batch_size = 0
     del pm, nn
-    return win_rates, hr, agl, resign_win_rates, resign_rate, avg_depth, avg_entropy, fast_avg_depth, fast_avg_entropy, avg_mpt, avg_vm
+    return SelfPlayResult(
+        win_rates=win_rates, hit_rate=hr, game_length=agl,
+        resign_win_rates=resign_win_rates, resign_rate=resign_rate,
+        avg_depth=avg_depth, avg_entropy=avg_entropy,
+        fast_avg_depth=fast_avg_depth, fast_avg_entropy=fast_avg_entropy,
+        avg_mpt=avg_mpt, avg_vm=avg_vm,
+        saturation=saturation, churn_rate=churn_rate,
+        avg_batch_size=avg_batch_size, median_batch_size=median_batch_size,
+        min_batch_size=min_batch_size, max_batch_size=max_batch_size,
+        theoretical_hr=theoretical_hr,
+    )
 
 
 @tracy_zone
@@ -1131,14 +1257,7 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
     import neural_net
 
     Game = config.Game
-    nn_rate = 0
-    draw_rate = 0
-    hr = 0
-    agl = 0
-    avg_depth = 0
-    avg_entropy = 0
-    avg_mpt = 0
-    avg_vm = 0
+    num_players = Game.NUM_PLAYERS()
     nn = neural_net.NNWrapper.load_checkpoint(
         Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
     )
@@ -1150,141 +1269,89 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
             Game, paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt"
         )
         prepare_inference_model(nn_past, config)
-    cb = Game.NUM_PLAYERS()
-    if Game.NUM_PLAYERS() > 2:
-        bs = batch_size
-        n = bs * cb
-        for i in tqdm.trange(
-            Game.NUM_PLAYERS(),
-            leave=False,
-            desc=f"Bench 1 new vs {Game.NUM_PLAYERS() - 1} old",
-        ):
-            params = base_params(config, config.eval_temp, bs, cb)
-            params.games_to_play = n
-            params.mcts_visits = [depth] * Game.NUM_PLAYERS()
-            players = [nn_past] * Game.NUM_PLAYERS()
-            players[i] = nn
-            set_eval_types(params, players)
-            pm = alphazero.PlayManager(Game(), params)
 
-            grargs = GRArgs(
-                title=f"Bench {iteration} v {past_iter} as p{i + 1}",
-                game=Game,
-                iteration=iteration,
-                max_batch_size=bs,
-                concurrent_batches=cb,
-                result_workers=config.result_workers,
-            )
-            gr = GameRunner(players, pm, grargs)
-            gr.run()
-            scores = pm.scores()
-            nn_rate += scores[i] / n
-            draw_rate += scores[-1] / n
-            hits = pm.cache_hits()
-            total = hits + pm.cache_misses()
-            if total > 0:
-                hr += hits / total
-            agl += pm.avg_game_length()
-            avg_depth += pm.avg_leaf_depth()
-            avg_entropy += pm.avg_search_entropy()
-            avg_mpt += pm.avg_moves_per_turn()
-            avg_vm += pm.avg_valid_moves()
-            del pm
-            gc.collect()
-        for i in tqdm.trange(
-            Game.NUM_PLAYERS(),
-            leave=False,
-            desc=f"Bench {Game.NUM_PLAYERS() - 1} new vs 1 old",
-        ):
-            params = base_params(config, config.eval_temp, bs, cb)
-            params.games_to_play = n
-            params.mcts_visits = [depth] * Game.NUM_PLAYERS()
-            players = [nn] * Game.NUM_PLAYERS()
-            players[i] = nn_past
-            set_eval_types(params, players)
-            pm = alphazero.PlayManager(Game(), params)
+    bs = batch_size
+    cb = num_players
 
-            grargs = GRArgs(
-                title=f"Bench {iteration} v {past_iter} as p{i + 1}",
-                game=Game,
-                iteration=iteration,
-                max_batch_size=bs,
-                concurrent_batches=cb,
-                result_workers=config.result_workers,
-            )
-            gr = GameRunner(players, pm, grargs)
-            gr.run()
-            scores = pm.scores()
-            for j in range(1, Game.NUM_PLAYERS()):
-                nn_rate += scores[(i + j) % Game.NUM_PLAYERS()] / n
-            draw_rate += scores[-1] / n
-            hits = pm.cache_hits()
-            total = hits + pm.cache_misses()
-            if total > 0:
-                hr += hits / total
-            agl += pm.avg_game_length()
-            avg_depth += pm.avg_leaf_depth()
-            avg_entropy += pm.avg_search_entropy()
-            avg_mpt += pm.avg_moves_per_turn()
-            avg_vm += pm.avg_valid_moves()
-            del pm
-            gc.collect()
-        nn_rate /= 2 * Game.NUM_PLAYERS()
-        draw_rate /= 2 * Game.NUM_PLAYERS()
-        hr /= 2 * Game.NUM_PLAYERS()
-        agl /= 2 * Game.NUM_PLAYERS()
-        avg_depth /= 2 * Game.NUM_PLAYERS()
-        avg_entropy /= 2 * Game.NUM_PLAYERS()
-        avg_mpt /= 2 * Game.NUM_PLAYERS()
-        avg_vm /= 2 * Game.NUM_PLAYERS()
+    if num_players == 2:
+        # 2 players, 2 unique models
+        # players list must be length num_players
+        players = [nn, nn_past]
+        model_groups = [0, 1]
+        seat_perms = [[0, 1], [1, 0]]
+        n_perms = 2
     else:
-        bs = batch_size
-        n = bs * cb
-        for i in tqdm.trange(
-            Game.NUM_PLAYERS(), leave=False, desc="Bench new vs old"
-        ):
-            params = base_params(config, config.eval_temp, bs, cb)
-            params.games_to_play = n
-            params.mcts_visits = [depth] * Game.NUM_PLAYERS()
-            players = [nn_past] * Game.NUM_PLAYERS()
-            players[i] = nn
-            set_eval_types(params, players)
-            pm = alphazero.PlayManager(Game(), params)
+        # >2 players: nn (group 0) and nn_past (group 1)
+        # players/model_groups must be length num_players
+        # Default mapping: seat 0 = nn, rest = nn_past
+        players = [nn_past] * num_players
+        players[0] = nn
+        model_groups = [1] * num_players
+        model_groups[0] = 0
+        # Generate all seat permutations:
+        # First N: nn in each seat, rest nn_past
+        seat_perms = []
+        for i in range(num_players):
+            perm = [1] * num_players
+            perm[i] = 0
+            seat_perms.append(perm)
+        # Next N: nn_past in each seat, rest nn
+        for i in range(num_players):
+            perm = [0] * num_players
+            perm[i] = 1
+            seat_perms.append(perm)
+        n_perms = len(seat_perms)
 
-            grargs = GRArgs(
-                title=f"Bench {iteration} v {past_iter} as p{i + 1}",
-                game=Game,
-                iteration=iteration,
-                max_batch_size=bs,
-                concurrent_batches=cb,
-                result_workers=config.result_workers,
-            )
-            gr = GameRunner(players, pm, grargs)
-            gr.run()
-            scores = pm.scores()
-            nn_rate += scores[i] / n
-            draw_rate += scores[-1] / n
-            hits = pm.cache_hits()
-            total = hits + pm.cache_misses()
-            if total > 0:
-                hr += hits / total
-            agl += pm.avg_game_length()
-            avg_depth += pm.avg_leaf_depth()
-            avg_entropy += pm.avg_search_entropy()
-            avg_mpt += pm.avg_moves_per_turn()
-            avg_vm += pm.avg_valid_moves()
-            del pm
-            gc.collect()
-        nn_rate /= Game.NUM_PLAYERS()
-        draw_rate /= Game.NUM_PLAYERS()
-        hr /= Game.NUM_PLAYERS()
-        agl /= Game.NUM_PLAYERS()
-        avg_depth /= Game.NUM_PLAYERS()
-        avg_entropy /= Game.NUM_PLAYERS()
-        avg_mpt /= Game.NUM_PLAYERS()
-        avg_vm /= Game.NUM_PLAYERS()
+    n = bs * cb * n_perms  # total games across all permutations
+    params = base_params(config, config.eval_temp, bs, cb)
+    params.games_to_play = n
+    params.mcts_visits = [depth] * num_players
+    params.model_groups = model_groups
+    params.seat_perms = seat_perms
+    set_eval_types(params, players)
 
-    del nn, nn_past
+    pm = alphazero.PlayManager(Game(), params)
+    grargs = GRArgs(
+        title=f"Bench {iteration} v {past_iter}",
+        game=Game,
+        iteration=iteration,
+        max_batch_size=bs,
+    )
+    gr = GameRunner(players, pm, grargs)
+    gr.run()
+
+    # Extract per-perm results to compute nn win rate and draw rate
+    nn_rate = 0
+    draw_rate = 0
+    hr = 0
+    agl = pm.avg_game_length()
+    avg_depth = pm.avg_leaf_depth()
+    avg_entropy = pm.avg_search_entropy()
+    avg_mpt = pm.avg_moves_per_turn()
+    avg_vm = pm.avg_valid_moves()
+
+    hits = pm.cache_hits()
+    total = hits + pm.cache_misses()
+    if total > 0:
+        hr = hits / total
+
+    for perm_idx in range(pm.num_seat_perms()):
+        perm_scores = pm.perm_scores(perm_idx)
+        perm_games = pm.perm_games_completed(perm_idx)
+        if perm_games == 0:
+            continue
+        perm = seat_perms[perm_idx]
+        # Find which seats have nn (group 0) and accumulate their wins
+        for seat in range(num_players):
+            if perm[seat] == 0:  # nn is in this seat
+                nn_rate += perm_scores[seat] / perm_games
+        draw_rate += perm_scores[num_players] / perm_games  # draw slot
+
+    nn_rate /= n_perms
+    draw_rate /= n_perms
+
+    del nn, nn_past, pm
+    gc.collect()
     return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm
 
 
@@ -1623,32 +1690,37 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             stage_start = time.time()
             with TracyZone("stage_selfplay"):
-                win_rates, hit_rate, game_length, resign_win_rates, resignation_rate, selfplay_depth, selfplay_entropy, fast_selfplay_depth, fast_selfplay_entropy, selfplay_mpt, selfplay_vm = (
-                    self_play(
-                        config, paths, experiment_name,
-                        current_best, i,
-                        config.selfplay_mcts_visits,
-                        config.fast_mcts_visits,
-                    )
+                sp = self_play(
+                    config, paths, experiment_name,
+                    current_best, i,
+                    config.selfplay_mcts_visits,
+                    config.fast_mcts_visits,
                 )
-                for j in range(len(win_rates) - 1):
-                    run.track(win_rates[j], name="win_rate", epoch=i, step=total_train_steps, context={"vs": "self", "player": j + 1, "from": "all_games"})
-                for j in range(len(resign_win_rates) - 1):
-                    run.track(resign_win_rates[j], name="win_rate", epoch=i, step=total_train_steps, context={"vs": "self", "player": j + 1, "from": "resignation"})
-                run.track(resignation_rate, name="resignation_rate", epoch=i, step=total_train_steps, context={"vs": "self"})
-                run.track(win_rates[-1], name="draw_rate", epoch=i, step=total_train_steps, context={"vs": "self", "from": "all_games"})
-                run.track(resign_win_rates[-1], name="draw_rate", epoch=i, step=total_train_steps, context={"vs": "self", "from": "resignation"})
-                run.track(float(hit_rate), name="cache_hit_rate", epoch=i, step=total_train_steps, context={"vs": "self"})
-                run.track(game_length, name="average_game_length", epoch=i, step=total_train_steps, context={"vs": "self"})
-                run.track(selfplay_depth, name="avg_leaf_depth", epoch=i, step=total_train_steps, context={"vs": "self", "search": "full"})
-                run.track(selfplay_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": "self", "search": "full"})
-                if fast_selfplay_depth > 0:
-                    run.track(fast_selfplay_depth, name="avg_leaf_depth", epoch=i, step=total_train_steps, context={"vs": "self", "search": "fast"})
-                if fast_selfplay_entropy > 0:
-                    run.track(fast_selfplay_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": "self", "search": "fast"})
-                run.track(selfplay_mpt, name="moves_per_turn", epoch=i, step=total_train_steps, context={"vs": "self"})
-                run.track(selfplay_vm, name="avg_valid_moves", epoch=i, step=total_train_steps, context={"vs": "self"})
-                postfix["win_rates"] = list(map(lambda x: f"{x:0.3f}", win_rates))
+                for j in range(len(sp.win_rates) - 1):
+                    run.track(sp.win_rates[j], name="win_rate", epoch=i, step=total_train_steps, context={"vs": "self", "player": j + 1, "from": "all_games"})
+                for j in range(len(sp.resign_win_rates) - 1):
+                    run.track(sp.resign_win_rates[j], name="win_rate", epoch=i, step=total_train_steps, context={"vs": "self", "player": j + 1, "from": "resignation"})
+                run.track(sp.resign_rate, name="resignation_rate", epoch=i, step=total_train_steps, context={"vs": "self"})
+                run.track(sp.win_rates[-1], name="draw_rate", epoch=i, step=total_train_steps, context={"vs": "self", "from": "all_games"})
+                run.track(sp.resign_win_rates[-1], name="draw_rate", epoch=i, step=total_train_steps, context={"vs": "self", "from": "resignation"})
+                run.track(float(sp.hit_rate), name="cache_rate", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "hit_rate"})
+                run.track(float(sp.theoretical_hr), name="cache_rate", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "theoretical_hit_rate"})
+                run.track(sp.game_length, name="average_game_length", epoch=i, step=total_train_steps, context={"vs": "self"})
+                run.track(sp.avg_depth, name="avg_leaf_depth", epoch=i, step=total_train_steps, context={"vs": "self", "search": "full"})
+                run.track(sp.avg_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": "self", "search": "full"})
+                if sp.fast_avg_depth > 0:
+                    run.track(sp.fast_avg_depth, name="avg_leaf_depth", epoch=i, step=total_train_steps, context={"vs": "self", "search": "fast"})
+                if sp.fast_avg_entropy > 0:
+                    run.track(sp.fast_avg_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": "self", "search": "fast"})
+                run.track(sp.avg_mpt, name="moves_per_turn", epoch=i, step=total_train_steps, context={"vs": "self"})
+                run.track(sp.avg_vm, name="avg_valid_moves", epoch=i, step=total_train_steps, context={"vs": "self"})
+                run.track(float(sp.saturation), name="cache_rate", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "saturation"})
+                run.track(float(sp.churn_rate), name="cache_rate", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "churn"})
+                run.track(float(sp.avg_batch_size), name="batch_size", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "avg"})
+                run.track(float(sp.median_batch_size), name="batch_size", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "median"})
+                run.track(float(sp.min_batch_size), name="batch_size", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "min"})
+                run.track(float(sp.max_batch_size), name="batch_size", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "max"})
+                postfix["win_rates"] = list(map(lambda x: f"{x:0.3f}", sp.win_rates))
                 pbar.set_postfix(postfix)
                 gc.collect()
             stage_times["selfplay"] = time.time() - stage_start

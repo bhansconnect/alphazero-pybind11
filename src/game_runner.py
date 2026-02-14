@@ -63,7 +63,7 @@ def prepare_inference_model(nn, config):
     """Apply inference optimizations from config."""
     if hasattr(nn, 'enable_inference_optimizations'):
         nn.enable_inference_optimizations(
-            autocast=config.autocast,
+            fp16=config.fp16_inference,
             compile=config.torch_compile,
         )
 

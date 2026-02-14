@@ -112,8 +112,8 @@ class TrainConfig:
     bootstrap_window_passes: int = 2
     bootstrap_compare_past: int = 5
 
-    # Inference optimization (autocast + compile on GPU, skipped on CPU)
-    autocast: bool = True
+    # Inference optimization (fp16 weights + compile on GPU, skipped on CPU)
+    fp16_inference: bool = True
     half_storage: bool = True
     torch_compile: bool = True
 

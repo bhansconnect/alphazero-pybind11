@@ -147,11 +147,10 @@ GRArgs = namedtuple(
         "max_batch_size",
         "iteration",
         "data_save_size",
-        "data_folder",
         "mcts_workers",
         "record_batch_metrics",
     ],
-    defaults=(0, 30_000, None, os.cpu_count() - 1, False),
+    defaults=(0, 30_000, os.cpu_count() - 1, False),
 )
 
 
@@ -215,6 +214,7 @@ class GameRunner:
         self.buffer_pool = queue.SimpleQueue()
         self.monitor_queue = queue.SimpleQueue()
         self.saved_samples = 0
+        self.history_data = []
         self._batch_lock = threading.Lock()
         self._batch_sizes = []
         self._inference_times = []
@@ -474,38 +474,18 @@ class GameRunner:
     @tracy_zone
     def hist_saver(self):
         tracy_thread("hist_saver")
-        batch = 0
-        data_folder = self.args.data_folder
-        os.makedirs(data_folder, exist_ok=True)
         while self.pm.remaining_games() > 0 or self.pm.hist_count() > 0:
             size = self.pm.build_history_batch(
                 self.hist_canonical, self.hist_v, self.hist_pi
             )
             if size == 0:
                 continue
-            torch.save(
-                self.hist_canonical[:size],
-                os.path.join(
-                    data_folder,
-                    f"{self.args.iteration:04d}-{batch:04d}-canonical-{size}.pt",
-                ),
-            )
-            torch.save(
-                self.hist_v[:size],
-                os.path.join(
-                    data_folder,
-                    f"{self.args.iteration:04d}-{batch:04d}-v-{size}.pt",
-                ),
-            )
-            torch.save(
-                self.hist_pi[:size],
-                os.path.join(
-                    data_folder,
-                    f"{self.args.iteration:04d}-{batch:04d}-pi-{size}.pt",
-                ),
-            )
+            self.history_data.append((
+                self.hist_canonical[:size].clone(),
+                self.hist_v[:size].clone(),
+                self.hist_pi[:size].clone(),
+            ))
             self.saved_samples += size
-            batch += 1
 
 
 class RandPlayer:
@@ -645,34 +625,19 @@ def maybe_save(
 
 
 @tracy_zone
-def exploit_symmetries(config, paths, iteration):
+def exploit_symmetries(config, history_data):
     Game = config.Game
     if Game.NUM_SYMMETRIES() <= 1:
-        return
+        return history_data
 
-    tmp_hist = paths["tmp_history"]
-    c_names = sorted(
-        glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-canonical-*.pt"))
-    )
-    v_names = sorted(
-        glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-v-*.pt"))
-    )
-    p_names = sorted(
-        glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-pi-*.pt"))
-    )
-
-    loaded = _parallel_load_triples(
-        list(zip(c_names, v_names, p_names)), config.resolved_loader_threads, desc="Loading Symmetry Data"
-    )
-    datasets = [TensorDataset(ct, vt, pt) for ct, vt, pt in loaded]
-    del loaded
+    datasets = [TensorDataset(c, v, p) for c, v, p in history_data]
 
     i_out = 0
-    batch_out = 0
     cs = Game.CANONICAL_SHAPE()
     c_out = torch.zeros(config.hist_size, cs[0], cs[1], cs[2])
     v_out = torch.zeros(config.hist_size, Game.NUM_PLAYERS() + 1)
     p_out = torch.zeros(config.hist_size, Game.NUM_MOVES())
+    result_data = []
 
     max_workers = min(os.cpu_count() or 4, 8)
     # Thread-local Game() instances to avoid any potential contention
@@ -717,64 +682,36 @@ def exploit_symmetries(config, paths, iteration):
                 v_out[i_out] = v_sym
                 p_out[i_out] = p_sym
                 i_out += 1
-                if maybe_save(
-                    config,
-                    c_out,
-                    v_out,
-                    p_out,
-                    i_out,
-                    batch_out,
-                    iteration,
-                    location=tmp_hist,
-                    name="syms",
-                ):
+                if i_out == config.hist_size:
+                    result_data.append((
+                        c_out[:i_out].clone(),
+                        v_out[:i_out].clone(),
+                        p_out[:i_out].clone(),
+                    ))
                     i_out = 0
-                    batch_out += 1
 
-    maybe_save(
-        config,
-        c_out,
-        v_out,
-        p_out,
-        i_out,
-        batch_out,
-        iteration,
-        location=tmp_hist,
-        name="syms",
-        force=True,
-    )
+    if i_out > 0:
+        result_data.append((
+            c_out[:i_out].clone(),
+            v_out[:i_out].clone(),
+            p_out[:i_out].clone(),
+        ))
 
     del datasets
     del c_out, v_out, p_out
 
     gc.collect()
-    for fn in c_names + v_names + p_names:
-        os.remove(fn)
+    return result_data
 
 
 @tracy_zone
-def resample_by_surprise(config, paths, experiment_name, iteration):
+def resample_by_surprise(config, paths, experiment_name, iteration, history_data):
     import neural_net
 
     Game = config.Game
-    tmp_hist = paths["tmp_history"]
     hist_location = paths["history"]
 
-    c_names = sorted(
-        glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-canonical-*.pt"))
-    )
-    v_names = sorted(
-        glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-v-*.pt"))
-    )
-    p_names = sorted(
-        glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-pi-*.pt"))
-    )
-
-    loaded = _parallel_load_triples(
-        list(zip(c_names, v_names, p_names)), config.resolved_loader_threads, desc="Loading Resample Data"
-    )
-    datasets = [TensorDataset(ct, vt, pt) for ct, vt, pt in loaded]
-    del loaded
+    datasets = [TensorDataset(c, v, p) for c, v, p in history_data]
 
     dataset = ConcatDataset(datasets)
     sample_count = len(dataset)
@@ -841,10 +778,6 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
 
     del datasets, dataset, dataloader, nn
     del c_out, v_out, p_out
-
-    gc.collect()
-    for fn in glob.glob(os.path.join(tmp_hist, "*")):
-        os.remove(fn)
 
 
 @tracy_zone
@@ -1216,12 +1149,12 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         game=Game,
         iteration=iteration,
         max_batch_size=bs,
-        data_folder=paths["tmp_history"],
         record_batch_metrics=True,
     )
 
     gr = GameRunner(players, pm, grargs)
     gr.run()
+    history_data = gr.history_data
     scores = pm.scores()
     win_rates = [0] * len(scores)
     sn = sum(scores)
@@ -1298,7 +1231,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         avg_inference_ms=avg_inference_ms, median_inference_ms=median_inference_ms,
         min_inference_ms=min_inference_ms, max_inference_ms=max_inference_ms,
         theoretical_hr=theoretical_hr,
-    )
+    ), history_data
 
 
 @tracy_zone
@@ -1739,7 +1672,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             stage_start = time.time()
             with TracyZone("stage_selfplay"):
-                sp = self_play(
+                sp, history_data = self_play(
                     config, paths, experiment_name,
                     current_best, i,
                     config.selfplay_mcts_visits,
@@ -1775,19 +1708,17 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 run.track(float(sp.max_inference_ms), name="inference_ms", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "max"})
                 postfix["win_rates"] = list(map(lambda x: f"{x:0.3f}", sp.win_rates))
                 pbar.set_postfix(postfix)
-                gc.collect()
             stage_times["selfplay"] = time.time() - stage_start
 
             stage_start = time.time()
             with TracyZone("stage_symmetries"):
-                exploit_symmetries(config, paths, i)
-                gc.collect()
+                history_data = exploit_symmetries(config, history_data)
             stage_times["symmetries"] = time.time() - stage_start
 
             stage_start = time.time()
             with TracyZone("stage_resampling"):
-                resample_by_surprise(config, paths, experiment_name, i)
-                gc.collect()
+                resample_by_surprise(config, paths, experiment_name, i, history_data)
+                del history_data
             stage_times["resampling"] = time.time() - stage_start
 
             stage_start = time.time()

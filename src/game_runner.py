@@ -717,7 +717,7 @@ def resample_by_surprise(config, paths, experiment_name, iteration, history_data
     sample_count = len(dataset)
     _dl_workers = config.resolved_loader_threads
     dataloader = DataLoader(dataset, batch_size=config.train_batch_size, shuffle=False, pin_memory=torch.cuda.is_available(),
-                            num_workers=_dl_workers, persistent_workers=_dl_workers > 0)
+                            num_workers=_dl_workers)
 
     nn = neural_net.NNWrapper.load_checkpoint(
         Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
@@ -798,7 +798,7 @@ def iteration_loss(config, paths, experiment_name, iteration):
     dataset = ConcatDataset(datasets)
     _dl_workers = config.resolved_loader_threads
     dataloader = DataLoader(dataset, batch_size=config.train_batch_size, shuffle=True, pin_memory=torch.cuda.is_available(),
-                            num_workers=_dl_workers, persistent_workers=_dl_workers > 0)
+                            num_workers=_dl_workers)
 
     nn = neural_net.NNWrapper.load_checkpoint(
         Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
@@ -892,7 +892,7 @@ def train(config, paths, experiment_name, iteration, hist_size, run, total_train
     dataset = TensorDataset(c_data, v_data, pi_data)
     _dl_workers = config.resolved_loader_threads
     dataloader = DataLoader(dataset, batch_size=bs, shuffle=True, pin_memory=torch.cuda.is_available(),
-                            num_workers=_dl_workers, persistent_workers=_dl_workers > 0)
+                            num_workers=_dl_workers)
     del c_data, v_data, pi_data
 
     nn = neural_net.NNWrapper.load_checkpoint(
@@ -1719,6 +1719,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             with TracyZone("stage_resampling"):
                 resample_by_surprise(config, paths, experiment_name, i, history_data)
                 del history_data
+                gc.collect()
             stage_times["resampling"] = time.time() - stage_start
 
             stage_start = time.time()

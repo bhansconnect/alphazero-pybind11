@@ -2,9 +2,11 @@
 """Unified interactive play agent with pluggable game UI.
 
 Usage:
-    python src/play.py configs/connect4.yaml
-    python src/play.py configs/star_gambit_skirmish.yaml --think-time 5
-    python src/play.py configs/star_gambit_skirmish.yaml --nodes 200
+    python src/play.py                                   # auto-discover games
+    python src/play.py star_gambit_skirmish               # by game name
+    python src/play.py configs/star_gambit_skirmish.yaml   # by config file
+    python src/play.py star_gambit_skirmish --think-time 5
+    python src/play.py star_gambit_skirmish --nodes 200
 """
 
 import argparse
@@ -16,11 +18,12 @@ import time
 
 import numpy as np
 import readline  # noqa: F401 - Enable line editing in input()
+import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import alphazero
-from config import load_config
+from config import GAME_REGISTRY
 from game_ui import get_game_ui
 
 try:
@@ -206,7 +209,7 @@ def get_ai_move(ctx, player_idx, valids):
 
 
 # ---------------------------------------------------------------------------
-# Network discovery and selection
+# Game and network discovery
 # ---------------------------------------------------------------------------
 
 
@@ -241,6 +244,50 @@ def discover_checkpoints(game_name, base="data"):
     return experiments
 
 
+def discover_games(base="data"):
+    """Scan data/ for games with trained checkpoints.
+
+    Returns: {game_name: {experiment_name: [(iter_num, path), ...]}}
+    Only includes games that exist in GAME_REGISTRY.
+    """
+    if not os.path.isdir(base):
+        return {}
+
+    games = {}
+    for entry in sorted(os.listdir(base)):
+        if entry not in GAME_REGISTRY:
+            continue
+        experiments = discover_checkpoints(entry, base)
+        if experiments:
+            games[entry] = experiments
+
+    return games
+
+
+def load_experiment_config(checkpoint_path):
+    """Load cpuct/fpu_reduction from experiment's config.yaml.
+
+    Extracts experiment directory from checkpoint path and reads config.yaml.
+    Returns (cpuct, fpu_reduction) or defaults if not found.
+    """
+    # checkpoint path is like: data/{game}/{exp}/checkpoint/{iter}-{name}.pt
+    checkpoint_dir = os.path.dirname(checkpoint_path)
+    experiment_dir = os.path.dirname(checkpoint_dir)
+    config_path = os.path.join(experiment_dir, "config.yaml")
+
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f) or {}
+            cpuct = cfg.get("cpuct", DEFAULT_CPUCT)
+            fpu_reduction = cfg.get("fpu_reduction", DEFAULT_FPU_REDUCTION)
+            return cpuct, fpu_reduction
+        except Exception:
+            pass
+
+    return DEFAULT_CPUCT, DEFAULT_FPU_REDUCTION
+
+
 def load_network(game_class, path, players, ctx):
     """Load a network and assign to specified players."""
     if path == "playout":
@@ -270,41 +317,113 @@ def load_network(game_class, path, players, ctx):
 
 
 def select_checkpoint(checkpoints):
-    """Select a checkpoint interactively. Returns path, None (random), or 'playout'."""
+    """Select a checkpoint interactively with rich shortcuts.
+
+    Returns path, None (random), or 'playout'.
+
+    Shortcuts:
+      Enter / l  = latest
+      -N         = back N iterations from latest
+      iN         = specific iteration number
+      r          = random policy
+      p          = playout policy
+      <number>   = index from list
+    """
     latest_iter, latest_path = checkpoints[0]
 
-    print(f"\nCheckpoints (newest first):")
-    print(f"  l. Latest -> iter {latest_iter:04d}")
-    print(f"  r. Random policy")
-    print(f"  p. Playout policy")
-    print("  " + "-" * 40)
+    print(f"\n  Checkpoints (newest first):")
+    print(f"    l. Latest -> iter {latest_iter:04d}")
+    print(f"    r. Random policy")
+    print(f"    p. Playout policy")
+    print("    " + "-" * 40)
 
     show = min(10, len(checkpoints))
     for i in range(show):
         iter_num, _ = checkpoints[i]
-        print(f"  {i}. iter {iter_num:04d}")
+        print(f"    {i}. iter {iter_num:04d}")
     if len(checkpoints) > show:
-        print(f"  ... ({len(checkpoints) - show} more)")
+        print(f"    ... ({len(checkpoints) - show} more, use -N to go back N from latest)")
+
+    print("  Shortcuts: Enter=latest, -N=back N iters, iN=specific iter")
 
     while True:
-        choice = input("\nSelect checkpoint (Enter=latest): ").strip().lower()
-        if choice in ["", "l"]:
+        choice = input("  Select checkpoint: ").strip().lower()
+
+        if choice in ["", "l", "latest"]:
             return latest_path
         if choice == "r":
             return None
         if choice == "p":
             return "playout"
+
+        # Negative number = go back N from latest
+        if choice.startswith("-"):
+            try:
+                offset = int(choice)  # negative
+                idx = -offset
+                if 0 <= idx < len(checkpoints):
+                    return checkpoints[idx][1]
+                print(f"  Only {len(checkpoints)} checkpoints available")
+            except ValueError:
+                print("  Invalid offset")
+            continue
+
+        # iN or iter:N = specific iteration
+        iter_match = re.match(r"^i(?:ter:?)?(\d+)$", choice)
+        if iter_match:
+            target_iter = int(iter_match.group(1))
+            for iter_num, path in checkpoints:
+                if iter_num == target_iter:
+                    return path
+            print(f"  Iteration {target_iter} not found")
+            continue
+
+        # Numeric index
         try:
             idx = int(choice)
             if 0 <= idx < len(checkpoints):
                 return checkpoints[idx][1]
-            print(f"Enter 0-{len(checkpoints)-1}")
+            print(f"  Enter 0-{len(checkpoints)-1}")
         except ValueError:
-            print("Invalid input")
+            print("  Invalid input")
+
+
+def _select_experiment(experiments, prompt_prefix=""):
+    """Select an experiment from a dict. Returns (name, checkpoints) or None."""
+    exp_names = list(experiments.keys())
+    if len(exp_names) == 1:
+        name = exp_names[0]
+        print(f"{prompt_prefix}Experiment: {name} ({len(experiments[name])} checkpoints)")
+        return name, experiments[name]
+
+    print(f"{prompt_prefix}Experiments:")
+    for i, name in enumerate(exp_names):
+        cpts = experiments[name]
+        print(
+            f"  {i+1}. {name} ({len(cpts)} ckpts, latest: iter {cpts[0][0]:04d})"
+        )
+
+    while True:
+        choice = input(f"{prompt_prefix}Select experiment (Enter=first, r=random, p=playout): ").strip().lower()
+        if choice == "r":
+            return None, "random"
+        if choice == "p":
+            return None, "playout"
+        if choice in ["", "1"] and len(exp_names) >= 1:
+            return exp_names[0], experiments[exp_names[0]]
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(exp_names):
+                return exp_names[idx], experiments[exp_names[idx]]
+        except ValueError:
+            pass
 
 
 def select_network_interactive(ctx, game_name, base="data"):
-    """Interactive network selection. Returns True if a network was loaded."""
+    """Interactive network selection with per-player experiment+checkpoint choice.
+
+    Returns True if any network was loaded.
+    """
     if not TORCH_AVAILABLE:
         print("torch not available - using random policy")
         return False
@@ -317,35 +436,6 @@ def select_network_interactive(ctx, game_name, base="data"):
         return False
 
     print("\n=== Network Selection ===")
-
-    # Select experiment
-    exp_names = list(experiments.keys())
-    if len(exp_names) == 1:
-        selected = exp_names[0]
-        print(f"Experiment: {selected}")
-    else:
-        print("Available experiments:")
-        for i, name in enumerate(exp_names):
-            cpts = experiments[name]
-            print(
-                f"  {i+1}. {name} ({len(cpts)} checkpoints, latest: iter {cpts[0][0]:04d})"
-            )
-        while True:
-            choice = (
-                input("\nSelect experiment (Enter=first, r=random): ").strip().lower()
-            )
-            if choice == "r":
-                return False
-            if choice in ["", "1"] and len(exp_names) >= 1:
-                selected = exp_names[0]
-                break
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(exp_names):
-                    selected = exp_names[idx]
-                    break
-            except ValueError:
-                pass
 
     # Same or different networks?
     choice = (
@@ -364,24 +454,49 @@ def select_network_interactive(ctx, game_name, base="data"):
         print("Using playout policy")
         return True
 
-    checkpoints = experiments[selected]
-
     if choice == "n":
+        # Different networks per player - each independently selects experiment AND checkpoint
         any_loaded = False
         for player in [0, 1]:
             print(f"\n--- Player {player} ---")
+            result = _select_experiment(experiments, f"  P{player} ")
+            if result[1] == "random":
+                print(f"  Player {player}: random")
+                continue
+            if result[1] == "playout":
+                load_network(ctx.game_class, "playout", [player], ctx)
+                print(f"  Player {player}: playout")
+                any_loaded = True
+                continue
+
+            exp_name, checkpoints = result
             path = select_checkpoint(checkpoints)
             if path == "playout":
                 load_network(ctx.game_class, "playout", [player], ctx)
-                print(f"Player {player}: playout")
+                print(f"  Player {player}: playout")
                 any_loaded = True
             elif path is None:
-                print(f"Player {player}: random")
+                print(f"  Player {player}: random")
             elif load_network(ctx.game_class, path, [player], ctx):
-                print(f"Player {player}: {os.path.basename(path)}")
+                # Load cpuct/fpu_reduction from experiment config
+                cpuct, fpu = load_experiment_config(path)
+                ctx.cpuct = cpuct
+                ctx.fpu_reduction = fpu
+                print(f"  Player {player}: {os.path.basename(path)}")
                 any_loaded = True
         return any_loaded
     else:
+        # Same network for both
+        result = _select_experiment(experiments)
+        if result[1] == "random":
+            print("Using random policy")
+            return False
+        if result[1] == "playout":
+            load_network(ctx.game_class, "playout", [0, 1], ctx)
+            print("Using playout policy")
+            return True
+
+        exp_name, checkpoints = result
         path = select_checkpoint(checkpoints)
         if path == "playout":
             load_network(ctx.game_class, "playout", [0, 1], ctx)
@@ -391,6 +506,10 @@ def select_network_interactive(ctx, game_name, base="data"):
             print("Using random policy")
             return False
         if load_network(ctx.game_class, path, [0, 1], ctx):
+            # Load cpuct/fpu_reduction from experiment config
+            cpuct, fpu = load_experiment_config(path)
+            ctx.cpuct = cpuct
+            ctx.fpu_reduction = fpu
             print(f"Loaded: {os.path.basename(path)}")
             return True
         return False
@@ -405,20 +524,6 @@ def print_status(ctx):
     """Print current player configuration."""
     for i in range(2):
         print(f"  Player {i}: {ctx.players[i]}")
-
-
-def format_probs_summary(probs, valids, ui, gs, top_n=5):
-    """Format top move probabilities for display."""
-    valid_indices = np.where(valids)[0]
-    if len(valid_indices) == 0:
-        return ""
-
-    sorted_idx = valid_indices[np.argsort(probs[valid_indices])[::-1]]
-    lines = []
-    for idx in sorted_idx[:top_n]:
-        desc = ui.format_move(gs, idx)
-        lines.append(f"  {idx:4d}: {desc}  [{probs[idx]*100:5.1f}%]")
-    return "\n".join(lines)
 
 
 def handle_config_command(parts, ctx, game_name, base_dir):
@@ -534,13 +639,95 @@ def print_generic_help():
 
 
 # ---------------------------------------------------------------------------
+# Game resolution
+# ---------------------------------------------------------------------------
+
+
+def resolve_game(arg, base_dir):
+    """Resolve game_or_config argument to (game_name, Game class).
+
+    arg can be:
+      - None: auto-discover from data/
+      - A .yaml/.yml path: load config file
+      - A GAME_REGISTRY key: use directly
+    """
+    # YAML config file
+    if arg and (arg.endswith(".yaml") or arg.endswith(".yml")):
+        from config import load_config
+        config = load_config(arg, {})
+        return config.game, config.Game
+
+    # Direct game name
+    if arg and arg in GAME_REGISTRY:
+        cls_name = GAME_REGISTRY[arg]
+        return arg, getattr(alphazero, cls_name)
+
+    # Auto-discover
+    games = discover_games(base_dir)
+    all_games = list(GAME_REGISTRY.keys())
+
+    if not games:
+        # No trained checkpoints - show all available games
+        print("No trained checkpoints found. Available games:")
+        for i, name in enumerate(all_games):
+            print(f"  {i+1}. {name}")
+        while True:
+            choice = input("Select game: ").strip()
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(all_games):
+                    name = all_games[idx]
+                    cls_name = GAME_REGISTRY[name]
+                    return name, getattr(alphazero, cls_name)
+            except ValueError:
+                if choice in GAME_REGISTRY:
+                    cls_name = GAME_REGISTRY[choice]
+                    return choice, getattr(alphazero, cls_name)
+            print("Invalid selection")
+    else:
+        # Show games with checkpoints first
+        game_names = list(games.keys())
+        print("Games with trained networks:")
+        for i, name in enumerate(game_names):
+            exps = games[name]
+            total_ckpts = sum(len(c) for c in exps.values())
+            print(f"  {i+1}. {name} ({len(exps)} experiment(s), {total_ckpts} checkpoints)")
+
+        # Also mention other available games
+        other_games = [g for g in all_games if g not in games]
+        if other_games:
+            print(f"\nOther games (no checkpoints): {', '.join(other_games)}")
+
+        while True:
+            choice = input("Select game (Enter=first): ").strip()
+            if choice == "":
+                name = game_names[0]
+                cls_name = GAME_REGISTRY[name]
+                return name, getattr(alphazero, cls_name)
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(game_names):
+                    name = game_names[idx]
+                    cls_name = GAME_REGISTRY[name]
+                    return name, getattr(alphazero, cls_name)
+            except ValueError:
+                if choice in GAME_REGISTRY:
+                    cls_name = GAME_REGISTRY[choice]
+                    return choice, getattr(alphazero, cls_name)
+            print("Invalid selection")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 
 def main():
     parser = argparse.ArgumentParser(description="Play against AI")
-    parser.add_argument("config", help="Path to YAML config file")
+    parser.add_argument(
+        "game_or_config", nargs="?", default=None,
+        help="Game name or YAML config path (optional, auto-discovers if omitted)"
+    )
     parser.add_argument(
         "--think-time", type=float, default=None, help="AI think time in seconds"
     )
@@ -550,24 +737,22 @@ def main():
     )
     args = parser.parse_args()
 
-    config = load_config(args.config, {})
-    ui = get_game_ui(config.game)
+    game_name, Game = resolve_game(args.game_or_config, args.base_dir)
+    ui = get_game_ui(game_name)
 
     # Offer variant selection for games that support it (e.g., Star Gambit)
     variant = ui.select_variant()
-    if variant and variant != config.game:
-        variant_yaml = os.path.join(os.path.dirname(args.config), f"{variant}.yaml")
-        if os.path.exists(variant_yaml):
-            config = load_config(variant_yaml, {})
-            ui = get_game_ui(config.game)
+    if variant and variant != game_name:
+        if variant in GAME_REGISTRY:
+            game_name = variant
+            cls_name = GAME_REGISTRY[variant]
+            Game = getattr(alphazero, cls_name)
+            ui = get_game_ui(game_name)
 
-    Game = config.Game
-    print(f"=== {config.game} Interactive Player ===\n")
+    print(f"\n=== {game_name} Interactive Player ===\n")
 
     gs = Game()
     ctx = PlayContext(gs, Game)
-    ctx.cpuct = config.cpuct
-    ctx.fpu_reduction = config.fpu_reduction
 
     # Apply CLI overrides to AI defaults
     if args.think_time is not None:
@@ -602,7 +787,7 @@ def main():
 
     # Network selection and configuration
     if ctx.players[0].is_ai or ctx.players[1].is_ai:
-        select_network_interactive(ctx, config.game, args.base_dir)
+        select_network_interactive(ctx, game_name, args.base_dir)
 
         print("\n=== AI Configuration ===")
         print("Adjust settings (or Enter to start):")
@@ -612,7 +797,7 @@ def main():
             cmd = input("\nConfig> ").strip()
             if cmd.lower() in ["", "start", "go"]:
                 break
-            result = parse_meta_command(cmd, ctx, config.game, args.base_dir)
+            result = parse_meta_command(cmd, ctx, game_name, args.base_dir)
             if result == "quit":
                 return
             if result == "help":
@@ -673,7 +858,7 @@ def main():
                     if not cmd:
                         continue
 
-                    meta = parse_meta_command(cmd, ctx, config.game, args.base_dir)
+                    meta = parse_meta_command(cmd, ctx, game_name, args.base_dir)
                     if meta == "quit":
                         return
                     if meta == "help":
@@ -730,7 +915,7 @@ def main():
                 if not cmd:
                     continue
 
-                meta = parse_meta_command(cmd, ctx, config.game, args.base_dir)
+                meta = parse_meta_command(cmd, ctx, game_name, args.base_dir)
                 if meta == "quit":
                     return
                 if meta == "help":

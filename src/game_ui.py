@@ -51,15 +51,14 @@ class GameUI:
 
 
 # Registry mapping game names to UI factory functions.
-# Lazy imports to avoid loading star_gambit_play unless needed.
+# Lazy imports to avoid loading star_gambit_ui unless needed.
 GAME_UI_REGISTRY: dict[str, callable] = {}
 
 
 def _register_star_gambit_uis():
     """Register Star Gambit UIs lazily."""
     try:
-        from star_gambit_ui import StarGambitUI
-        from star_gambit_play import SKIRMISH, CLASH, BATTLE
+        from star_gambit_ui import StarGambitUI, SKIRMISH, CLASH, BATTLE
         GAME_UI_REGISTRY["star_gambit_skirmish"] = lambda: StarGambitUI(SKIRMISH)
         GAME_UI_REGISTRY["star_gambit_clash"] = lambda: StarGambitUI(CLASH)
         GAME_UI_REGISTRY["star_gambit_battle"] = lambda: StarGambitUI(BATTLE)

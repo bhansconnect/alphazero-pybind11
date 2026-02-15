@@ -256,6 +256,13 @@ class GameRunner:
         has_nn = any(m is not None for m in self._group_models)
 
         if has_nn:
+            # Pre-warm CUDA graphs before starting threads to avoid
+            # capture race conditions (graph capture is device-wide).
+            for g in self._nn_groups:
+                model = self._group_models[g]
+                if model is not None:
+                    model.warmup_graphs(self.args.max_batch_size)
+
             batcher_threads = []
             for g in self._nn_groups:
                 t = threading.Thread(target=self.batcher, args=(g,))
@@ -373,7 +380,7 @@ class GameRunner:
             try:
                 self.monitor_queue.get(timeout=1)
             except queue.Empty:
-                continue
+                pass
             if time.time() - last_update > 1:
                 postfix, completed = _build_postfix()
                 pbar.set_postfix(postfix)

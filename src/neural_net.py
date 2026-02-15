@@ -275,8 +275,6 @@ class _CUDAGraphInference:
         self.device = device
         self.dtype = dtype
         self._cache = {}  # bucket_size -> (graph, static_input, static_v, static_pi)
-        self._stream = torch.cuda.Stream(device=device)
-        self._event = torch.cuda.Event()
 
     def __call__(self, batch):
         bs = batch.shape[0]
@@ -286,14 +284,8 @@ class _CUDAGraphInference:
         if bucket not in self._cache:
             self._record(bucket)
         graph, static_input, static_v, static_pi = self._cache[bucket]
-        # Wait for previous clones (default stream) before overwriting static buffers
-        self._stream.wait_stream(torch.cuda.current_stream(self.device))
-        with torch.cuda.stream(self._stream):
-            static_input[:bs].copy_(batch)
-            graph.replay()
-        self._event.record(self._stream)
-        # Wait for replay to finish before cloning results on default stream
-        torch.cuda.current_stream(self.device).wait_event(self._event)
+        static_input[:bs].copy_(batch)
+        graph.replay()
         return static_v[:bs].clone(), static_pi[:bs].clone()
 
     def _forward(self, x):
@@ -301,20 +293,28 @@ class _CUDAGraphInference:
         return torch.exp(v).float(), torch.exp(pi).float()
 
     def _record(self, bucket_size):
-        with torch.cuda.stream(self._stream):
-            static_input = torch.zeros(
-                bucket_size, *self.input_shape, device=self.device, dtype=self.dtype
-            )
-            # Warmup (required before CUDA graph capture)
-            with torch.no_grad():
-                for _ in range(3):
-                    self._forward(static_input)
-            # Record
-            g = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(g), torch.no_grad():
-                static_v, static_pi = self._forward(static_input)
-        self._stream.synchronize()
+        static_input = torch.zeros(
+            bucket_size, *self.input_shape, device=self.device, dtype=self.dtype
+        )
+        with torch.no_grad():
+            for _ in range(3):
+                self._forward(static_input)
+        g = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(g), torch.no_grad():
+            static_v, static_pi = self._forward(static_input)
+        torch.cuda.synchronize()
         self._cache[bucket_size] = (g, static_input, static_v, static_pi)
+
+    def warmup(self, max_batch_size):
+        """Pre-record graphs for all power-of-2 buckets."""
+        max_bucket = 1
+        while max_bucket < max_batch_size:
+            max_bucket *= 2
+        bucket = 1
+        while bucket <= max_bucket:
+            if bucket not in self._cache:
+                self._record(bucket)
+            bucket *= 2
 
 
 class NNWrapper:
@@ -401,6 +401,11 @@ class NNWrapper:
                 "JIT trace + CUDA graphs failed, falling back to eager: %s", e
             )
             self._graph_inference = None
+
+    def warmup_graphs(self, max_batch_size):
+        """Pre-record CUDA graphs for all bucket sizes up to max_batch_size."""
+        if self._graph_inference is not None:
+            self._graph_inference.warmup(max_batch_size)
 
     def set_lr(self, lr):
         """Set learning rate on all optimizer parameter groups."""

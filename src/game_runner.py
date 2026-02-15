@@ -175,6 +175,10 @@ SelfPlayResult = namedtuple(
         "median_batch_size",
         "min_batch_size",
         "max_batch_size",
+        "avg_inference_ms",
+        "median_inference_ms",
+        "min_inference_ms",
+        "max_inference_ms",
         "theoretical_hr",
     ],
 )
@@ -1238,6 +1242,18 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         median_batch_size = (sizes_sorted[n_bs // 2] + sizes_sorted[(n_bs - 1) // 2]) / 2
     else:
         avg_batch_size = min_batch_size = max_batch_size = median_batch_size = 0
+    # Inference time metrics
+    with gr._batch_lock:
+        inf_times = gr._inference_times
+    if inf_times:
+        inf_sorted = sorted(inf_times)
+        avg_inference_ms = (sum(inf_sorted) / len(inf_sorted)) * 1000
+        min_inference_ms = inf_sorted[0] * 1000
+        max_inference_ms = inf_sorted[-1] * 1000
+        n_it = len(inf_sorted)
+        median_inference_ms = ((inf_sorted[n_it // 2] + inf_sorted[(n_it - 1) // 2]) / 2) * 1000
+    else:
+        avg_inference_ms = min_inference_ms = max_inference_ms = median_inference_ms = 0
     del pm, nn
     return SelfPlayResult(
         win_rates=win_rates, hit_rate=hr, game_length=agl,
@@ -1248,6 +1264,8 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         saturation=saturation, churn_rate=churn_rate,
         avg_batch_size=avg_batch_size, median_batch_size=median_batch_size,
         min_batch_size=min_batch_size, max_batch_size=max_batch_size,
+        avg_inference_ms=avg_inference_ms, median_inference_ms=median_inference_ms,
+        min_inference_ms=min_inference_ms, max_inference_ms=max_inference_ms,
         theoretical_hr=theoretical_hr,
     )
 
@@ -1720,6 +1738,10 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 run.track(float(sp.median_batch_size), name="batch_size", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "median"})
                 run.track(float(sp.min_batch_size), name="batch_size", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "min"})
                 run.track(float(sp.max_batch_size), name="batch_size", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "max"})
+                run.track(float(sp.avg_inference_ms), name="inference_ms", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "avg"})
+                run.track(float(sp.median_inference_ms), name="inference_ms", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "median"})
+                run.track(float(sp.min_inference_ms), name="inference_ms", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "min"})
+                run.track(float(sp.max_inference_ms), name="inference_ms", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "max"})
                 postfix["win_rates"] = list(map(lambda x: f"{x:0.3f}", sp.win_rates))
                 pbar.set_postfix(postfix)
                 gc.collect()

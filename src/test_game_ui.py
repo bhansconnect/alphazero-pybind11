@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import alphazero
 from game_ui import GameUI, get_game_ui
 from star_gambit_ui import StarGambitUI
-from star_gambit_play import GameConfig, SKIRMISH
+from star_gambit_ui import GameConfig, SKIRMISH
 
 
 # --- Generic GameUI ---

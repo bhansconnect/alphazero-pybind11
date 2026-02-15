@@ -2,7 +2,6 @@ from collections import namedtuple
 import io
 import logging
 import os
-import threading
 import torch
 from torch import optim, nn
 from tqdm import tqdm
@@ -269,7 +268,6 @@ class NNArch(nn.Module):
 
 class _CUDAGraphInference:
     """Cache CUDA graphs per batch-size bucket for fast inference."""
-    _lock = threading.Lock()
 
     def __init__(self, model, input_shape, device, dtype):
         self.model = model
@@ -277,36 +275,45 @@ class _CUDAGraphInference:
         self.device = device
         self.dtype = dtype
         self._cache = {}  # bucket_size -> (graph, static_input, static_v, static_pi)
+        self._stream = torch.cuda.Stream(device=device)
+        self._event = torch.cuda.Event()
 
     def __call__(self, batch):
         bs = batch.shape[0]
         bucket = 1
         while bucket < bs:
             bucket *= 2
-        with _CUDAGraphInference._lock:
-            if bucket not in self._cache:
-                self._record(bucket)
-            graph, static_input, static_v, static_pi = self._cache[bucket]
+        if bucket not in self._cache:
+            self._record(bucket)
+        graph, static_input, static_v, static_pi = self._cache[bucket]
+        # Wait for previous clones (default stream) before overwriting static buffers
+        self._stream.wait_stream(torch.cuda.current_stream(self.device))
+        with torch.cuda.stream(self._stream):
             static_input[:bs].copy_(batch)
             graph.replay()
-            return static_v[:bs].clone(), static_pi[:bs].clone()
+        self._event.record(self._stream)
+        # Wait for replay to finish before cloning results on default stream
+        torch.cuda.current_stream(self.device).wait_event(self._event)
+        return static_v[:bs].clone(), static_pi[:bs].clone()
 
     def _forward(self, x):
         v, pi = self.model(x)
         return torch.exp(v).float(), torch.exp(pi).float()
 
     def _record(self, bucket_size):
-        static_input = torch.zeros(
-            bucket_size, *self.input_shape, device=self.device, dtype=self.dtype
-        )
-        # Warmup (required before CUDA graph capture)
-        with torch.no_grad():
-            for _ in range(3):
-                self._forward(static_input)
-        # Record
-        g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g), torch.no_grad():
-            static_v, static_pi = self._forward(static_input)
+        with torch.cuda.stream(self._stream):
+            static_input = torch.zeros(
+                bucket_size, *self.input_shape, device=self.device, dtype=self.dtype
+            )
+            # Warmup (required before CUDA graph capture)
+            with torch.no_grad():
+                for _ in range(3):
+                    self._forward(static_input)
+            # Record
+            g = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(g), torch.no_grad():
+                static_v, static_pi = self._forward(static_input)
+        self._stream.synchronize()
         self._cache[bucket_size] = (g, static_input, static_v, static_pi)
 
 
@@ -536,12 +543,13 @@ class NNWrapper:
 
     @tracy_zone
     def process(self, batch):
-        batch = batch.contiguous().to(self.device, dtype=self._inference_dtype, non_blocking=True)
         if self._graph_inference is not None:
-            res = self._graph_inference(batch)
+            # copy_() into static_input handles dtype conversion implicitly
+            res = self._graph_inference(batch.contiguous())
             if alphazero.tracy_is_enabled() and self.device.type == 'cuda':
                 torch.cuda.synchronize()
             return res
+        batch = batch.contiguous().to(self.device, dtype=self._inference_dtype, non_blocking=True)
         self.nnet.eval()
         with torch.no_grad():
             v, pi = self.nnet(batch)

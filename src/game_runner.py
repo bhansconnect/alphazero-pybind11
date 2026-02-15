@@ -324,6 +324,14 @@ class GameRunner:
                     n_bs = len(sizes)
                     postfix["bs"] = f"{sizes[0]}/{sizes[n_bs//2]}/{sizes[-1]}"
                 if inf_times:
+                    resolved = []
+                    for t in inf_times:
+                        if isinstance(t, tuple):
+                            t[1].synchronize()
+                            resolved.append(t[0].elapsed_time(t[1]) / 1000.0)
+                        else:
+                            resolved.append(t)
+                    inf_times = resolved
                     inf_times.sort()
                     n_it = len(inf_times)
                     postfix["nn_ms"] = (
@@ -423,13 +431,22 @@ class GameRunner:
                 self.pm.set_eager(False)
 
             model = self._group_models[group]
-            t0 = time.perf_counter()
+            if self.args.record_batch_metrics and self.device.type == 'cuda':
+                start_ev = torch.cuda.Event(enable_timing=True)
+                end_ev = torch.cuda.Event(enable_timing=True)
+                start_ev.record()
+            elif self.args.record_batch_metrics:
+                t0 = time.perf_counter()
             v, pi = model.process(gpu_tensor)
-            dt = time.perf_counter() - t0
-            self.gpu_result_queue.put((batch_tensor, game_indices, v, pi, group))
             if self.args.record_batch_metrics:
-                with self._batch_lock:
-                    self._inference_times.append(dt)
+                if self.device.type == 'cuda':
+                    end_ev.record()
+                    with self._batch_lock:
+                        self._inference_times.append((start_ev, end_ev))
+                else:
+                    with self._batch_lock:
+                        self._inference_times.append(time.perf_counter() - t0)
+            self.gpu_result_queue.put((batch_tensor, game_indices, v, pi, group))
 
     @tracy_zone
     def result_worker(self):
@@ -1246,7 +1263,14 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     with gr._batch_lock:
         inf_times = gr._inference_times
     if inf_times:
-        inf_sorted = sorted(inf_times)
+        resolved = []
+        for t in inf_times:
+            if isinstance(t, tuple):
+                t[1].synchronize()
+                resolved.append(t[0].elapsed_time(t[1]) / 1000.0)
+            else:
+                resolved.append(t)
+        inf_sorted = sorted(resolved)
         avg_inference_ms = (sum(inf_sorted) / len(inf_sorted)) * 1000
         min_inference_ms = inf_sorted[0] * 1000
         max_inference_ms = inf_sorted[-1] * 1000

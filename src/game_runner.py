@@ -34,7 +34,7 @@ def save_compressed(tensor, path, half_storage=True, zstd_level=1):
 
 
 def load_compressed(path):
-    """Load a .ptz file, returning tensor in storage dtype (typically bfloat16)."""
+    """Load a .ptz file, returning tensor in storage dtype (typically float16)."""
     with open(path, 'rb') as f:
         data = zstd.ZstdDecompressor().decompress(f.read())
     return torch.load(io.BytesIO(data), map_location="cpu", weights_only=True)
@@ -64,7 +64,7 @@ def prepare_inference_model(nn, config):
     """Apply inference optimizations from config."""
     if hasattr(nn, 'enable_inference_optimizations'):
         nn.enable_inference_optimizations(
-            fp16=config.fp16_inference,
+            amp=config.amp_inference,
             compile=config.torch_compile,
         )
 
@@ -906,7 +906,7 @@ def train(config, paths, experiment_name, iteration, hist_size, run, total_train
     )
     total_train_steps += steps_to_train
     nn.save_checkpoint(paths["checkpoint"], f"{iteration + 1:04d}-{experiment_name}.pt",
-                       half_storage=config.half_storage, zstd_level=config.zstd_level)
+                       zstd_level=config.zstd_level)
     del dataset, dataloader, nn
     return v_loss, pi_loss, total_train_steps
 
@@ -1415,7 +1415,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         )
         nn = neural_net.NNWrapper(Game, nnargs)
         nn.save_checkpoint(paths["checkpoint"], f"0000-{experiment_name}.pt",
-                           half_storage=config.half_storage, zstd_level=config.zstd_level)
+                           zstd_level=config.zstd_level)
 
     try:
         import aim
@@ -1562,7 +1562,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         total_train_steps += steps_p2
 
                 nn.save_checkpoint(paths["checkpoint"], f"{source_n:04d}-{experiment_name}.pt",
-                                   half_storage=config.half_storage, zstd_level=config.zstd_level)
+                                   zstd_level=config.zstd_level)
 
             current_best = source_n
             start = source_n

@@ -328,44 +328,15 @@ class NNWrapper:
         self.device = get_device()
         self.cv = args.cv
         self.nnet.to(self.device)
-        self._inference_dtype = torch.float32
-        self._nan_check_remaining = 0
+        self._amp_enabled = False
         self._graph_inference = None
 
-    def to_inference_mode(self):
-        """Convert model to fp16 for inference. GPU only."""
-        self.nnet.eval()
-        # Check for values that would overflow fp16
-        fp16_max = torch.finfo(torch.float16).max
-        for name, param in list(self.nnet.named_parameters()) + list(self.nnet.named_buffers()):
-            if not param.is_floating_point():
-                continue
-            if param.numel() == 0:
-                continue
-            abs_max = param.data.abs().max().item()
-            if abs_max > fp16_max:
-                logging.warning(
-                    "Clamping %s (max %.1f) to fp16 range [-%g, %g]",
-                    name, abs_max, fp16_max, fp16_max,
-                )
-                param.data.clamp_(-fp16_max, fp16_max)
-        self.nnet.half()
-        self._inference_dtype = torch.float16
-        self._graph_inference = None
-        self._nan_check_remaining = 10
-
-    def to_training_mode(self):
-        """Convert model back to fp32 for training."""
-        self.nnet.float()
-        self.nnet.train()
-        self._inference_dtype = torch.float32
-        self._graph_inference = None
-
-    def enable_inference_optimizations(self, fp16=True, compile=True):
+    def enable_inference_optimizations(self, amp=True, compile=True):
         """Optimize model for inference on GPU. No-op on CPU."""
         is_gpu = self.device.type in ('cuda', 'mps')
-        if fp16 and is_gpu:
-            self.to_inference_mode()
+        if amp and is_gpu:
+            self._amp_enabled = True
+            self.nnet.eval()
         if compile and is_gpu:
             try:
                 if self.device.type == 'cuda':
@@ -386,7 +357,7 @@ class NNWrapper:
         """JIT trace + CUDA graph caching for older GPUs (CC < 7.0)."""
         try:
             in_shape = self.game.CANONICAL_SHAPE()
-            dummy = torch.randn(1, *in_shape, device=self.device, dtype=self._inference_dtype)
+            dummy = torch.randn(1, *in_shape, device=self.device, dtype=torch.float32)
             self.nnet.eval()
             with torch.no_grad():
                 traced = torch.jit.trace(self.nnet, dummy)
@@ -394,7 +365,7 @@ class NNWrapper:
                 traced(dummy)  # trigger optimizations
             self.nnet = traced
             self._graph_inference = _CUDAGraphInference(
-                self.nnet, in_shape, self.device, self._inference_dtype
+                self.nnet, in_shape, self.device, torch.float32
             )
         except Exception as e:
             logging.getLogger(__name__).warning(
@@ -420,9 +391,9 @@ class NNWrapper:
         with torch.no_grad():
             for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
                 canonical, target_vs, target_pis = batch
-                canonical = canonical.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
-                target_vs = target_vs.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
-                target_pis = target_pis.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
+                canonical = canonical.float().contiguous().to(self.device, non_blocking=True)
+                target_vs = target_vs.float().contiguous().to(self.device, non_blocking=True)
+                target_pis = target_pis.float().contiguous().to(self.device, non_blocking=True)
 
                 out_v, out_pi = self.nnet(canonical)
                 losses_v.append(self.loss_v(target_vs, out_v))
@@ -439,9 +410,9 @@ class NNWrapper:
         with torch.no_grad():
             for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
                 canonical, target_vs, target_pis = batch
-                canonical = canonical.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
-                target_vs = target_vs.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
-                target_pis = target_pis.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
+                canonical = canonical.float().contiguous().to(self.device, non_blocking=True)
+                target_vs = target_vs.float().contiguous().to(self.device, non_blocking=True)
+                target_pis = target_pis.float().contiguous().to(self.device, non_blocking=True)
 
                 out_v, out_pi = self.nnet(canonical)
                 l_v = self.sample_loss_v(target_vs, out_v)
@@ -451,8 +422,6 @@ class NNWrapper:
 
     @tracy_zone
     def train(self, batches, steps_to_train, run, epoch, total_train_steps, ema_averaging=True):
-        if self._inference_dtype != torch.float32:
-            self.to_training_mode()
         self.nnet.train()
 
         v_loss = 0
@@ -475,9 +444,9 @@ class NNWrapper:
                 if current_step == steps_to_train:
                     break
                 canonical, target_vs, target_pis = batch
-                canonical = canonical.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
-                target_vs = target_vs.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
-                target_pis = target_pis.contiguous().to(self.device, dtype=torch.float32, non_blocking=True)
+                canonical = canonical.float().contiguous().to(self.device, non_blocking=True)
+                target_vs = target_vs.float().contiguous().to(self.device, non_blocking=True)
+                target_pis = target_pis.float().contiguous().to(self.device, non_blocking=True)
 
                 # reset grad
                 self.optimizer.zero_grad()
@@ -554,15 +523,15 @@ class NNWrapper:
             if alphazero.tracy_is_enabled() and self.device.type == 'cuda':
                 torch.cuda.synchronize()
             return res
-        batch = batch.contiguous().to(self.device, dtype=self._inference_dtype, non_blocking=True)
+        batch = batch.contiguous().to(self.device, non_blocking=True)
         self.nnet.eval()
         with torch.no_grad():
-            v, pi = self.nnet(batch)
+            if self._amp_enabled:
+                with torch.amp.autocast(self.device.type, dtype=torch.float16):
+                    v, pi = self.nnet(batch)
+            else:
+                v, pi = self.nnet(batch)
             res = (torch.exp(v).float(), torch.exp(pi).float())
-        if self._nan_check_remaining > 0:
-            self._nan_check_remaining -= 1
-            if torch.isnan(res[0]).any() or torch.isnan(res[1]).any():
-                logging.error("NaN detected in inference output — model weights may be corrupted")
         # GPU sync for accurate Tracy timing when profiling is enabled
         if alphazero.tracy_is_enabled():
             if self.device.type == 'cuda':
@@ -587,7 +556,7 @@ class NNWrapper:
     @tracy_zone
     def save_checkpoint(
         self, folder=os.path.join("data", "checkpoint"), filename="checkpoint.pt",
-        half_storage=True, zstd_level=1,
+        zstd_level=1,
     ):
         filepath = os.path.join(folder, filename)
         os.makedirs(folder, exist_ok=True)
@@ -595,23 +564,14 @@ class NNWrapper:
         # Convert NNArgs namedtuple to dict for safe serialization
         args_dict = self.args._asdict()
 
-        # Convert model weights to half-precision for smaller checkpoints
-        if half_storage:
-            dtype = get_storage_dtype()
-            state_dict_save = {
-                k: to_half_safe(v, dtype) for k, v in self.nnet.state_dict().items()
-            }
-        else:
-            state_dict_save = self.nnet.state_dict()
-
         buffer = io.BytesIO()
         torch.save(
             {
-                "state_dict": state_dict_save,
+                "state_dict": self.nnet.state_dict(),
                 "opt_state": self.optimizer.state_dict(),
                 "args": args_dict,  # Save as dict, not namedtuple
                 "game": self.game,
-                "version": "4.0",  # zstd-compressed, half-precision weights, no scheduler
+                "version": "5.0",  # zstd-compressed, float32 weights, no scheduler
             },
             buffer,
         )
@@ -653,12 +613,7 @@ class NNWrapper:
         args = NNArgs(**args_dict)
 
         net = NNWrapper(checkpoint["game"], args)
-        # Convert half-precision weights back to float32 for training
-        state_dict = {
-            k: v.float() if v.is_floating_point() else v
-            for k, v in checkpoint["state_dict"].items()
-        }
-        net.nnet.load_state_dict(state_dict)
+        net.nnet.load_state_dict(checkpoint["state_dict"])
         net.optimizer.load_state_dict(checkpoint["opt_state"])
         return net
 

@@ -330,6 +330,10 @@ class NNWrapper:
         self.nnet.to(self.device)
         self._amp_enabled = False
         self._graph_inference = None
+        # non_blocking transfers are only safe on CUDA with pinned memory;
+        # on MPS, intermediate tensors from .float().contiguous() can be GC'd
+        # before the async transfer completes, causing data corruption.
+        self._non_blocking = self.device.type == 'cuda'
 
     def enable_inference_optimizations(self, amp=True, compile=True):
         """Optimize model for inference on GPU. No-op on CPU."""
@@ -391,9 +395,9 @@ class NNWrapper:
         with torch.no_grad():
             for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
                 canonical, target_vs, target_pis = batch
-                canonical = canonical.float().contiguous().to(self.device, non_blocking=True)
-                target_vs = target_vs.float().contiguous().to(self.device, non_blocking=True)
-                target_pis = target_pis.float().contiguous().to(self.device, non_blocking=True)
+                canonical = canonical.float().contiguous().to(self.device, non_blocking=self._non_blocking)
+                target_vs = target_vs.float().contiguous().to(self.device, non_blocking=self._non_blocking)
+                target_pis = target_pis.float().contiguous().to(self.device, non_blocking=self._non_blocking)
 
                 out_v, out_pi = self.nnet(canonical)
                 losses_v.append(self.loss_v(target_vs, out_v))
@@ -410,9 +414,9 @@ class NNWrapper:
         with torch.no_grad():
             for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
                 canonical, target_vs, target_pis = batch
-                canonical = canonical.float().contiguous().to(self.device, non_blocking=True)
-                target_vs = target_vs.float().contiguous().to(self.device, non_blocking=True)
-                target_pis = target_pis.float().contiguous().to(self.device, non_blocking=True)
+                canonical = canonical.float().contiguous().to(self.device, non_blocking=self._non_blocking)
+                target_vs = target_vs.float().contiguous().to(self.device, non_blocking=self._non_blocking)
+                target_pis = target_pis.float().contiguous().to(self.device, non_blocking=self._non_blocking)
 
                 out_v, out_pi = self.nnet(canonical)
                 l_v = self.sample_loss_v(target_vs, out_v)
@@ -444,9 +448,9 @@ class NNWrapper:
                 if current_step == steps_to_train:
                     break
                 canonical, target_vs, target_pis = batch
-                canonical = canonical.float().contiguous().to(self.device, non_blocking=True)
-                target_vs = target_vs.float().contiguous().to(self.device, non_blocking=True)
-                target_pis = target_pis.float().contiguous().to(self.device, non_blocking=True)
+                canonical = canonical.float().contiguous().to(self.device, non_blocking=self._non_blocking)
+                target_vs = target_vs.float().contiguous().to(self.device, non_blocking=self._non_blocking)
+                target_pis = target_pis.float().contiguous().to(self.device, non_blocking=self._non_blocking)
 
                 # reset grad
                 self.optimizer.zero_grad()
@@ -523,7 +527,7 @@ class NNWrapper:
             if alphazero.tracy_is_enabled() and self.device.type == 'cuda':
                 torch.cuda.synchronize()
             return res
-        batch = batch.contiguous().to(self.device, non_blocking=True)
+        batch = batch.contiguous().to(self.device, non_blocking=self._non_blocking)
         self.nnet.eval()
         with torch.no_grad():
             if self._amp_enabled:

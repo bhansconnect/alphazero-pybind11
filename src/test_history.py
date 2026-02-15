@@ -42,7 +42,7 @@ def test_roundtrip_float32(tmp_path):
     save_compressed(original, path)
     loaded = load_compressed(path)
     assert loaded.shape == original.shape
-    assert loaded.dtype == get_storage_dtype()  # bfloat16 or float16
+    assert loaded.dtype == get_storage_dtype()  # float16
     assert torch.allclose(original, loaded.float(), atol=0.01, rtol=0.01)
 
 

@@ -112,9 +112,9 @@ class TrainConfig:
     bootstrap_window_passes: int = 2
     bootstrap_compare_past: int = 5
 
-    # Inference optimization (fp16 weights + compile on GPU, skipped on CPU)
-    fp16_inference: bool = True
-    half_storage: bool = True
+    # Inference optimization (AMP autocast + compile on GPU, skipped on CPU)
+    amp_inference: bool = True
+    half_storage: bool = True  # only affects history files
     torch_compile: bool = True
 
     # EMA weight averaging

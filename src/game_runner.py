@@ -1695,7 +1695,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
     postfix = {"best": current_best}
     panel = [current_best]
 
-    with tqdm.trange(start, config.iterations, desc="Build Amazing Network") as pbar:
+    with tqdm.tqdm(range(start, config.iterations), initial=start, total=config.iterations, desc="Build Amazing Network") as pbar:
         for i in pbar:
             stage_times = {}
             iteration_start = time.time()

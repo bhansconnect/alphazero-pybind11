@@ -531,6 +531,47 @@ TEST(S3FIFOCache, AllMisses) {
   EXPECT_EQ(cache.misses(), 100);
 }
 
+TEST(S3FIFOCache, TwoBitFreqCounter) {
+  // A highly-accessed Main item survives more eviction sweeps than a
+  // singly-accessed one, confirming the 2-bit saturating counter.
+  constexpr uint32_t cap = 4;
+  S3FIFOCache cache(cap, cap, 2, 1);
+  auto pol = make_policy(2, 0);
+  auto val = make_value(1, 0);
+  std::vector<float> po(2), vo(1);
+
+  // Phase 1: Place items 10 and 11 into Main via ghost queue.
+  // Fill, then evict to ghost, then re-insert (ghost hit → Main).
+  for (uint32_t i = 10; i < 10 + cap; ++i)
+    cache.insert(i, pol.data(), val.data());
+  for (uint32_t i = 20; i < 20 + cap; ++i)
+    cache.insert(i, pol.data(), val.data());  // evicts 10..13 to ghost
+  cache.insert(10, pol.data(), val.data());   // ghost hit → Main
+  cache.insert(11, pol.data(), val.data());   // ghost hit → Main
+  // State: Small=[22,23], Main=[10,11]
+
+  // Phase 2: Build up different frequencies while items are in Main.
+  for (int i = 0; i < 10; ++i)
+    cache.find(10, po.data(), vo.data());  // freq saturates to 3
+  cache.find(11, po.data(), vo.data());    // freq = 1
+
+  // Access Small items so they can promote to Main (emptying Small).
+  cache.find(22, po.data(), vo.data());
+  cache.find(23, po.data(), vo.data());
+
+  // Phase 3: Each insert promotes from Small→Main, then triggers a Main
+  // eviction sweep. Item 10 (freq=3) survives 3 sweeps via decrement;
+  // item 11 (freq=1) survives only 1.
+  cache.insert(30, pol.data(), val.data());
+  cache.find(30, po.data(), vo.data());  // access so it promotes next time
+  cache.insert(31, pol.data(), val.data());
+  cache.find(31, po.data(), vo.data());
+  cache.insert(32, pol.data(), val.data());
+
+  EXPECT_TRUE(cache.find(10, po.data(), vo.data()));   // survived (high freq)
+  EXPECT_FALSE(cache.find(11, po.data(), vo.data()));  // evicted (low freq)
+}
+
 TEST(S3FIFOCache, EvictionFromEmptySmall) {
   // All items in Main, new insert must evict from Main directly.
   constexpr uint32_t cap = 3;

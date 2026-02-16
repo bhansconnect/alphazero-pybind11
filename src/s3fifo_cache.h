@@ -43,7 +43,7 @@ class S3FIFOCache {
     }
     hits_.fetch_add(1, std::memory_order_relaxed);
     uint32_t slot = it->second;
-    freq_[slot] = 1;
+    if (freq_[slot] < 3) ++freq_[slot];
     std::memcpy(policy_out, &policy_data_[static_cast<size_t>(slot) * num_policy_],
                 num_policy_ * sizeof(float));
     std::memcpy(value_out, &value_data_[static_cast<size_t>(slot) * num_value_],
@@ -131,7 +131,7 @@ class S3FIFOCache {
     while (true) {
       uint32_t slot = m_dequeue();
       if (freq_[slot]) {
-        freq_[slot] = 0;
+        --freq_[slot];
         m_enqueue(slot);  // Second chance.
         continue;
       }

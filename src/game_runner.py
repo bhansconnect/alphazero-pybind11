@@ -95,6 +95,12 @@ def _load_triple(args):
     return (_load_hist_tensor(c_path), _load_hist_tensor(v_path), _load_hist_tensor(pi_path))
 
 
+def _load_triple_float(triple):
+    """Load a file triple and convert to float32. Used for prefetching in symmetry expansion."""
+    c_path, v_path, pi_path = triple[:3]
+    return (load_compressed(c_path).float(), load_compressed(v_path).float(), load_compressed(pi_path).float())
+
+
 def _parallel_load_triples(triples, num_workers, desc="Loading Data"):
     """Load file triples in parallel, preserving input order.
 
@@ -149,8 +155,9 @@ GRArgs = namedtuple(
         "data_save_size",
         "mcts_workers",
         "record_batch_metrics",
+        "data_folder",
     ],
-    defaults=(0, 30_000, os.cpu_count() - 1, False),
+    defaults=(0, 30_000, os.cpu_count() - 1, False, None),
 )
 
 
@@ -214,7 +221,6 @@ class GameRunner:
         self.buffer_pool = queue.SimpleQueue()
         self.monitor_queue = queue.SimpleQueue()
         self.saved_samples = 0
-        self.history_data = []
         self._batch_lock = threading.Lock()
         self._batch_sizes = []
         self._inference_times = []
@@ -474,18 +480,23 @@ class GameRunner:
     @tracy_zone
     def hist_saver(self):
         tracy_thread("hist_saver")
+        batch = 0
+        data_folder = self.args.data_folder
+        if data_folder is None:
+            raise ValueError("GRArgs.data_folder must be set when history saving is needed")
+        os.makedirs(data_folder, exist_ok=True)
         while self.pm.remaining_games() > 0 or self.pm.hist_count() > 0:
             size = self.pm.build_history_batch(
                 self.hist_canonical, self.hist_v, self.hist_pi
             )
             if size == 0:
                 continue
-            self.history_data.append((
-                self.hist_canonical[:size].clone(),
-                self.hist_v[:size].clone(),
-                self.hist_pi[:size].clone(),
-            ))
+            prefix = os.path.join(data_folder, f"{self.args.iteration:04d}-{batch:04d}")
+            save_compressed(self.hist_canonical[:size], f"{prefix}-canonical-{size}.ptz")
+            save_compressed(self.hist_v[:size], f"{prefix}-v-{size}.ptz")
+            save_compressed(self.hist_pi[:size], f"{prefix}-pi-{size}.ptz")
             self.saved_samples += size
+            batch += 1
 
 
 class RandPlayer:
@@ -625,22 +636,33 @@ def maybe_save(
 
 
 @tracy_zone
-def exploit_symmetries(config, history_data):
+def exploit_symmetries(config, paths, iteration):
     Game = config.Game
     if Game.NUM_SYMMETRIES() <= 1:
-        return history_data
+        return
 
-    datasets = [TensorDataset(c, v, p) for c, v, p in history_data]
+    tmp_hist = paths["tmp_history"]
+    # Find raw files (exclude any already-symmetrized files)
+    all_triples = glob_file_triples(tmp_hist, f"{iteration:04d}-*-canonical-*.ptz")
+    raw_triples = [t for t in all_triples if "-syms-" not in t[0]]
+    if not raw_triples:
+        return
+
+    # Delete stale syms files from a previous interrupted run
+    stale_syms = glob_file_triples(tmp_hist, f"{iteration:04d}-*-syms-canonical-*.ptz")
+    for c_path, v_path, pi_path, _ in stale_syms:
+        for fp in (c_path, v_path, pi_path):
+            if os.path.exists(fp):
+                os.remove(fp)
 
     i_out = 0
+    batch_out = 0
     cs = Game.CANONICAL_SHAPE()
     c_out = torch.zeros(config.hist_size, cs[0], cs[1], cs[2])
     v_out = torch.zeros(config.hist_size, Game.NUM_PLAYERS() + 1)
     p_out = torch.zeros(config.hist_size, Game.NUM_MOVES())
-    result_data = []
 
     max_workers = min(os.cpu_count() or 4, 8)
-    # Thread-local Game() instances to avoid any potential contention
     _thread_local = threading.local()
 
     def _compute_symmetries(args):
@@ -659,125 +681,164 @@ def exploit_symmetries(config, history_data):
             ))
         return result
 
-    # Flatten all samples across all files into a single executor.map() call
-    # to eliminate inter-file serialization gaps
-    sample_count = sum(len(ds.tensors[0]) for ds in datasets)
+    total_samples = sum(size for _, _, _, size in raw_triples)
 
-    def _all_samples():
-        for ds in datasets:
-            c_t, v_t, p_t = ds.tensors
-            for i in range(len(c_t)):
-                yield (c_t[i], v_t[i], p_t[i])
+    with ThreadPoolExecutor(max_workers=1) as io_pool, \
+         ThreadPoolExecutor(max_workers=max_workers) as executor:
+        pbar = tqdm.tqdm(total=total_samples, desc="Creating Symmetric Samples", leave=False)
+        next_future = io_pool.submit(_load_triple_float, raw_triples[0])
+        for idx, (c_path, v_path, pi_path, size) in enumerate(raw_triples):
+            c_data, v_data, pi_data = next_future.result()
+            if idx + 1 < len(raw_triples):
+                next_future = io_pool.submit(_load_triple_float, raw_triples[idx + 1])
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = executor.map(
-            _compute_symmetries,
-            _all_samples(),
-            chunksize=max(1, sample_count // (max_workers * 4)),
-        )
-        for sym_list in tqdm.tqdm(futures, total=sample_count,
-                                   desc="Creating Symmetric Samples", leave=False):
-            for c_sym, v_sym, p_sym in sym_list:
-                c_out[i_out] = c_sym
-                v_out[i_out] = v_sym
-                p_out[i_out] = p_sym
-                i_out += 1
-                if i_out == config.hist_size:
-                    result_data.append((
-                        c_out[:i_out].clone(),
-                        v_out[:i_out].clone(),
-                        p_out[:i_out].clone(),
-                    ))
-                    i_out = 0
+            def _samples():
+                for j in range(size):
+                    yield (c_data[j], v_data[j], pi_data[j])
 
+            futures = executor.map(
+                _compute_symmetries,
+                _samples(),
+                chunksize=max(1, size // (max_workers * 4)),
+            )
+            for sym_list in futures:
+                for c_sym, v_sym, p_sym in sym_list:
+                    c_out[i_out] = c_sym
+                    v_out[i_out] = v_sym
+                    p_out[i_out] = p_sym
+                    i_out += 1
+                    if i_out == config.hist_size:
+                        if maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration,
+                                      location=tmp_hist, name="-syms", use_compression=True,
+                                      half_storage=config.half_storage):
+                            i_out = 0
+                            batch_out += 1
+                pbar.update(1)
+
+            del c_data, v_data, pi_data
+        pbar.close()
+
+    # Save remaining samples
     if i_out > 0:
-        result_data.append((
-            c_out[:i_out].clone(),
-            v_out[:i_out].clone(),
-            p_out[:i_out].clone(),
-        ))
+        maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration,
+                   location=tmp_hist, name="-syms", use_compression=True, force=True,
+                   half_storage=config.half_storage)
 
-    del datasets
     del c_out, v_out, p_out
 
-    gc.collect()
-    return result_data
+    # Delete the raw files now that symmetrized versions exist
+    for c_path, v_path, pi_path, _ in raw_triples:
+        for fp in (c_path, v_path, pi_path):
+            if os.path.exists(fp):
+                os.remove(fp)
 
 
 @tracy_zone
-def resample_by_surprise(config, paths, experiment_name, iteration, history_data):
+def resample_by_surprise(config, paths, experiment_name, iteration):
     import neural_net
 
     Game = config.Game
     hist_location = paths["history"]
+    tmp_hist = paths["tmp_history"]
 
-    datasets = [TensorDataset(c, v, p) for c, v, p in history_data]
+    # Find files in tmp_history
+    file_triples = glob_file_triples(tmp_hist, f"{iteration:04d}-*-canonical-*.ptz")
+    if not file_triples:
+        return
 
-    dataset = ConcatDataset(datasets)
-    sample_count = len(dataset)
-    _dl_workers = config.resolved_loader_threads
-    dataloader = DataLoader(dataset, batch_size=config.train_batch_size, shuffle=False, pin_memory=torch.cuda.is_available(),
-                            num_workers=_dl_workers)
-
+    # Pass 1: compute per-sample loss by loading one file at a time
     nn = neural_net.NNWrapper.load_checkpoint(
         Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"
     )
-    loss = nn.sample_loss(dataloader, sample_count)
+    loss_arrays = []
+    with ThreadPoolExecutor(max_workers=1) as io_pool:
+        next_future = io_pool.submit(_load_triple, (file_triples[0][0], file_triples[0][1], file_triples[0][2]))
+        for idx, (c_path, v_path, pi_path, size) in enumerate(tqdm.tqdm(file_triples, desc="Computing Loss", leave=False)):
+            c_t, v_t, pi_t = next_future.result()
+            if idx + 1 < len(file_triples):
+                nxt = file_triples[idx + 1]
+                next_future = io_pool.submit(_load_triple, (nxt[0], nxt[1], nxt[2]))
+            ds = TensorDataset(c_t, v_t, pi_t)
+            dl = DataLoader(ds, batch_size=config.train_batch_size, shuffle=False,
+                            pin_memory=torch.cuda.is_available())
+            file_loss = nn.sample_loss(dl, size)
+            loss_arrays.append(file_loss)
+            del c_t, v_t, pi_t, ds, dl
+    del nn
+
+    loss = np.concatenate(loss_arrays)
+    del loss_arrays
+    sample_count = len(loss)
     total_loss = np.sum(loss)
 
+    # Compute copy counts vectorized
+    if total_loss <= 0:
+        copies = np.ones(sample_count, dtype=np.int64)
+    else:
+        weights = 0.5 + (loss / total_loss) * 0.5 * sample_count
+        int_w = np.floor(weights).astype(np.int64)
+        frac_w = weights - int_w
+        frac_mask = np.random.random(sample_count) < frac_w
+        copies = int_w + frac_mask.astype(np.int64)
+    del loss
+
+    # Clear old history for iteration before saving new history
+    os.makedirs(hist_location, exist_ok=True)
+    for fn in glob.glob(os.path.join(hist_location, f"{iteration:04d}-*.pt*")):
+        os.remove(fn)
+
+    # Pass 2: resample and write, loading one file at a time
     i_out = 0
     batch_out = 0
     cs = Game.CANONICAL_SHAPE()
     c_out = torch.zeros(config.hist_size, cs[0], cs[1], cs[2])
     v_out = torch.zeros(config.hist_size, Game.NUM_PLAYERS() + 1)
     p_out = torch.zeros(config.hist_size, Game.NUM_MOVES())
-    os.makedirs(hist_location, exist_ok=True)
 
-    # Clear old history for iteration before saving new history.
-    gc.collect()
-    for fn in glob.glob(os.path.join(hist_location, f"{iteration:04d}-*.pt*")):
-        os.remove(fn)
-
-    # Compute copy counts vectorized
-    weights = 0.5 + (loss / total_loss) * 0.5 * sample_count
-    int_w = np.floor(weights).astype(np.int64)
-    frac_w = weights - int_w
-    frac_mask = np.random.random(sample_count) < frac_w
-    copies = int_w + frac_mask.astype(np.int64)
-
-    # Process per-file for memory safety
     sample_idx = 0
-    for ds in tqdm.tqdm(datasets, desc="Resampling Data", leave=False):
-        c_t, v_t, p_t = ds.tensors
-        n = len(c_t)
-        ds_copies = copies[sample_idx:sample_idx + n]
-        expanded_idx = np.repeat(np.arange(n), ds_copies)
-        if len(expanded_idx) == 0:
-            sample_idx += n
-            continue
-        c_exp = c_t[expanded_idx]
-        v_exp = v_t[expanded_idx]
-        p_exp = p_t[expanded_idx]
-        # Write expanded samples to output buffer in chunks
-        pos = 0
-        while pos < len(expanded_idx):
-            space = config.hist_size - i_out
-            chunk = min(space, len(expanded_idx) - pos)
-            c_out[i_out:i_out + chunk] = c_exp[pos:pos + chunk]
-            v_out[i_out:i_out + chunk] = v_exp[pos:pos + chunk]
-            p_out[i_out:i_out + chunk] = p_exp[pos:pos + chunk]
-            i_out += chunk
-            pos += chunk
-            if maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True, half_storage=config.half_storage):
-                i_out = 0
-                batch_out += 1
-        del c_exp, v_exp, p_exp, expanded_idx
-        sample_idx += n
+    with ThreadPoolExecutor(max_workers=1) as io_pool:
+        next_future = io_pool.submit(_load_triple, (file_triples[0][0], file_triples[0][1], file_triples[0][2]))
+        for idx, (c_path, v_path, pi_path, size) in enumerate(tqdm.tqdm(file_triples, desc="Resampling Data", leave=False)):
+            c_t, v_t, pi_t = next_future.result()
+            if idx + 1 < len(file_triples):
+                nxt = file_triples[idx + 1]
+                next_future = io_pool.submit(_load_triple, (nxt[0], nxt[1], nxt[2]))
+
+            ds_copies = copies[sample_idx:sample_idx + size]
+            expanded_idx = np.repeat(np.arange(size), ds_copies)
+            if len(expanded_idx) == 0:
+                del c_t, v_t, pi_t
+                sample_idx += size
+                continue
+            c_exp = c_t[expanded_idx]
+            v_exp = v_t[expanded_idx]
+            p_exp = pi_t[expanded_idx]
+            del c_t, v_t, pi_t
+
+            pos = 0
+            while pos < len(expanded_idx):
+                space = config.hist_size - i_out
+                chunk = min(space, len(expanded_idx) - pos)
+                c_out[i_out:i_out + chunk] = c_exp[pos:pos + chunk]
+                v_out[i_out:i_out + chunk] = v_exp[pos:pos + chunk]
+                p_out[i_out:i_out + chunk] = p_exp[pos:pos + chunk]
+                i_out += chunk
+                pos += chunk
+                if maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True, half_storage=config.half_storage):
+                    i_out = 0
+                    batch_out += 1
+            del c_exp, v_exp, p_exp, expanded_idx
+            sample_idx += size
 
     maybe_save(config, c_out, v_out, p_out, i_out, batch_out, iteration, location=hist_location, use_compression=True, force=True, half_storage=config.half_storage)
 
-    del datasets, dataset, dataloader, nn
     del c_out, v_out, p_out
+
+    # Clean up tmp_history files for this iteration
+    for c_path, v_path, pi_path, _ in file_triples:
+        for fp in (c_path, v_path, pi_path):
+            if os.path.exists(fp):
+                os.remove(fp)
 
 
 @tracy_zone
@@ -1143,6 +1204,9 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     set_model_groups(params, players)
     set_eval_types(params, players)
 
+    # Clean tmp_history before self-play
+    shutil.rmtree(paths["tmp_history"], ignore_errors=True)
+
     pm = alphazero.PlayManager(Game(), params)
     grargs = GRArgs(
         title="Self Play",
@@ -1150,11 +1214,11 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         iteration=iteration,
         max_batch_size=bs,
         record_batch_metrics=True,
+        data_folder=paths["tmp_history"],
     )
 
     gr = GameRunner(players, pm, grargs)
     gr.run()
-    history_data = gr.history_data
     scores = pm.scores()
     win_rates = [0] * len(scores)
     sn = sum(scores)
@@ -1218,7 +1282,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         median_inference_ms = ((inf_sorted[n_it // 2] + inf_sorted[(n_it - 1) // 2]) / 2) * 1000
     else:
         avg_inference_ms = min_inference_ms = max_inference_ms = median_inference_ms = 0
-    del pm, nn
+    del gr, pm, nn
     return SelfPlayResult(
         win_rates=win_rates, hit_rate=hr, game_length=agl,
         resign_win_rates=resign_win_rates, resign_rate=resign_rate,
@@ -1231,7 +1295,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         avg_inference_ms=avg_inference_ms, median_inference_ms=median_inference_ms,
         min_inference_ms=min_inference_ms, max_inference_ms=max_inference_ms,
         theoretical_hr=theoretical_hr,
-    ), history_data
+    )
 
 
 @tracy_zone
@@ -1332,7 +1396,7 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
     nn_rate /= n_perms
     draw_rate /= n_perms
 
-    del nn, nn_past, pm
+    del gr, nn, nn_past, pm
     gc.collect()
     return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm
 
@@ -1672,7 +1736,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             stage_start = time.time()
             with TracyZone("stage_selfplay"):
-                sp, history_data = self_play(
+                sp = self_play(
                     config, paths, experiment_name,
                     current_best, i,
                     config.selfplay_mcts_visits,
@@ -1712,14 +1776,12 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             stage_start = time.time()
             with TracyZone("stage_symmetries"):
-                history_data = exploit_symmetries(config, history_data)
+                exploit_symmetries(config, paths, i)
             stage_times["symmetries"] = time.time() - stage_start
 
             stage_start = time.time()
             with TracyZone("stage_resampling"):
-                resample_by_surprise(config, paths, experiment_name, i, history_data)
-                del history_data
-                gc.collect()
+                resample_by_surprise(config, paths, experiment_name, i)
             stage_times["resampling"] = time.time() - stage_start
 
             stage_start = time.time()

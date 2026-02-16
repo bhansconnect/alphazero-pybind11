@@ -2089,14 +2089,6 @@ std::string StarGambitGS<Config>::dump() const noexcept {
   return out.str();
 }
 
-template<typename Config>
-void StarGambitGS<Config>::minimize_storage() {
-  units_.erase(std::remove_if(units_.begin(), units_.end(),
-                              [](const Unit& u) { return !u.is_alive(); }),
-               units_.end());
-  position_history_.clear();
-}
-
 // =============================================================================
 // Python Binding Support Methods
 // =============================================================================

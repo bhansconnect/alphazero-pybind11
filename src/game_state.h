@@ -117,26 +117,23 @@ class WEAKDLLEXPORT GameState {
   // Returns a string representation of the game state.
   [[nodiscard]] virtual std::string dump() const noexcept = 0;
 
-  // Deletes all data that is not necessary for storing as a hash key.
-  // This avoids wasting tons of space when caching states.
-  virtual void minimize_storage() = 0;
 };
 
-struct GameStateKeyWrapper {
-  GameStateKeyWrapper(std::shared_ptr<GameState> gs) : gs(gs) {}
-  std::shared_ptr<GameState> gs;
+namespace detail {
+struct GameStateHashRef {
+  const GameState& gs;
+  template <typename H>
+  friend H AbslHashValue(H h, const GameStateHashRef& r) {
+    h = H::combine(std::move(h), std::type_index(typeid(r.gs)));
+    r.gs.hash(absl::HashState::Create(&h));
+    return std::move(h);
+  }
 };
-template <typename H>
-H AbslHashValue(H h, const GameStateKeyWrapper& wrapper) {
-  const GameState& gs = *wrapper.gs;
-  h = H::combine(std::move(h), std::type_index(typeid(gs)));
-  wrapper.gs->hash(absl::HashState::Create(&h));
-  return std::move(h);
-}
+}  // namespace detail
 
-inline bool operator==(const GameStateKeyWrapper& lhs,
-                       const GameStateKeyWrapper& rhs) {
-  return *lhs.gs == *rhs.gs;
+// Compute a 64-bit hash of a GameState.
+inline uint64_t hash_game_state(const GameState& gs) {
+  return absl::HashOf(detail::GameStateHashRef{gs});
 }
 
 // A sample evaluation function for testing.

@@ -203,7 +203,7 @@ def main():
     print(f"MCTS visits: {config.selfplay_mcts_visits}")
     if config.max_cache_size > 0:
         game = config.Game
-        entry_bytes = (game.NUM_MOVES() + game.NUM_PLAYERS() + 1) * 4 + 208
+        entry_bytes = (game.NUM_MOVES() + game.NUM_PLAYERS() + 1) * 4 + 64
         cache_mb = config.max_cache_size * entry_bytes / (1024 * 1024)
         print(f"Cache: {config.max_cache_size:,} entries, ~{cache_mb:.0f} MB")
     print(f"Iterations: {start} -> {config.iterations}")

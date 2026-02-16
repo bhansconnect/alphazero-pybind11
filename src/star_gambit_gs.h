@@ -571,8 +571,6 @@ class StarGambitGS : public GameState {
 
   [[nodiscard]] std::string dump() const noexcept override;
 
-  void minimize_storage() override;
-
   // Helper methods
   [[nodiscard]] bool is_turn_one() const { return turn_ == 1 || turn_ == 2; }
   [[nodiscard]] bool has_taken_action() const { return has_taken_action_; }

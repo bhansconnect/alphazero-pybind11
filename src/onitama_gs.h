@@ -434,10 +434,6 @@ class DLLEXPORT OnitamaGS : public GameState {
   // Returns a string representation of the game state.
   [[nodiscard]] std::string dump() const noexcept override;
 
-  // Deletes all data that is not necessary for storing as a hash key.
-  // This avoids wasting tons of space when caching states.
-  void minimize_storage() override {}
-
   // Returns a reference the the carders for the specified player.
   [[nodiscard]] std::pair<int8_t*, int8_t*> player_cards(
       int wanted_player) noexcept;

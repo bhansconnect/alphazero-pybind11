@@ -106,6 +106,7 @@ class TrainConfig:
 
     # Reservoir
     reservoir_recency_decay: float = 0.99
+    reservoir_thin_interval: int = 10
 
     # Bootstrap training (only used when architecture differs from source)
     bootstrap_full_passes: int = 5

@@ -344,7 +344,6 @@ class GameRunner:
             total = hits + misses
             if total > 0:
                 hr = hits / total
-            postfix = {"cache hr": f"{hr:.3f}"}
             max_cache = self.pm.cache_max_size()
             if max_cache > 0:
                 cache_sz = self.pm.cache_size()
@@ -353,9 +352,11 @@ class GameRunner:
                 churn = evictions / hits if hits > 0 else 0
                 reinserts = self.pm.cache_reinserts()
                 thr = (hits + reinserts) / total if total > 0 else 0
+                postfix = {"cache hr": f"{thr:.3f}"}
                 postfix["sat"] = f"{sat:.2f}"
                 postfix["churn"] = f"{churn:.2f}"
-                postfix["thr"] = f"{thr:.3f}"
+            else:
+                postfix = {"cache hr": f"{hr:.3f}"}
             if self.args.record_batch_metrics:
                 with self._batch_lock:
                     sizes = list(self._batch_sizes)

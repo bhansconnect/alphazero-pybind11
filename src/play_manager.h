@@ -26,6 +26,11 @@ using namespace std::chrono_literals;
 
 constexpr const auto MAX_WAIT = 10ms;
 
+struct PendingHistory {
+  PlayHistory ph;
+  uint8_t player;
+};
+
 struct GameData {
   std::unique_ptr<GameState> gs;
   std::shared_ptr<GameState> leaf;
@@ -33,7 +38,7 @@ struct GameData {
   Tensor<float, 3> canonical;
   Vector<float> v;
   Vector<float> pi;
-  std::vector<PlayHistory> partial_history;
+  std::vector<PendingHistory> partial_history;
   std::vector<uint8_t> seat_perm;  // per-game: physical_player → model_group
   uint8_t perm_index = 0;
   bool initialized = false;

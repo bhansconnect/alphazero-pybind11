@@ -107,28 +107,6 @@ connect4_gs_test = executable(
 )
 test('gtest tests', connect4_gs_test)
 
-star_gambit_gs = library(
-    'star_gambit_gs',
-    'star_gambit_gs.cc',
-    dependencies: [eigen_dep, absl_hash_dep, absl_container_dep, tracy_dep],
-    cpp_args: lib_args,
-)
-
-star_gambit_gs_test = executable(
-  'star_gambit_gs_test',
-  'star_gambit_gs_test.cc',
-  dependencies: [gtest_dep, eigen_dep, absl_hash_dep, absl_container_dep],
-  link_with: [star_gambit_gs],
-)
-test('gtest tests', star_gambit_gs_test)
-
-photosynthesis_gs_test = executable(
-  'photosynthesis_gs_test',
-  'photosynthesis_gs_test.cc',
-  dependencies: [gtest_dep, eigen_dep, absl_hash_dep],
-)
-test('gtest tests', photosynthesis_gs_test)
-
 mcts = library(
     'mcts',
     'mcts.cc',
@@ -142,6 +120,28 @@ game_state_lib = library(
   dependencies: [eigen_dep, absl_hash_dep],
   cpp_args: lib_args,
 )
+
+star_gambit_gs = library(
+    'star_gambit_gs',
+    'star_gambit_gs.cc',
+    dependencies: [eigen_dep, absl_hash_dep, absl_container_dep, tracy_dep],
+    cpp_args: lib_args,
+)
+
+star_gambit_gs_test = executable(
+  'star_gambit_gs_test',
+  'star_gambit_gs_test.cc',
+  dependencies: [gtest_dep, eigen_dep, absl_hash_dep, absl_container_dep],
+  link_with: [star_gambit_gs, mcts],
+)
+test('gtest tests', star_gambit_gs_test)
+
+photosynthesis_gs_test = executable(
+  'photosynthesis_gs_test',
+  'photosynthesis_gs_test.cc',
+  dependencies: [gtest_dep, eigen_dep, absl_hash_dep],
+)
+test('gtest tests', photosynthesis_gs_test)
 
 mcts_test = executable(
   'mcts_test',

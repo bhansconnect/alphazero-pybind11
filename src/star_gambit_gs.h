@@ -552,6 +552,8 @@ class StarGambitGS : public GameState {
     return NUM_PLAYERS;
   }
 
+  [[nodiscard]] bool relative_values() const noexcept override { return true; }
+
   [[nodiscard]] Vector<uint8_t> valid_moves() const noexcept override;
 
   void play_move(uint32_t move) override;

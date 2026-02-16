@@ -73,7 +73,8 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     for (auto j = 0; j < base_gs_->num_players(); ++j) {
       gd.mcts.emplace_back(params_.cpuct, base_gs_->num_players(),
                            base_gs_->num_moves(), params_.epsilon,
-                           params_.mcts_root_temp, params_.fpu_reduction);
+                           params_.mcts_root_temp, params_.fpu_reduction,
+                           base_gs_->relative_values());
     }
     gd.canonical = Tensor<float, 3>{base_gs_->canonicalized()};
     gd.v = Vector<float>{base_gs_->num_players() + 1};
@@ -162,7 +163,9 @@ void PlayManager::play() {
               .pi = Vector<float>{mcts.probs(1.0)},
           };
           ph.v.setZero();
-          game.partial_history.push_back(ph);
+          game.partial_history.push_back(
+              PendingHistory{.ph = std::move(ph),
+                             .player = game.gs->current_player()});
         }
         if (!game.capped) {
           game.total_avg_leaf_depth += mcts.avg_leaf_depth();
@@ -189,9 +192,15 @@ void PlayManager::play() {
           // Dump history.
           if (params_.history_enabled) {
             while (!game.partial_history.empty()) {
-              auto ph = game.partial_history.back();
-              ph.v = scores.value();
-              history_.push(ph);
+              auto& pending = game.partial_history.back();
+              if (base_gs_->relative_values()) {
+                pending.ph.v = absolute_to_relative(
+                    scores.value(), pending.player,
+                    base_gs_->num_players());
+              } else {
+                pending.ph.v = scores.value();
+              }
+              history_.push(std::move(pending.ph));
               game.partial_history.pop_back();
             }
           }
@@ -237,7 +246,8 @@ void PlayManager::play() {
           for (auto& m : game.mcts) {
             m = MCTS{params_.cpuct,          base_gs_->num_players(),
                      base_gs_->num_moves(),  params_.epsilon,
-                     params_.mcts_root_temp, params_.fpu_reduction};
+                     params_.mcts_root_temp, params_.fpu_reduction,
+                     base_gs_->relative_values()};
           }
         }
         // A move has been played, update playout cap.
@@ -248,7 +258,8 @@ void PlayManager::play() {
           for (auto& m : game.mcts) {
             m = MCTS{params_.cpuct,          base_gs_->num_players(),
                      base_gs_->num_moves(),  params_.epsilon,
-                     params_.mcts_root_temp, params_.fpu_reduction};
+                     params_.mcts_root_temp, params_.fpu_reduction,
+                     base_gs_->relative_values()};
           }
         } else {
           // Re-apply root policy temperature and noise on the reused subtree.

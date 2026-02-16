@@ -1682,7 +1682,7 @@ std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
 
   // Create mirrored version
   PlayHistory mirrored;
-  mirrored.v = base.v;  // Value unchanged
+  mirrored.v = base.v;      // Value unchanged
 
   // ========================================
   // Mirror observation tensor

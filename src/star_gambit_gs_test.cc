@@ -7,6 +7,8 @@
 #include <map>
 #include <optional>
 
+#include "mcts.h"
+
 namespace alphazero::star_gambit_gs {
 
 // Use Skirmish configuration for tests
@@ -2748,6 +2750,180 @@ TEST(ThreefoldRepetition, DifferentPlayersDifferentPositions) {
 
   // Even if board looks the same, P0 to move vs P1 to move are different positions
   // This is inherent in the hash including current_player_
+}
+
+// =============================================================================
+// Canonical Value Rotation Tests
+// =============================================================================
+
+TEST(RelativeValues, FlagIsTrue) {
+  TestGame game;
+  EXPECT_TRUE(game.relative_values());
+}
+
+TEST(RelativeValues, Player0IsIdentity) {
+  Vector<float> v(3);
+  v << 0.6f, 0.3f, 0.1f;
+  auto to_rel = absolute_to_relative(v, 0, 2);
+  auto to_abs = relative_to_absolute(v, 0, 2);
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_FLOAT_EQ(to_rel(i), v(i));
+    EXPECT_FLOAT_EQ(to_abs(i), v(i));
+  }
+}
+
+TEST(RelativeValues, Player1SwapsValues) {
+  Vector<float> absolute(3);
+  absolute << 0.7f, 0.2f, 0.1f;  // [p0_win, p1_win, draw]
+
+  auto relative = absolute_to_relative(absolute, 1, 2);
+  EXPECT_FLOAT_EQ(relative(0), 0.2f);  // "I (P1) win"
+  EXPECT_FLOAT_EQ(relative(1), 0.7f);  // "opponent (P0) wins"
+  EXPECT_FLOAT_EQ(relative(2), 0.1f);  // draw unchanged
+
+  auto back = relative_to_absolute(relative, 1, 2);
+  EXPECT_FLOAT_EQ(back(0), 0.7f);
+  EXPECT_FLOAT_EQ(back(1), 0.2f);
+  EXPECT_FLOAT_EQ(back(2), 0.1f);
+}
+
+TEST(RelativeValues, RoundTripIsIdentity) {
+  Vector<float> v(3);
+  v << 0.5f, 0.3f, 0.2f;
+  for (uint8_t p = 0; p < 2; ++p) {
+    auto rt = relative_to_absolute(absolute_to_relative(v, p, 2), p, 2);
+    for (int i = 0; i < 3; ++i) {
+      EXPECT_NEAR(rt(i), v(i), 1e-5f)
+          << "Round-trip failed for player=" << (int)p << " index=" << i;
+    }
+  }
+}
+
+TEST(RelativeValues, MCTSRelativeValueBackup) {
+  TestGame game;
+  game.play_move(TestAS::encode_deploy(0, 1));  // P0
+  game.play_move(TestAS::encode_deploy(0, 4));  // P1
+  game.play_move(TestAS::END_TURN_OFFSET);       // P0 ends
+  ASSERT_EQ(game.current_player(), 1);
+
+  // Relative MCTS: receives player-relative values
+  MCTS mcts_rv(2.0, 2, TestAS::NUM_MOVES, 0, 1.4, 0, true);
+  auto leaf1 = mcts_rv.find_leaf(game);
+  Vector<float> v_rel(3);
+  v_rel << 0.8f, 0.1f, 0.1f;  // "I (current=P1) win with 0.8"
+  auto pi = Vector<float>(TestAS::NUM_MOVES);
+  pi.setZero();
+  auto valids = leaf1->valid_moves();
+  for (int i = 0; i < TestAS::NUM_MOVES; ++i) {
+    if (valids(i)) pi(i) = 1.0f;
+  }
+  pi /= pi.sum();
+  auto pi_copy = Vector<float>(pi);
+  mcts_rv.process_result(game, v_rel, pi, false);
+
+  // Absolute MCTS: receives absolute values
+  MCTS mcts_abs(2.0, 2, TestAS::NUM_MOVES, 0, 1.4, 0, false);
+  auto leaf2 = mcts_abs.find_leaf(game);
+  Vector<float> v_abs(3);
+  v_abs << 0.1f, 0.8f, 0.1f;  // P0=0.1, P1=0.8, draw=0.1
+  mcts_abs.process_result(game, v_abs, pi_copy, false);
+
+  // Root values should match
+  auto rv_rv = mcts_rv.root_value();
+  auto rv_abs = mcts_abs.root_value();
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_NEAR(rv_rv(i), rv_abs(i), 1e-5f)
+        << "Root values differ at index " << i;
+  }
+}
+
+TEST(RelativeValues, MCTSTerminalStateNotRotated) {
+  MCTS mcts_rv(2.0, 2, TestAS::NUM_MOVES, 0, 1.4, 0, true);
+  MCTS mcts_abs(2.0, 2, TestAS::NUM_MOVES, 0, 1.4, 0, false);
+
+  TestGame game1, game2;
+  // Play identical opening
+  for (auto m : {TestAS::encode_deploy(0, 1), TestAS::encode_deploy(0, 4)}) {
+    game1.play_move(m);
+    game2.play_move(m);
+  }
+
+  // Run several MCTS iterations with identical symmetric values
+  for (int iter = 0; iter < 10; ++iter) {
+    auto leaf1 = mcts_rv.find_leaf(game1);
+    auto leaf2 = mcts_abs.find_leaf(game2);
+
+    if (leaf1->scores().has_value()) {
+      Vector<float> v1 = leaf1->scores().value();
+      Vector<float> v2 = leaf2->scores().value();
+      auto pi1 = Vector<float>(TestAS::NUM_MOVES);
+      pi1.setZero();
+      auto pi2 = Vector<float>(pi1);
+      mcts_rv.process_result(game1, v1, pi1, false);
+      mcts_abs.process_result(game2, v2, pi2, false);
+    } else {
+      // Symmetric values so rotation is identity
+      Vector<float> v_rel(3);
+      v_rel << 0.4f, 0.4f, 0.2f;
+      auto pi1 = Vector<float>(TestAS::NUM_MOVES);
+      pi1.setZero();
+      auto valids = leaf1->valid_moves();
+      for (int i = 0; i < TestAS::NUM_MOVES; ++i) {
+        if (valids(i)) pi1(i) = 1.0f;
+      }
+      if (pi1.sum() > 0) pi1 /= pi1.sum();
+      auto pi2 = Vector<float>(pi1);
+      auto v_abs = Vector<float>(v_rel);
+      mcts_rv.process_result(game1, v_rel, pi1, false);
+      mcts_abs.process_result(game2, v_abs, pi2, false);
+    }
+  }
+
+  auto rv_rv = mcts_rv.root_value();
+  auto rv_abs = mcts_abs.root_value();
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_NEAR(rv_rv(i), rv_abs(i), 1e-5f)
+        << "Terminal handling differs at index " << i;
+  }
+}
+
+TEST(RelativeValues, SymmetriesPreserveValues) {
+  TestGame game;
+  game.play_move(TestAS::encode_deploy(0, 1));
+  game.play_move(TestAS::encode_deploy(0, 4));
+
+  PlayHistory base;
+  base.canonical = game.canonicalized();
+  base.v = Vector<float>(3);
+  base.v << 0.6f, 0.3f, 0.1f;
+  base.pi = Vector<float>(TestAS::NUM_MOVES);
+  base.pi.setZero();
+
+  auto syms = game.symmetries(base);
+  ASSERT_EQ(syms.size(), 2u);
+  for (size_t s = 0; s < syms.size(); ++s) {
+    for (int i = 0; i < 3; ++i) {
+      EXPECT_FLOAT_EQ(syms[s].v(i), base.v(i))
+          << "Symmetry " << s << " changed value at index " << i;
+    }
+  }
+}
+
+TEST(RelativeValues, TrainingDataRotation) {
+  // Simulate what play_manager does: P1 wins the game
+  Vector<float> scores(3);
+  scores << 0.0f, 1.0f, 0.0f;  // P1 won (absolute)
+
+  // For a P0 position: "opponent won" -> relative = [0, 1, 0]
+  auto v_p0 = absolute_to_relative(scores, 0, 2);
+  EXPECT_FLOAT_EQ(v_p0(0), 0.0f);  // "I (P0) won" = no
+  EXPECT_FLOAT_EQ(v_p0(1), 1.0f);  // "opponent (P1) won" = yes
+
+  // For a P1 position: "I won" -> relative = [1, 0, 0]
+  auto v_p1 = absolute_to_relative(scores, 1, 2);
+  EXPECT_FLOAT_EQ(v_p1(0), 1.0f);  // "I (P1) won" = yes
+  EXPECT_FLOAT_EQ(v_p1(1), 0.0f);  // "opponent (P0) won" = no
+  EXPECT_FLOAT_EQ(v_p1(2), 0.0f);  // draw
 }
 
 }  // namespace alphazero::star_gambit_gs

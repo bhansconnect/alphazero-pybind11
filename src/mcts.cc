@@ -140,6 +140,9 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
     } else {
       current_->update_policy(pi);
     }
+    if (relative_values_) {
+      value = relative_to_absolute(value, current_->player, num_players_);
+    }
   }
 
   while (!path_.empty()) {

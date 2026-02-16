@@ -373,7 +373,7 @@ def test_update_reservoir_thinning(tmp_path):
     - Window has 4 iters (5-8) = 400 capacity
     - excess = 100 → thinning triggers
     """
-    config = TrainConfig(window_size_scalar=1.0)
+    config = TrainConfig(window_size_scalar=1.0, reservoir_thin_interval=1)
     exp_dir = str(tmp_path / "experiment")
     paths = config.resolve_paths(exp_dir)
     for key in ("history", "reservoir"):
@@ -422,7 +422,7 @@ def test_update_reservoir_thinning_age_bias(tmp_path):
     multiple thinning rounds occur with enough iterations in the reservoir
     to see the age-weighted effect.
     """
-    config = TrainConfig(window_size_scalar=1.0, reservoir_recency_decay=0.9)
+    config = TrainConfig(window_size_scalar=1.0, reservoir_recency_decay=0.9, reservoir_thin_interval=1)
     exp_dir = str(tmp_path / "experiment")
     paths = config.resolve_paths(exp_dir)
     for key in ("history", "reservoir"):

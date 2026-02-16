@@ -138,6 +138,34 @@ def _load_and_select(args):
     return result
 
 
+def _thin_triple(args):
+    """Thin a single file triple: load, subsample, save, cleanup. Runs in thread pool."""
+    c_path, v_path, pi_path, file_size, keep, zstd_level = args
+    c = _load_hist_tensor(c_path)
+    v = _load_hist_tensor(v_path)
+    pi = _load_hist_tensor(pi_path)
+    perm = torch.randperm(file_size)[:keep]
+    c, v, pi = c[perm], v[perm], pi[perm]
+
+    new_c = _replace_size_in_path(c_path, keep)
+    new_v = _replace_size_in_path(v_path, keep)
+    new_pi = _replace_size_in_path(pi_path, keep)
+    # Migrate legacy .pt -> .ptz
+    if not new_c.endswith(".ptz"):
+        new_c = os.path.splitext(new_c)[0] + ".ptz"
+        new_v = os.path.splitext(new_v)[0] + ".ptz"
+        new_pi = os.path.splitext(new_pi)[0] + ".ptz"
+
+    _atomic_save_compressed(c, new_c, zstd_level=zstd_level)
+    _atomic_save_compressed(v, new_v, zstd_level=zstd_level)
+    _atomic_save_compressed(pi, new_pi, zstd_level=zstd_level)
+
+    for old, new in ((c_path, new_c), (v_path, new_v), (pi_path, new_pi)):
+        if old != new and os.path.exists(old):
+            os.remove(old)
+    del c, v, pi
+
+
 def _replace_size_in_path(path, new_size):
     """Replace the sample count in a history/reservoir filename."""
     base, ext = os.path.splitext(path)
@@ -995,6 +1023,10 @@ def update_reservoir(config, paths, iteration, hist_size):
                 dst = os.path.join(reservoir_location, os.path.basename(src))
                 os.rename(src, dst)
 
+    # Only thin every N iterations to batch expensive I/O
+    if iteration % config.reservoir_thin_interval != 0:
+        return
+
     # Check if thinning is needed
     reservoir_triples = glob_file_triples(reservoir_location)
     # Also check for .pt files in reservoir (legacy)
@@ -1031,23 +1063,19 @@ def update_reservoir(config, paths, iteration, hist_size):
     for iter_num, weight in iter_weights.items():
         removals[iter_num] = round(excess * weight / total_weight)
 
-    # Process affected iterations (oldest first)
-    sorted_iters = sorted(removals.keys())
-    for iter_num in tqdm.tqdm(sorted_iters, desc="Thinning Reservoir", leave=False):
+    # Phase A: pre-compute work items (sequential, fast integer math)
+    delete_files = []  # file paths to remove outright
+    thin_work = []     # args tuples for _thin_triple
+
+    for iter_num in sorted(removals.keys()):
         budget = removals[iter_num]
         if budget <= 0:
             continue
-
         iter_samples = iter_info[iter_num]
         if budget >= iter_samples:
-            # Delete all files for this iteration
             for c_path, v_path, pi_path, _ in iter_files[iter_num]:
-                for fp in (c_path, v_path, pi_path):
-                    if os.path.exists(fp):
-                        os.remove(fp)
+                delete_files.extend([c_path, v_path, pi_path])
             continue
-
-        # Distribute across batch files proportionally
         remaining_budget = budget
         for c_path, v_path, pi_path, file_size in iter_files[iter_num]:
             if remaining_budget <= 0:
@@ -1058,45 +1086,31 @@ def update_reservoir(config, paths, iteration, hist_size):
             )
             if sub_budget <= 0:
                 continue
-
             keep = file_size - sub_budget
             if keep <= 0:
-                for fp in (c_path, v_path, pi_path):
-                    if os.path.exists(fp):
-                        os.remove(fp)
+                delete_files.extend([c_path, v_path, pi_path])
                 remaining_budget -= file_size
-                continue
+            else:
+                thin_work.append((c_path, v_path, pi_path, file_size, keep,
+                                  config.zstd_level))
+                remaining_budget -= sub_budget
 
-            c_tensor = _load_hist_tensor(c_path)
-            v_tensor = _load_hist_tensor(v_path)
-            pi_tensor = _load_hist_tensor(pi_path)
+    # Phase B: execute deletions then thin in parallel
+    for fp in delete_files:
+        if os.path.exists(fp):
+            os.remove(fp)
 
-            perm = torch.randperm(file_size)[:keep]
-            c_tensor = c_tensor[perm]
-            v_tensor = v_tensor[perm]
-            pi_tensor = pi_tensor[perm]
-
-            new_c_path = _replace_size_in_path(c_path, keep)
-            new_v_path = _replace_size_in_path(v_path, keep)
-            new_pi_path = _replace_size_in_path(pi_path, keep)
-
-            # Save as .ptz (migrates any legacy .pt files)
-            if not new_c_path.endswith(".ptz"):
-                new_c_path = os.path.splitext(new_c_path)[0] + ".ptz"
-                new_v_path = os.path.splitext(new_v_path)[0] + ".ptz"
-                new_pi_path = os.path.splitext(new_pi_path)[0] + ".ptz"
-
-            _atomic_save_compressed(c_tensor, new_c_path, zstd_level=config.zstd_level)
-            _atomic_save_compressed(v_tensor, new_v_path, zstd_level=config.zstd_level)
-            _atomic_save_compressed(pi_tensor, new_pi_path, zstd_level=config.zstd_level)
-
-            # Remove old files if name changed
-            for old_fp, new_fp in ((c_path, new_c_path), (v_path, new_v_path), (pi_path, new_pi_path)):
-                if old_fp != new_fp and os.path.exists(old_fp):
-                    os.remove(old_fp)
-
-            remaining_budget -= sub_budget
-            del c_tensor, v_tensor, pi_tensor
+    num_workers = config.resolved_loader_threads
+    if thin_work:
+        if num_workers <= 1:
+            for item in tqdm.tqdm(thin_work, desc="Thinning Reservoir", leave=False):
+                _thin_triple(item)
+        else:
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = [executor.submit(_thin_triple, item) for item in thin_work]
+                for fut in tqdm.tqdm(as_completed(futures), total=len(futures),
+                                     desc="Thinning Reservoir", leave=False):
+                    fut.result()  # propagate exceptions
 
     gc.collect()
 

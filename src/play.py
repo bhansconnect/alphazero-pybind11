@@ -93,6 +93,7 @@ def create_mcts(game_class, cpuct=DEFAULT_CPUCT, fpu_reduction=DEFAULT_FPU_REDUC
         0.25,
         1.4,
         fpu_reduction,
+        game_class().relative_values(),
     )
 
 

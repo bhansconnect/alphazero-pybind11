@@ -363,6 +363,7 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False):
 
     num_players = Game.NUM_PLAYERS()
     num_moves = Game.NUM_MOVES()
+    relative_values = Game().relative_values()
     max_visits = max(visit_counts)
     target_vcs = sorted(vc for vc in visit_counts if vc > 1)
     has_vc1 = 1 in visit_counts
@@ -384,7 +385,8 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False):
 
         # Create fresh MCTS for each active game's current position
         mcts_list = [
-            alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.4, config.fpu_reduction)
+            alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.4, config.fpu_reduction,
+                           relative_values)
             for _ in range(n)
         ]
 

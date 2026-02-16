@@ -1283,6 +1283,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     else:
         avg_inference_ms = min_inference_ms = max_inference_ms = median_inference_ms = 0
     del gr, pm, nn
+    gc.collect()
     return SelfPlayResult(
         win_rates=win_rates, hit_rate=hr, game_length=agl,
         resign_win_rates=resign_win_rates, resign_rate=resign_rate,

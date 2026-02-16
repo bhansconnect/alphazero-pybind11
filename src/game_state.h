@@ -19,6 +19,32 @@ struct PlayHistory {
   Vector<float> pi;
 };
 
+// Rotate absolute value vector to relative (current-player-relative).
+// v_rel[i] = v_abs[(player + i) % num_players], draw index unchanged.
+inline Vector<float> absolute_to_relative(
+    const Vector<float>& v, uint8_t player, uint8_t num_players) {
+  if (player == 0) return v;
+  Vector<float> out(v.size());
+  for (uint8_t i = 0; i < num_players; ++i) {
+    out(i) = v((player + i) % num_players);
+  }
+  out(num_players) = v(num_players);  // draw
+  return out;
+}
+
+// Rotate relative (current-player-relative) value vector to absolute.
+// v_abs[(player + i) % num_players] = v_rel[i], draw index unchanged.
+inline Vector<float> relative_to_absolute(
+    const Vector<float>& v, uint8_t player, uint8_t num_players) {
+  if (player == 0) return v;
+  Vector<float> out(v.size());
+  for (uint8_t i = 0; i < num_players; ++i) {
+    out((player + i) % num_players) = v(i);
+  }
+  out(num_players) = v(num_players);  // draw
+  return out;
+}
+
 // GameState is the core class to represent games to be played by AlphaZero. It
 // creates the basic api needed by the MCTS. It uses Eigen to represent the
 // interface in order to avoid copying to and from Python. Pybind11 already has
@@ -75,6 +101,11 @@ class WEAKDLLEXPORT GameState {
 
   // Returns the canonicalized form of the board, ready for feeding to a NN.
   [[nodiscard]] virtual Tensor<float, 3> canonicalized() const noexcept = 0;
+
+  // Returns true if the game uses player-relative canonical values.
+  // When true, NN outputs are rotated to absolute before MCTS backup,
+  // and game scores are rotated to relative for training data.
+  [[nodiscard]] virtual bool relative_values() const noexcept { return false; }
 
   // Returns the number of symmetries the game has.
   [[nodiscard]] virtual uint8_t num_symmetries() const noexcept = 0;

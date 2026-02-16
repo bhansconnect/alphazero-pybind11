@@ -131,7 +131,8 @@ PYBIND11_MODULE(alphazero, m) {
                 ph.canonical.data(), dims,
                 {size * dims[1] * dims[2], size * dims[2], size});
           },
-          py::return_value_policy::reference_internal);
+          py::return_value_policy::reference_internal)
+;
 
   py::class_<GameState>(m, "GameState")
       .def("copy", &GameState::copy, py::call_guard<py::gil_scoped_release>())
@@ -144,6 +145,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def("num_players", &GameState::num_players)
       .def("num_moves", &GameState::num_moves)
       .def("num_symmetries", &GameState::num_symmetries)
+      .def("relative_values", &GameState::relative_values)
       .def("symmetries", &GameState::symmetries,
            py::call_guard<py::gil_scoped_release>())
       .def("valid_moves", &GameState::valid_moves,
@@ -165,6 +167,7 @@ PYBIND11_MODULE(alphazero, m) {
   py::class_<MCTS>(m, "MCTS")
       .def(py::init<float, uint32_t, uint32_t>())
       .def(py::init<float, uint32_t, uint32_t, float, float, float>())
+      .def(py::init<float, uint32_t, uint32_t, float, float, float, bool>())
       .def("update_root", &MCTS::update_root)
       .def("find_leaf", &MCTS::find_leaf)
       .def("process_result", &MCTS::process_result)

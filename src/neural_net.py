@@ -435,15 +435,15 @@ class NNWrapper:
             total=steps_to_train, unit="batches", desc="Training NN", leave=False
         )
         past_states = []
+        # Compute the 3 intermediate snapshot points (at 25%, 50%, 75% of training)
+        snapshot_interval = steps_to_train // 4
+        snapshot_steps = set()
+        if ema_averaging and snapshot_interval > 0:
+            snapshot_steps = {snapshot_interval, 2 * snapshot_interval, 3 * snapshot_interval}
+
         while current_step < steps_to_train:
             for batch in batches:
-                if (
-                    ema_averaging
-                    and steps_to_train // 4 > 0
-                    and current_step % (steps_to_train // 4) == 0
-                    and current_step != 0
-                ):
-                    # Snapshot model weights (clone to avoid aliasing)
+                if current_step in snapshot_steps:
                     past_states.append({k: v.data.clone() for k, v in self.nnet.named_parameters()})
                 if current_step == steps_to_train:
                     break

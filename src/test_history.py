@@ -24,6 +24,7 @@ from game_runner import (
     _atomic_save_compressed, update_reservoir, calc_hist_size,
     glob_file_triples, _replace_size_in_path,
     StreamingCompressedDataset, load_reservoir, train,
+    exploit_symmetries, resample_by_surprise,
 )
 from config import TrainConfig
 
@@ -857,3 +858,412 @@ def test_bootstrap_retrain_with_reservoir(tmp_path):
     nn.save_checkpoint(str(dest_ckpt), f"{source_n:04d}-test.pt")
     assert (dest_ckpt / "0005-test.pt").exists()
     assert total_train_steps > 0
+
+
+# ============================================================
+# Disk-based exploit_symmetries
+# ============================================================
+
+
+def test_exploit_symmetries_disk_creates_syms_files(tmp_path):
+    """exploit_symmetries reads raw files from tmp_history and writes -syms- files."""
+    config = TrainConfig(game="connect4")
+    cs = Game.CANONICAL_SHAPE()
+    iteration = 0
+
+    tmp_hist = str(tmp_path / "tmp_history")
+    os.makedirs(tmp_hist, exist_ok=True)
+    paths = {"tmp_history": tmp_hist}
+
+    # Create raw history files
+    n = 50
+    c = torch.randn(n, cs[0], cs[1], cs[2])
+    v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+    pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+    save_compressed(c, os.path.join(tmp_hist, f"{iteration:04d}-0000-canonical-{n}.ptz"))
+    save_compressed(v, os.path.join(tmp_hist, f"{iteration:04d}-0000-v-{n}.ptz"))
+    save_compressed(pi, os.path.join(tmp_hist, f"{iteration:04d}-0000-pi-{n}.ptz"))
+
+    exploit_symmetries(config, paths, iteration)
+
+    # Raw files should be deleted (only non-syms files with batch 0000)
+    raw_files = [f for f in glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-0000-*.ptz"))
+                 if "-syms-" not in f]
+    assert len(raw_files) == 0, f"Raw files should be deleted, found: {raw_files}"
+
+    # Syms files should exist
+    syms_files = glob.glob(os.path.join(tmp_hist, f"{iteration:04d}-*-syms-*.ptz"))
+    assert len(syms_files) > 0, "Symmetrized files should be created"
+
+    # Total samples should be original * NUM_SYMMETRIES
+    syms_triples = glob_file_triples(tmp_hist, f"{iteration:04d}-*-syms-canonical-*.ptz")
+    total_syms = sum(s for _, _, _, s in syms_triples)
+    expected = n * Game.NUM_SYMMETRIES()
+    assert total_syms == expected, f"Expected {expected} symmetric samples, got {total_syms}"
+
+
+def test_exploit_symmetries_no_op_for_no_symmetries(tmp_path):
+    """exploit_symmetries is a no-op when NUM_SYMMETRIES <= 1."""
+    # Brandubh has 8 symmetries, but we need a game with <= 1.
+    # Instead, just verify that with no files, it's a no-op.
+    config = TrainConfig(game="connect4")
+    tmp_hist = str(tmp_path / "tmp_history")
+    os.makedirs(tmp_hist, exist_ok=True)
+    paths = {"tmp_history": tmp_hist}
+
+    # No files — should return without error
+    exploit_symmetries(config, paths, 0)
+    files = glob.glob(os.path.join(tmp_hist, "*.ptz"))
+    assert len(files) == 0
+
+
+def test_exploit_symmetries_data_integrity(tmp_path):
+    """Symmetrized data has correct shapes and is loadable."""
+    config = TrainConfig(game="connect4")
+    cs = Game.CANONICAL_SHAPE()
+    iteration = 2
+
+    tmp_hist = str(tmp_path / "tmp_history")
+    os.makedirs(tmp_hist, exist_ok=True)
+    paths = {"tmp_history": tmp_hist}
+
+    n = 30
+    c = torch.randn(n, cs[0], cs[1], cs[2])
+    v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+    pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+    save_compressed(c, os.path.join(tmp_hist, f"{iteration:04d}-0000-canonical-{n}.ptz"))
+    save_compressed(v, os.path.join(tmp_hist, f"{iteration:04d}-0000-v-{n}.ptz"))
+    save_compressed(pi, os.path.join(tmp_hist, f"{iteration:04d}-0000-pi-{n}.ptz"))
+
+    exploit_symmetries(config, paths, iteration)
+
+    syms_triples = glob_file_triples(tmp_hist, f"{iteration:04d}-*-syms-canonical-*.ptz")
+    assert len(syms_triples) > 0
+
+    for c_path, v_path, pi_path, size in syms_triples:
+        c_loaded = load_compressed(c_path)
+        v_loaded = load_compressed(v_path)
+        pi_loaded = load_compressed(pi_path)
+        assert c_loaded.shape == (size, cs[0], cs[1], cs[2])
+        assert v_loaded.shape == (size, Game.NUM_PLAYERS() + 1)
+        assert pi_loaded.shape == (size, Game.NUM_MOVES())
+
+
+def test_exploit_symmetries_multiple_raw_files(tmp_path):
+    """exploit_symmetries handles multiple raw file batches."""
+    config = TrainConfig(game="connect4")
+    cs = Game.CANONICAL_SHAPE()
+    iteration = 1
+
+    tmp_hist = str(tmp_path / "tmp_history")
+    os.makedirs(tmp_hist, exist_ok=True)
+    paths = {"tmp_history": tmp_hist}
+
+    total_raw = 0
+    for batch in range(3):
+        n = 20 + batch * 5
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+        pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+        save_compressed(c, os.path.join(tmp_hist, f"{iteration:04d}-{batch:04d}-canonical-{n}.ptz"))
+        save_compressed(v, os.path.join(tmp_hist, f"{iteration:04d}-{batch:04d}-v-{n}.ptz"))
+        save_compressed(pi, os.path.join(tmp_hist, f"{iteration:04d}-{batch:04d}-pi-{n}.ptz"))
+        total_raw += n
+
+    exploit_symmetries(config, paths, iteration)
+
+    syms_triples = glob_file_triples(tmp_hist, f"{iteration:04d}-*-syms-canonical-*.ptz")
+    total_syms = sum(s for _, _, _, s in syms_triples)
+    expected = total_raw * Game.NUM_SYMMETRIES()
+    assert total_syms == expected, f"Expected {expected} symmetric samples, got {total_syms}"
+
+
+# ============================================================
+# Disk-based resample_by_surprise
+# ============================================================
+
+
+def test_resample_by_surprise_disk_pipeline(tmp_path):
+    """resample_by_surprise reads from tmp_history, writes to history, cleans tmp."""
+    config = TrainConfig(game="connect4", train_batch_size=32)
+    cs = Game.CANONICAL_SHAPE()
+    experiment_name = "test"
+    iteration = 0
+
+    exp_dir = str(tmp_path / "experiment")
+    paths = config.resolve_paths(exp_dir)
+    for key in ("checkpoint", "history", "tmp_history"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    # Create checkpoint for iteration 0
+    nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
+    nn = NNWrapper(Game, nnargs)
+    nn.save_checkpoint(paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt")
+    del nn
+
+    # Create tmp_history files
+    n = 100
+    c = torch.randn(n, cs[0], cs[1], cs[2])
+    v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+    pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+    save_compressed(c, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-canonical-{n}.ptz"))
+    save_compressed(v, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-v-{n}.ptz"))
+    save_compressed(pi, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-pi-{n}.ptz"))
+
+    resample_by_surprise(config, paths, experiment_name, iteration)
+
+    # History files should exist
+    hist_triples = glob_file_triples(paths["history"], f"{iteration:04d}-*-canonical-*.ptz")
+    assert len(hist_triples) > 0, "History files should be written"
+    total_resampled = sum(s for _, _, _, s in hist_triples)
+    assert total_resampled > 0, "Resampled data should have samples"
+
+    # tmp_history files should be cleaned up
+    tmp_files = glob.glob(os.path.join(paths["tmp_history"], f"{iteration:04d}-*.ptz"))
+    assert len(tmp_files) == 0, f"tmp_history should be cleaned, found: {tmp_files}"
+
+
+def test_resample_by_surprise_preserves_data_shapes(tmp_path):
+    """Resampled files have correct tensor shapes."""
+    config = TrainConfig(game="connect4", train_batch_size=32)
+    cs = Game.CANONICAL_SHAPE()
+    experiment_name = "test"
+    iteration = 0
+
+    exp_dir = str(tmp_path / "experiment")
+    paths = config.resolve_paths(exp_dir)
+    for key in ("checkpoint", "history", "tmp_history"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
+    nn = NNWrapper(Game, nnargs)
+    nn.save_checkpoint(paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt")
+    del nn
+
+    n = 80
+    c = torch.randn(n, cs[0], cs[1], cs[2])
+    v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+    pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+    save_compressed(c, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-canonical-{n}.ptz"))
+    save_compressed(v, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-v-{n}.ptz"))
+    save_compressed(pi, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-pi-{n}.ptz"))
+
+    resample_by_surprise(config, paths, experiment_name, iteration)
+
+    hist_triples = glob_file_triples(paths["history"], f"{iteration:04d}-*-canonical-*.ptz")
+    for c_path, v_path, pi_path, size in hist_triples:
+        c_loaded = load_compressed(c_path)
+        v_loaded = load_compressed(v_path)
+        pi_loaded = load_compressed(pi_path)
+        assert c_loaded.shape == (size, cs[0], cs[1], cs[2])
+        assert v_loaded.shape == (size, Game.NUM_PLAYERS() + 1)
+        assert pi_loaded.shape == (size, Game.NUM_MOVES())
+
+
+def test_resample_by_surprise_multiple_files(tmp_path):
+    """resample_by_surprise handles multiple input files from tmp_history."""
+    config = TrainConfig(game="connect4", train_batch_size=32)
+    cs = Game.CANONICAL_SHAPE()
+    experiment_name = "test"
+    iteration = 0
+
+    exp_dir = str(tmp_path / "experiment")
+    paths = config.resolve_paths(exp_dir)
+    for key in ("checkpoint", "history", "tmp_history"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
+    nn = NNWrapper(Game, nnargs)
+    nn.save_checkpoint(paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt")
+    del nn
+
+    total_input = 0
+    for batch in range(3):
+        n = 40
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+        pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+        save_compressed(c, os.path.join(paths["tmp_history"], f"{iteration:04d}-{batch:04d}-canonical-{n}.ptz"))
+        save_compressed(v, os.path.join(paths["tmp_history"], f"{iteration:04d}-{batch:04d}-v-{n}.ptz"))
+        save_compressed(pi, os.path.join(paths["tmp_history"], f"{iteration:04d}-{batch:04d}-pi-{n}.ptz"))
+        total_input += n
+
+    resample_by_surprise(config, paths, experiment_name, iteration)
+
+    hist_triples = glob_file_triples(paths["history"], f"{iteration:04d}-*-canonical-*.ptz")
+    total_resampled = sum(s for _, _, _, s in hist_triples)
+    # Resampling changes count, but should be in the ballpark of input
+    assert total_resampled > 0
+    # With surprise weighting, total should be roughly similar (within 3x)
+    assert total_resampled < total_input * 3, \
+        f"Resampled count {total_resampled} seems too high for {total_input} input"
+
+
+def test_resample_clears_old_history(tmp_path):
+    """resample_by_surprise clears previous history files for the iteration."""
+    config = TrainConfig(game="connect4", train_batch_size=32)
+    cs = Game.CANONICAL_SHAPE()
+    experiment_name = "test"
+    iteration = 0
+
+    exp_dir = str(tmp_path / "experiment")
+    paths = config.resolve_paths(exp_dir)
+    for key in ("checkpoint", "history", "tmp_history"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
+    nn = NNWrapper(Game, nnargs)
+    nn.save_checkpoint(paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt")
+    del nn
+
+    # Plant a stale history file
+    stale_c = torch.randn(10, cs[0], cs[1], cs[2])
+    stale_v = torch.randn(10, Game.NUM_PLAYERS() + 1)
+    stale_pi = torch.randn(10, Game.NUM_MOVES())
+    save_compressed(stale_c, os.path.join(paths["history"], f"{iteration:04d}-9999-canonical-10.ptz"))
+    save_compressed(stale_v, os.path.join(paths["history"], f"{iteration:04d}-9999-v-10.ptz"))
+    save_compressed(stale_pi, os.path.join(paths["history"], f"{iteration:04d}-9999-pi-10.ptz"))
+
+    # Create real tmp_history data
+    n = 60
+    c = torch.randn(n, cs[0], cs[1], cs[2])
+    v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+    pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+    save_compressed(c, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-canonical-{n}.ptz"))
+    save_compressed(v, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-v-{n}.ptz"))
+    save_compressed(pi, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-pi-{n}.ptz"))
+
+    resample_by_surprise(config, paths, experiment_name, iteration)
+
+    # Stale file should be gone (replaced by new files)
+    all_hist = glob.glob(os.path.join(paths["history"], f"{iteration:04d}-*.ptz"))
+    stale_remaining = [f for f in all_hist if "9999" in f]
+    assert len(stale_remaining) == 0, "Stale history files should be cleared"
+
+
+def test_exploit_symmetries_idempotent_rerun(tmp_path):
+    """Simulate crash (leave raw+syms files), re-run, verify no duplicates."""
+    config = TrainConfig(game="connect4")
+    cs = Game.CANONICAL_SHAPE()
+    iteration = 0
+
+    tmp_hist = str(tmp_path / "tmp_history")
+    os.makedirs(tmp_hist, exist_ok=True)
+    paths = {"tmp_history": tmp_hist}
+
+    # Create raw history files
+    n = 30
+    c = torch.randn(n, cs[0], cs[1], cs[2])
+    v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+    pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+    save_compressed(c, os.path.join(tmp_hist, f"{iteration:04d}-0000-canonical-{n}.ptz"))
+    save_compressed(v, os.path.join(tmp_hist, f"{iteration:04d}-0000-v-{n}.ptz"))
+    save_compressed(pi, os.path.join(tmp_hist, f"{iteration:04d}-0000-pi-{n}.ptz"))
+
+    # First run — produces syms files and deletes raw
+    exploit_symmetries(config, paths, iteration)
+    syms_triples_1 = glob_file_triples(tmp_hist, f"{iteration:04d}-*-syms-canonical-*.ptz")
+    total_1 = sum(s for _, _, _, s in syms_triples_1)
+    expected = n * Game.NUM_SYMMETRIES()
+    assert total_1 == expected
+
+    # Simulate crash: re-add raw files alongside existing syms files
+    save_compressed(c, os.path.join(tmp_hist, f"{iteration:04d}-0000-canonical-{n}.ptz"))
+    save_compressed(v, os.path.join(tmp_hist, f"{iteration:04d}-0000-v-{n}.ptz"))
+    save_compressed(pi, os.path.join(tmp_hist, f"{iteration:04d}-0000-pi-{n}.ptz"))
+
+    # Re-run — should clean stale syms before processing
+    exploit_symmetries(config, paths, iteration)
+    syms_triples_2 = glob_file_triples(tmp_hist, f"{iteration:04d}-*-syms-canonical-*.ptz")
+    total_2 = sum(s for _, _, _, s in syms_triples_2)
+    assert total_2 == expected, \
+        f"Re-run produced {total_2} samples, expected {expected} (no duplicates)"
+
+
+def test_resample_zero_loss_guard(tmp_path):
+    """All-zero loss produces uniform copies instead of NaN."""
+    config = TrainConfig(game="connect4", train_batch_size=32)
+    cs = Game.CANONICAL_SHAPE()
+    experiment_name = "test"
+    iteration = 0
+
+    exp_dir = str(tmp_path / "experiment")
+    paths = config.resolve_paths(exp_dir)
+    for key in ("checkpoint", "history", "tmp_history"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    # Create a trivial network and checkpoint
+    nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
+    nn = NNWrapper(Game, nnargs)
+    nn.save_checkpoint(paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt")
+    del nn
+
+    # Create tmp_history with all-zero inputs (should produce zero loss)
+    n = 40
+    c = torch.zeros(n, cs[0], cs[1], cs[2])
+    # Use uniform distribution for v and pi (mimics zero-loss scenario)
+    v = torch.full((n, Game.NUM_PLAYERS() + 1), 1.0 / (Game.NUM_PLAYERS() + 1))
+    pi = torch.full((n, Game.NUM_MOVES()), 1.0 / Game.NUM_MOVES())
+    save_compressed(c, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-canonical-{n}.ptz"))
+    save_compressed(v, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-v-{n}.ptz"))
+    save_compressed(pi, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-pi-{n}.ptz"))
+
+    # Should not crash (previously would NaN from 0/0)
+    resample_by_surprise(config, paths, experiment_name, iteration)
+
+    # Verify history files were written with valid data
+    hist_triples = glob_file_triples(paths["history"], f"{iteration:04d}-*-canonical-*.ptz")
+    assert len(hist_triples) > 0, "History files should be written even with zero loss"
+    total_resampled = sum(s for _, _, _, s in hist_triples)
+    # With uniform copies (each sample copied once), output should equal input
+    assert total_resampled == n, \
+        f"Expected {n} samples (uniform copies), got {total_resampled}"
+
+
+def test_exploit_symmetries_then_resample_pipeline(tmp_path):
+    """Full pipeline: exploit_symmetries → resample_by_surprise on disk."""
+    config = TrainConfig(game="connect4", train_batch_size=32)
+    cs = Game.CANONICAL_SHAPE()
+    experiment_name = "test"
+    iteration = 0
+
+    exp_dir = str(tmp_path / "experiment")
+    paths = config.resolve_paths(exp_dir)
+    for key in ("checkpoint", "history", "tmp_history"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
+    nn = NNWrapper(Game, nnargs)
+    nn.save_checkpoint(paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt")
+    del nn
+
+    # Create raw history (simulating hist_saver output)
+    n = 50
+    c = torch.randn(n, cs[0], cs[1], cs[2])
+    v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+    pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+    save_compressed(c, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-canonical-{n}.ptz"))
+    save_compressed(v, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-v-{n}.ptz"))
+    save_compressed(pi, os.path.join(paths["tmp_history"], f"{iteration:04d}-0000-pi-{n}.ptz"))
+
+    # Step 1: exploit_symmetries (raw → syms in tmp_history)
+    exploit_symmetries(config, paths, iteration)
+
+    # Verify syms files exist in tmp_history
+    syms_triples = glob_file_triples(paths["tmp_history"], f"{iteration:04d}-*-canonical-*.ptz")
+    assert len(syms_triples) > 0, "Syms files should exist after exploit_symmetries"
+    total_syms = sum(s for _, _, _, s in syms_triples)
+    assert total_syms == n * Game.NUM_SYMMETRIES()
+
+    # Step 2: resample_by_surprise (tmp_history → history)
+    resample_by_surprise(config, paths, experiment_name, iteration)
+
+    # Verify final history files
+    hist_triples = glob_file_triples(paths["history"], f"{iteration:04d}-*-canonical-*.ptz")
+    assert len(hist_triples) > 0, "History files should exist after resampling"
+    total_resampled = sum(s for _, _, _, s in hist_triples)
+    assert total_resampled > 0
+
+    # tmp_history should be cleaned
+    tmp_remaining = glob.glob(os.path.join(paths["tmp_history"], f"{iteration:04d}-*.ptz"))
+    assert len(tmp_remaining) == 0, "tmp_history should be cleaned after resampling"

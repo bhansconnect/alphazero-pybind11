@@ -415,9 +415,4 @@ void TawlbwrddGS::play_move(uint32_t move) {
   return out;
 }
 
-void TawlbwrddGS::minimize_storage() {
-  repetition_counts_ = {};
-  board_intern_ = nullptr;
-}
-
 }  // namespace alphazero::tawlbwrdd_gs

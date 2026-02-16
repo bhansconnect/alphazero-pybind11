@@ -12,15 +12,14 @@
 #include "concurrent_queue.h"
 #include "dll_export.h"
 #include "game_state.h"
-#include "lru_cache.h"
+#include "s3fifo_cache.h"
 #include "mcts.h"
 
 namespace alphazero {
 
 enum class EvalType : uint8_t { NN = 0, RANDOM = 1, PLAYOUT = 2 };
 
-using Cache = ShardedLRUCache<GameStateKeyWrapper,
-                              std::tuple<Vector<float>, Vector<float>>>;
+using Cache = ShardedS3FIFOCache;
 
 using namespace std::chrono_literals;
 
@@ -33,7 +32,7 @@ struct PendingHistory {
 
 struct GameData {
   std::unique_ptr<GameState> gs;
-  std::shared_ptr<GameState> leaf;
+  uint64_t leaf_hash = 0;
   std::vector<MCTS> mcts;
   Tensor<float, 3> canonical;
   Vector<float> v;

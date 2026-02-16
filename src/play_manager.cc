@@ -52,9 +52,12 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
   }
   if (params_.max_cache_size > 0) {
     auto per_group = params_.max_cache_size / num_model_groups_;
+    auto ghost_per_group = per_group * 9 / 10;
+    auto nm = static_cast<uint32_t>(base_gs_->num_moves());
+    auto nv = static_cast<uint32_t>(base_gs_->num_players() + 1);
     for (auto i = 0U; i < num_model_groups_; ++i)
       caches_.push_back(
-          Cache{per_group, params_.cache_shards, per_group});
+          Cache{per_group, params_.cache_shards, ghost_per_group, nm, nv});
   }
 
   // 6. Init per-perm score tracking
@@ -282,8 +285,6 @@ void PlayManager::play() {
     auto& mcts = game.mcts[cp];
     auto leaf = mcts.find_leaf(*game.gs);
 
-    // Non-NN players: evaluate inline before minimize_storage so that
-    // playout rollouts retain full game state (repetition history, etc.).
     auto group = game.seat_perm[cp];
     auto et = eval_types_.empty() ? EvalType::NN : eval_types_[group];
     if (et != EvalType::NN) {
@@ -297,12 +298,10 @@ void PlayManager::play() {
     }
 
     game.canonical = leaf->canonicalized();
-    // Minimize the storage of the leaf node. It is only used as a hash key and
-    // network input.
-    leaf->minimize_storage();
-    game.leaf = std::move(leaf);
+    game.leaf_hash = hash_game_state(*leaf);
+
     if (params_.max_cache_size > 0) {
-      if (caches_[group].find_into(game.leaf, game.v, game.pi)) {
+      if (caches_[group].find(game.leaf_hash, game.pi.data(), game.v.data())) {
         awaiting_mcts_.push(i.value());
         continue;
       }
@@ -316,19 +315,22 @@ void PlayManager::update_inferences(const uint8_t group,
                                     const Eigen::Ref<const Matrix<float>>& v,
                                     const Eigen::Ref<const Matrix<float>>& pi) {
   AZ_ZONE_SCOPED;
-  std::vector<GameStateKeyWrapper> keys;
-  std::vector<std::tuple<Vector<float>, Vector<float>>> values;
+  std::vector<uint64_t> hashes;
+  std::vector<const float*> policies;
+  std::vector<const float*> vals;
   for (auto i = 0UL; i < game_indices.size(); ++i) {
     auto& game = games_[game_indices[i]];
     game.v = v.row(i);
     game.pi = pi.row(i);
     if (params_.max_cache_size > 0) {
-      keys.emplace_back(game.leaf);
-      values.emplace_back(Vector<float>{game.v}, Vector<float>{game.pi});
+      hashes.push_back(game.leaf_hash);
+      policies.push_back(game.pi.data());
+      vals.push_back(game.v.data());
     }
   }
   if (params_.max_cache_size > 0) {
-    caches_[group].insert_many(keys, values);
+    caches_[group].insert_many(hashes.data(), policies.data(), vals.data(),
+                               hashes.size());
   }
   awaiting_mcts_.push_many(game_indices);
 }

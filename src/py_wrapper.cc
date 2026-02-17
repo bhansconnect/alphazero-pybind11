@@ -202,6 +202,8 @@ PYBIND11_MODULE(alphazero, m) {
            py::arg("hash"), py::arg("policy"), py::arg("value"))
       .def("hits", &S3FIFOCache::hits)
       .def("misses", &S3FIFOCache::misses)
+      .def("evictions", &S3FIFOCache::evictions)
+      .def("reinserts", &S3FIFOCache::reinserts)
       .def("size", &S3FIFOCache::size)
       .def("max_size", &S3FIFOCache::max_size);
 

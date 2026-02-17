@@ -68,9 +68,9 @@ class PlayerConfig:
             net_str = os.path.basename(self.network_path)
         else:
             net_str = "random"
-        time_str = f"{self.think_time}s" if self.think_time else "unlimited"
-        node_str = str(self.node_limit) if self.node_limit else "unlimited"
-        return f"AI(net={net_str}, time={time_str}, nodes={node_str}, temp={self.temperature})"
+        time_str = f"{self.think_time}s" if self.think_time else "none"
+        node_str = str(self.node_limit) if self.node_limit else "none"
+        return f"AI(net={net_str}, nodes={node_str}, time={time_str}, temp={self.temperature})"
 
 
 class PlayContext:
@@ -81,9 +81,11 @@ class PlayContext:
         self.game_class = game_class
         self.players = [PlayerConfig(), PlayerConfig()]
         self.auto_play = False
+        self.auto_full = False
         self.cpuct = DEFAULT_CPUCT
         self.fpu_reduction = DEFAULT_FPU_REDUCTION
         self.cache = create_cache(game_class, cache_size)
+        self.tree_reuse = True
 
 
 def create_mcts(game_class, cpuct=DEFAULT_CPUCT, fpu_reduction=DEFAULT_FPU_REDUCTION):
@@ -97,6 +99,20 @@ def create_mcts(game_class, cpuct=DEFAULT_CPUCT, fpu_reduction=DEFAULT_FPU_REDUC
         fpu_reduction,
         game_class().relative_values(),
     )
+
+
+def advance_mcts_trees(ctx, action):
+    """Advance all MCTS trees to reflect the played move (tree reuse)."""
+    if not ctx.tree_reuse:
+        for p in ctx.players:
+            p.mcts = None
+        return
+    for p in ctx.players:
+        if p.mcts is not None:
+            try:
+                p.mcts.update_root(ctx.game, action)
+            except Exception:
+                p.mcts = None
 
 
 def apply_temperature(probs, temperature):
@@ -206,7 +222,6 @@ def get_ai_move(ctx, player_idx, valids):
     """Get AI move. Returns (action, probs, source, sims, wld)."""
     probs, source, sims, wld = get_ai_probs(ctx, player_idx, valids)
     action = np.random.choice(len(probs), p=probs)
-    ctx.players[player_idx].mcts = None
     return action, probs, source, sims, wld
 
 
@@ -526,6 +541,9 @@ def print_status(ctx):
     """Print current player configuration."""
     for i in range(2):
         print(f"  Player {i}: {ctx.players[i]}")
+    reuse_str = "on" if ctx.tree_reuse else "off"
+    cache_str = str(ctx.cache.max_size()) if ctx.cache is not None else "off"
+    print(f"  Tree reuse: {reuse_str}, Cache: {cache_str}")
 
 
 def handle_config_command(parts, ctx, game_name, base_dir):
@@ -611,8 +629,16 @@ def parse_meta_command(cmd, ctx, game_name="", base_dir="data"):
         return "status"
     if lower in ["v", "valid", "moves"]:
         return "valid"
-    if lower == "auto":
-        return "auto"
+    if lower.startswith("auto"):
+        sub = lower.split()
+        if len(sub) >= 2 and sub[1] in ("full", "f"):
+            return "auto-full"
+        if len(sub) >= 2 and sub[1] in ("step", "s"):
+            return "auto-step"
+        choice = input("  Auto mode: [s]tep (press Enter each move) or [f]ull (no pauses)? ").strip().lower()
+        if choice in ("f", "full"):
+            return "auto-full"
+        return "auto-step"
     if lower == "manual":
         return "manual"
     parts = lower.split()
@@ -629,7 +655,7 @@ def print_generic_help():
     print("  valid / v  - List valid moves")
     print("  help / h   - Show this help")
     print("  status / s - Show player configuration")
-    print("  auto       - Enable AI auto-play")
+    print("  auto       - Enable AI auto-play (step or full)")
     print("  manual     - Disable AI auto-play")
     print("  quit / q   - Quit game")
     print("\nAI configuration:")
@@ -724,6 +750,63 @@ def resolve_game(arg, base_dir):
 # ---------------------------------------------------------------------------
 
 
+def _prompt_value(prompt, default, parse_fn, allow_none=False):
+    """Prompt for a value with a default. Returns parsed value or default."""
+    default_str = str(default) if default is not None else "none"
+    raw = input(f"  {prompt} [{default_str}]: ").strip()
+    if not raw:
+        return default
+    if allow_none and raw.lower() in ("none", "off", "0"):
+        return None
+    try:
+        return parse_fn(raw)
+    except (ValueError, TypeError):
+        print(f"  Invalid value, using default: {default_str}")
+        return default
+
+
+def _prompt_bool(prompt, default):
+    """Prompt for a boolean with a default."""
+    default_str = "on" if default else "off"
+    raw = input(f"  {prompt} [{default_str}]: ").strip().lower()
+    if not raw:
+        return default
+    return raw in ("on", "true", "1", "yes", "y")
+
+
+def prompt_ai_config(ctx, args):
+    """Prompt for key AI settings at startup."""
+    print("\n=== AI Configuration ===")
+
+    # Node limit
+    node_default = args.nodes if args.nodes is not None else DEFAULT_NODE_LIMIT
+    node_limit = _prompt_value("Node limit per move", node_default, int)
+    for p in ctx.players:
+        if p.is_ai:
+            p.node_limit = node_limit
+
+    # Think time
+    time_default = args.think_time
+    think_time = _prompt_value("Think time in seconds", time_default, float,
+                               allow_none=True)
+    for p in ctx.players:
+        if p.is_ai:
+            p.think_time = think_time
+            if think_time is not None:
+                p.node_limit = None
+
+    # Tree reuse
+    ctx.tree_reuse = _prompt_bool("Tree reuse", ctx.tree_reuse)
+
+    # Cache size
+    cache_default = args.cache_size
+    cache_size = _prompt_value("Cache size", cache_default, int)
+    if cache_size and cache_size > 0:
+        ctx.cache = create_cache(ctx.game_class, cache_size)
+    else:
+        ctx.cache = None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Play against AI")
     parser.add_argument(
@@ -738,35 +821,28 @@ def main():
         "--base-dir", default="data", help="Base data directory (default: data)"
     )
     parser.add_argument(
-        "--cache_size", type=int, default=0, help="S3-FIFO cache size (default: 0, disabled)"
+        "--cache_size", type=int, default=10000, help="S3-FIFO cache size (default: 10000)"
     )
     args = parser.parse_args()
 
     game_name, Game = resolve_game(args.game_or_config, args.base_dir)
     ui = get_game_ui(game_name)
 
-    # Offer variant selection for games that support it (e.g., Star Gambit)
-    variant = ui.select_variant()
-    if variant and variant != game_name:
-        if variant in GAME_REGISTRY:
-            game_name = variant
-            cls_name = GAME_REGISTRY[variant]
-            Game = getattr(alphazero, cls_name)
-            ui = get_game_ui(game_name)
+    # Offer variant selection only when a base game name is given on CLI
+    # (not in auto-discover mode, where the user already picked a specific game)
+    if args.game_or_config is not None:
+        variant = ui.select_variant()
+        if variant and variant != game_name:
+            if variant in GAME_REGISTRY:
+                game_name = variant
+                cls_name = GAME_REGISTRY[variant]
+                Game = getattr(alphazero, cls_name)
+                ui = get_game_ui(game_name)
 
     print(f"\n=== {game_name} Interactive Player ===\n")
 
     gs = Game()
     ctx = PlayContext(gs, Game, cache_size=args.cache_size)
-
-    # Apply CLI overrides to AI defaults
-    if args.think_time is not None:
-        for p in ctx.players:
-            p.think_time = args.think_time
-            p.node_limit = None
-    if args.nodes is not None:
-        for p in ctx.players:
-            p.node_limit = args.nodes
 
     # Mode selection
     print("Select mode:")
@@ -786,6 +862,8 @@ def main():
         ctx.players[0].is_ai = True
         ctx.players[1].is_ai = True
         ctx.auto_play = True
+        full = input("Fully automatic (no pauses)? [y]/n: ").strip().lower()
+        ctx.auto_full = full not in ("n", "no")
     else:  # Default: mode 2
         ctx.players[0].is_ai = False
         ctx.players[1].is_ai = True
@@ -793,10 +871,11 @@ def main():
     # Network selection and configuration
     if ctx.players[0].is_ai or ctx.players[1].is_ai:
         select_network_interactive(ctx, game_name, args.base_dir)
+        prompt_ai_config(ctx, args)
 
-        print("\n=== AI Configuration ===")
-        print("Adjust settings (or Enter to start):")
+        print()
         print_status(ctx)
+        print("\nFine-tune settings or Enter to start (type 'help' for commands):")
 
         while True:
             cmd = input("\nConfig> ").strip()
@@ -809,6 +888,8 @@ def main():
                 print_generic_help()
             elif result == "status":
                 print_status(ctx)
+            elif result is None:
+                print(f"Unknown command: {cmd}. Type 'help' for available commands.")
 
     print("\nStarting game...")
 
@@ -827,6 +908,8 @@ def main():
                 print(f"\nPlayer {winners[0]} wins!")
             else:
                 print("\nDraw!")
+            if ctx.cache is not None:
+                print_cache_stats(ctx.cache)
             break
 
         valids = np.array(ctx.game.valid_moves())
@@ -843,13 +926,14 @@ def main():
                 print(f"\nAI (P{current}) [{source}]")
                 ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
 
-                # Pause in AI vs AI to let user watch
-                if ctx.players[0].is_ai and ctx.players[1].is_ai:
+                # Pause in AI vs AI to let user watch (unless fully auto)
+                if ctx.players[0].is_ai and ctx.players[1].is_ai and not ctx.auto_full:
                     input("Press Enter to see move...")
 
                 print(
                     f"\n>>> Plays: {ui.format_move(ctx.game, action)}  [{probs[action]*100:.1f}%]"
                 )
+                advance_mcts_trees(ctx, action)
                 history.append(ctx.game.copy())
                 ctx.game.play_move(action)
             else:
@@ -873,6 +957,8 @@ def main():
                     if meta == "undo":
                         if history:
                             ctx.game = history.pop()
+                            for p in ctx.players:
+                                p.mcts = None
                             print("Move undone")
                             break
                         print("No moves to undo")
@@ -886,9 +972,10 @@ def main():
                             prob_str = f"  [{probs[aid]*100:5.1f}%]"
                             print(f"  {aid:4d}: {desc}{prob_str}")
                         continue
-                    if meta == "auto":
+                    if meta in ("auto-step", "auto-full"):
                         ctx.auto_play = True
-                        print("Auto-play enabled")
+                        ctx.auto_full = meta == "auto-full"
+                        print(f"Auto-play enabled ({meta.split('-')[1]})")
                         break
                     if meta == "config":
                         continue
@@ -897,9 +984,9 @@ def main():
                     action = ui.parse_move(ctx.game, cmd, valids)
                     if action is not None:
                         print(f"Playing: {ui.format_move(ctx.game, action)}")
+                        advance_mcts_trees(ctx, action)
                         history.append(ctx.game.copy())
                         ctx.game.play_move(action)
-                        pcfg.mcts = None
                         break
                     print(
                         "Invalid move. Type 'help' for commands, 'valid' for valid moves."
@@ -930,6 +1017,8 @@ def main():
                 if meta == "undo":
                     if history:
                         ctx.game = history.pop()
+                        for p in ctx.players:
+                            p.mcts = None
                         print("Move undone")
                         break
                     print("No moves to undo")
@@ -947,9 +1036,10 @@ def main():
                         )
                         print(f"  {aid:4d}: {desc}{prob_str}")
                     continue
-                if meta == "auto":
+                if meta in ("auto-step", "auto-full"):
                     ctx.auto_play = True
-                    print("Auto-play enabled")
+                    ctx.auto_full = meta == "auto-full"
+                    print(f"Auto-play enabled ({meta.split('-')[1]})")
                     break
                 if meta == "config":
                     continue
@@ -958,6 +1048,7 @@ def main():
                 action = ui.parse_move(ctx.game, cmd, valids)
                 if action is not None:
                     print(f"Playing: {ui.format_move(ctx.game, action)}")
+                    advance_mcts_trees(ctx, action)
                     history.append(ctx.game.copy())
                     ctx.game.play_move(action)
                     break

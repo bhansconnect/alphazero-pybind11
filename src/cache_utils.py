@@ -36,6 +36,18 @@ def cached_inference(cache, leaf, agent):
     return v, pi, False
 
 
+def create_sharded_cache(game_class, cache_size, shards=None):
+    """Create a ShardedS3FIFOCache for PlayManager, or None if cache_size <= 0."""
+    if cache_size <= 0:
+        return None
+    if shards is None:
+        shards = 1
+    num_moves = game_class.NUM_MOVES()
+    num_values = game_class.NUM_PLAYERS() + 1
+    ghost_size = cache_size * 9 // 10
+    return alphazero.ShardedS3FIFOCache(cache_size, shards, ghost_size, num_moves, num_values)
+
+
 def print_cache_stats(cache):
     """Print cache hit rate and saturation."""
     if cache is None:
@@ -45,3 +57,15 @@ def print_cache_stats(cache):
     if total == 0:
         return
     print(f"Cache: {hits/total:.1%} hit rate, {cache.size()}/{cache.max_size()} entries")
+
+
+def print_sharded_cache_stats(cache, label="Shared cache"):
+    """Print stats for a ShardedS3FIFOCache."""
+    if cache is None:
+        return
+    hits, misses = cache.hits(), cache.misses()
+    total = hits + misses
+    if total == 0:
+        return
+    print(f"{label}: {hits/total:.1%} hit rate, {cache.size()}/{cache.max_size()} entries"
+          f" ({hits} hits, {misses} misses, {cache.evictions()} evictions, {cache.reinserts()} reinserts)")

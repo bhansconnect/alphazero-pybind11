@@ -38,7 +38,11 @@ static std::tuple<Vector<float>, Vector<float>> playout_eval_impl(
 
   auto scores = sim->scores();
   if (scores.has_value()) {
-    return {scores.value(), policy};
+    auto v = scores.value();
+    if (gs.relative_values()) {
+      v = absolute_to_relative(v, gs.current_player(), gs.num_players());
+    }
+    return {v, policy};
   }
   auto values = Vector<float>{gs.num_players() + 1};
   values.setConstant(1.0 / (gs.num_players() + 1));

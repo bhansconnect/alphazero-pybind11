@@ -169,6 +169,7 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
   // children uses the actual evaluation rather than the default of 0.
   if (root_.n == 0) {
     root_.v = value(root_.player) + value(num_players_) / num_players_;
+    root_.d = value(num_players_);
   }
   ++depth_;
   ++root_.n;

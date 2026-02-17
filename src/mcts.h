@@ -53,11 +53,17 @@ class DLLEXPORT MCTS {
   [[nodiscard]] Vector<float> root_value() const {
     float q = 0;
     float d = 0;
+    bool found = false;
     for (const auto& c : root_.children) {
       if (c.n > 0 && c.q > q) {
         q = c.q;
         d = c.d;
+        found = true;
       }
+    }
+    if (!found && root_.n > 0) {
+      q = root_.v;
+      d = root_.d;
     }
     auto w = q - d / num_players_;
     auto l = 1.0 - w - d;

@@ -45,7 +45,10 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     seat_perms_ = params_.seat_perms;
   }
 
-  // 5. Create per-model-group queues and caches
+  // 5. Copy seat_visits overrides
+  seat_visits_ = params_.seat_visits;
+
+  // 6. Create per-model-group queues and caches
   for (auto i = 0U; i < num_model_groups_; ++i) {
     awaiting_inference_.push_back(
         std::make_unique<ConcurrentQueue<uint32_t>>());
@@ -57,10 +60,10 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     auto nv = static_cast<uint32_t>(base_gs_->num_players() + 1);
     for (auto i = 0U; i < num_model_groups_; ++i)
       caches_.push_back(
-          Cache{per_group, params_.cache_shards, ghost_per_group, nm, nv});
+          std::make_shared<Cache>(per_group, params_.cache_shards, ghost_per_group, nm, nv));
   }
 
-  // 6. Init per-perm score tracking
+  // 7. Init per-perm score tracking
   for (size_t p = 0; p < seat_perms_.size(); ++p) {
     PermScores ps;
     ps.scores = Vector<float>{base_gs_->num_players() + 1};
@@ -68,7 +71,7 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     perm_scores_.push_back(std::move(ps));
   }
 
-  // 7. Init games with seat permutations
+  // 8. Init games with seat permutations
   for (auto i = 0U; i < params_.concurrent_games; ++i) {
     auto gd = GameData{};
     gd.gs = base_gs_->copy();
@@ -114,8 +117,9 @@ void PlayManager::play() {
       mcts.process_result(*game.gs, game.v, game.pi,
                           params_.add_noise && !game.capped);
       auto group = game.seat_perm[cp];
-      auto goal_depth =
-          game.capped ? params_.playout_cap_depth : mcts_visits_[group];
+      auto goal_depth = game.capped ? params_.playout_cap_depth
+          : (seat_visits_.empty() ? mcts_visits_[group]
+                                  : seat_visits_[game.perm_index][cp]);
       if (mcts.depth() >= goal_depth) {
         // Actually play a move.
         auto temp = params_.start_temp;
@@ -300,8 +304,8 @@ void PlayManager::play() {
     game.canonical = leaf->canonicalized();
     game.leaf_hash = hash_game_state(*leaf);
 
-    if (params_.max_cache_size > 0) {
-      if (caches_[group].find(game.leaf_hash, game.pi.data(), game.v.data())) {
+    if (!caches_.empty() && caches_[group]) {
+      if (caches_[group]->find(game.leaf_hash, game.pi.data(), game.v.data())) {
         awaiting_mcts_.push(i.value());
         continue;
       }
@@ -322,17 +326,24 @@ void PlayManager::update_inferences(const uint8_t group,
     auto& game = games_[game_indices[i]];
     game.v = v.row(i);
     game.pi = pi.row(i);
-    if (params_.max_cache_size > 0) {
+    if (!caches_.empty() && caches_[group]) {
       hashes.push_back(game.leaf_hash);
       policies.push_back(game.pi.data());
       vals.push_back(game.v.data());
     }
   }
-  if (params_.max_cache_size > 0) {
-    caches_[group].insert_many(hashes.data(), policies.data(), vals.data(),
-                               hashes.size());
+  if (!caches_.empty() && caches_[group]) {
+    caches_[group]->insert_many(hashes.data(), policies.data(), vals.data(),
+                                hashes.size());
   }
   awaiting_mcts_.push_many(game_indices);
+}
+
+PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p,
+                         std::vector<std::shared_ptr<Cache>> external_caches)
+    : PlayManager(std::move(gs), [&]{ p.max_cache_size = 0; return p; }())
+{
+  caches_ = std::move(external_caches);
 }
 
 }  // namespace alphazero

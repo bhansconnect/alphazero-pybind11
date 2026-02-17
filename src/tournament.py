@@ -32,6 +32,7 @@ import tqdm
 import alphazero
 import neural_net
 from config import TrainConfig, GAME_REGISTRY, load_config
+from cache_utils import create_sharded_cache, print_sharded_cache_stats
 from game_runner import (
     GameRunner,
     GRArgs,
@@ -89,8 +90,12 @@ def calc_elo(past_elo, win_rates):
 
 
 @tracy_zone
-def pit_agents(config, Game, players, mcts_visits, bs, name, tree_reuse=True, cache_size=0):
+def pit_agents(config, Game, players, mcts_visits, bs, name, tree_reuse=True, cache_size=0, caches=None):
     """Play agents against each other across all seat permutations in one run.
+
+    Args:
+        caches: optional list of shared_ptr<ShardedS3FIFOCache> per model group.
+                When provided, cache_size is ignored (set to 0 internally).
 
     Returns list of win rates per player index.
     """
@@ -99,7 +104,10 @@ def pit_agents(config, Game, players, mcts_visits, bs, name, tree_reuse=True, ca
 
     # Build model groups from player identity
     params = base_params(config, 0.5, bs, cb)
-    params.max_cache_size = cache_size
+    if caches is not None:
+        params.max_cache_size = 0
+    else:
+        params.max_cache_size = cache_size
     params.tree_reuse = tree_reuse
     params.mcts_visits = list(mcts_visits) if not isinstance(mcts_visits, list) else mcts_visits
     # Expand scalar mcts_visits to per-player
@@ -118,6 +126,14 @@ def pit_agents(config, Game, players, mcts_visits, bs, name, tree_reuse=True, ca
         seat_perms.append(perm)
     params.seat_perms = seat_perms
 
+    # Per-perm, per-seat visit counts (rotated to match seat permutations)
+    visits = params.mcts_visits
+    seat_visits = []
+    for i in range(num_players):
+        perm_visits = [visits[(j + i) % num_players] for j in range(num_players)]
+        seat_visits.append(perm_visits)
+    params.seat_visits = seat_visits
+
     n = bs * cb * num_players  # all perms at once
     params.games_to_play = n
     set_eval_types(params, players)
@@ -132,7 +148,10 @@ def pit_agents(config, Game, players, mcts_visits, bs, name, tree_reuse=True, ca
             seen_groups[g] = i
         unique_players[i] = players[seen_groups[g]]
 
-    pm = alphazero.PlayManager(Game(), params)
+    if caches is not None:
+        pm = alphazero.PlayManager(Game(), params, caches=caches)
+    else:
+        pm = alphazero.PlayManager(Game(), params)
     grargs = GRArgs(
         title=name,
         game=Game,
@@ -265,6 +284,38 @@ def load_agent(Game, agent_name, model_path, mcts_visits, rand_agents):
 # ---------------------------------------------------------------------------
 
 
+def _is_nn_agent(agent_name, rand_agents):
+    """Return True if agent_name refers to a neural network agent."""
+    if agent_name == "dummy" or agent_name == "playout":
+        return False
+    if isinstance(agent_name, (int, float)) or agent_name in rand_agents:
+        return False
+    return True
+
+
+def _build_matchup_caches(Game, agents, players, model_groups, cache_dict):
+    """Build per-model-group cache list for a matchup from cache_dict.
+
+    Returns list of shared_ptr<ShardedS3FIFOCache> (with None for non-NN groups),
+    or None if no caches apply.
+    """
+    if not cache_dict:
+        return None
+    num_groups = max(model_groups) + 1
+    caches = [None] * num_groups
+    has_any = False
+    for player_idx in range(len(players)):
+        group = model_groups[player_idx]
+        if caches[group] is not None:
+            continue
+        # Find agent name for this player
+        agent_key = agents[player_idx] if player_idx < len(agents) else None
+        if agent_key is not None and agent_key in cache_dict:
+            caches[group] = cache_dict[agent_key]
+            has_any = True
+    return caches if has_any else None
+
+
 def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, cache_size=0):
     """Run a Monrad (Swiss-style) tournament."""
     if len(agents) % 2 == 1:
@@ -276,6 +327,13 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
     rankings = list(range(count))
     rounds = int(np.ceil(np.log2(count)))
     dist = count
+
+    # Pre-create shared caches for NN agents
+    cache_dict = {}
+    if cache_size > 0:
+        for a in agents:
+            if _is_nn_agent(a, rand_agents) and a not in cache_dict:
+                cache_dict[a] = create_sharded_cache(Game, cache_size)
 
     for r in range(rounds):
         print(f"Round {r + 1}/{rounds}")
@@ -348,6 +406,12 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
                 players[0] = p1
                 depths[0] = d1
 
+                # Build per-group caches for this matchup
+                matchup_agents = [agents[i]] + [agents[j]] * (Game.NUM_PLAYERS() - 1)
+                matchup_caches = _build_matchup_caches(
+                    Game, matchup_agents, players, list(range(Game.NUM_PLAYERS())), cache_dict
+                )
+
                 win_rates = pit_agents(
                     config,
                     Game,
@@ -355,7 +419,8 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
                     depths,
                     bs,
                     f"{_agent_label(agents[i])}-{_agent_label(agents[j])}",
-                    cache_size=cache_size,
+                    cache_size=0 if matchup_caches else cache_size,
+                    caches=matchup_caches,
                 )
 
                 win_matrix[i, j] = win_rates[0]
@@ -369,6 +434,10 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
         print(f"ELO: {np.array2string(elo, precision=0)}")
         print(f"Rankings: {rankings}")
 
+    # Print shared cache stats
+    for agent_name, cache in cache_dict.items():
+        print_sharded_cache_stats(cache, label=f"Cache[{_agent_label(agent_name)}]")
+
     return agents, elo, win_matrix
 
 
@@ -376,6 +445,13 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
     """Run a round-robin tournament."""
     count = len(agents)
     win_matrix = np.zeros((count, count))
+
+    # Pre-create shared caches for NN agents
+    cache_dict = {}
+    if cache_size > 0:
+        for a in agents:
+            if _is_nn_agent(a, rand_agents) and a not in cache_dict:
+                cache_dict[a] = create_sharded_cache(Game, cache_size)
 
     with tqdm.trange(count * (count - 1) // 2, desc="Pit Agents") as pbar:
         for i in range(count):
@@ -389,6 +465,11 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                 players[0] = p1
                 depths[0] = d1
 
+                matchup_agents = [agents[i]] + [agents[j]] * (Game.NUM_PLAYERS() - 1)
+                matchup_caches = _build_matchup_caches(
+                    Game, matchup_agents, players, list(range(Game.NUM_PLAYERS())), cache_dict
+                )
+
                 win_rates = pit_agents(
                     config,
                     Game,
@@ -396,7 +477,8 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                     depths,
                     bs,
                     f"{_agent_label(agents[i])}-{_agent_label(agents[j])}",
-                    cache_size=cache_size,
+                    cache_size=0 if matchup_caches else cache_size,
+                    caches=matchup_caches,
                 )
 
                 if Game.NUM_PLAYERS() == 2:
@@ -410,6 +492,12 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                 depths = [d1] * Game.NUM_PLAYERS()
                 players[0] = p2
                 depths[0] = d2
+
+                matchup_agents2 = [agents[j]] + [agents[i]] * (Game.NUM_PLAYERS() - 1)
+                matchup_caches2 = _build_matchup_caches(
+                    Game, matchup_agents2, players, list(range(Game.NUM_PLAYERS())), cache_dict
+                )
+
                 win_rates2 = pit_agents(
                     config,
                     Game,
@@ -417,7 +505,8 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                     depths,
                     bs,
                     f"{_agent_label(agents[j])}-{_agent_label(agents[i])}",
-                    cache_size=cache_size,
+                    cache_size=0 if matchup_caches2 else cache_size,
+                    caches=matchup_caches2,
                 )
 
                 wr1 = win_rates[0]
@@ -428,6 +517,10 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                 win_matrix[i, j] = wr1 / 2
                 win_matrix[j, i] = wr2 / 2
                 pbar.update()
+
+    # Print shared cache stats
+    for agent_name, cache in cache_dict.items():
+        print_sharded_cache_stats(cache, label=f"Cache[{_agent_label(agent_name)}]")
 
     elo = calc_elo(np.zeros(count), win_matrix)
     return agents, elo, win_matrix

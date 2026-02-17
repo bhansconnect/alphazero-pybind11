@@ -79,6 +79,7 @@ struct PlayParams {
   std::vector<EvalType> eval_type{};  // per player, empty = all NN
   std::vector<uint8_t> model_groups{};  // player → model_group_index (empty = identity)
   std::vector<std::vector<uint8_t>> seat_perms{};  // list of permutations (empty = no rotation)
+  std::vector<std::vector<uint32_t>> seat_visits{};  // per-perm, per-seat visit overrides
 };
 
 // This is a multithread safe game play manager.
@@ -87,6 +88,8 @@ struct PlayParams {
 class DLLEXPORT PlayManager {
  public:
   PlayManager(std::unique_ptr<GameState> gs, PlayParams p);
+  PlayManager(std::unique_ptr<GameState> gs, PlayParams p,
+              std::vector<std::shared_ptr<Cache>> external_caches);
 
   // play will keep playing games until all games are completed.
   void play();
@@ -189,40 +192,44 @@ class DLLEXPORT PlayManager {
   [[nodiscard]] size_t cache_size() const {
     size_t out = 0;
     for (auto& cache : caches_) {
-      out += cache.size();
+      if (cache) out += cache->size();
     }
     return out;
   };
   [[nodiscard]] size_t cache_hits() const {
     size_t out = 0;
     for (auto& cache : caches_) {
-      out += cache.hits();
+      if (cache) out += cache->hits();
     }
     return out;
   };
   [[nodiscard]] size_t cache_misses() const {
     size_t out = 0;
     for (auto& cache : caches_) {
-      out += cache.misses();
+      if (cache) out += cache->misses();
     }
     return out;
   };
   [[nodiscard]] size_t cache_evictions() const {
     size_t out = 0;
     for (auto& cache : caches_) {
-      out += cache.evictions();
+      if (cache) out += cache->evictions();
     }
     return out;
   };
   [[nodiscard]] size_t cache_reinserts() const {
     size_t out = 0;
     for (auto& cache : caches_) {
-      out += cache.reinserts();
+      if (cache) out += cache->reinserts();
     }
     return out;
   };
   [[nodiscard]] size_t cache_max_size() const {
-    return params_.max_cache_size;
+    size_t out = 0;
+    for (auto& cache : caches_) {
+      if (cache) out += cache->max_size();
+    }
+    return out;
   };
 
  private:
@@ -250,13 +257,14 @@ class DLLEXPORT PlayManager {
   std::vector<std::unique_ptr<ConcurrentQueue<uint32_t>>> awaiting_inference_;
   ConcurrentQueue<PlayHistory> history_;
 
-  std::vector<Cache> caches_;
+  std::vector<std::shared_ptr<Cache>> caches_;
 
   std::vector<uint8_t> model_groups_;       // computed from params (never empty)
   uint8_t num_model_groups_;
   std::vector<uint32_t> mcts_visits_;       // per-model-group
   std::vector<EvalType> eval_types_;        // per-model-group
   std::vector<std::vector<uint8_t>> seat_perms_;  // computed from params (never empty)
+  std::vector<std::vector<uint32_t>> seat_visits_;  // per-perm, per-seat visit overrides
   std::atomic<bool> eager_{false};          // GPU steal: true = hand off partial batches
 
   struct PermScores {

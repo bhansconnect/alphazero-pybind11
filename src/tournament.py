@@ -89,7 +89,7 @@ def calc_elo(past_elo, win_rates):
 
 
 @tracy_zone
-def pit_agents(config, Game, players, mcts_visits, bs, name, tree_reuse=True):
+def pit_agents(config, Game, players, mcts_visits, bs, name, tree_reuse=True, cache_size=0):
     """Play agents against each other across all seat permutations in one run.
 
     Returns list of win rates per player index.
@@ -99,7 +99,7 @@ def pit_agents(config, Game, players, mcts_visits, bs, name, tree_reuse=True):
 
     # Build model groups from player identity
     params = base_params(config, 0.5, bs, cb)
-    params.max_cache_size = 0  # Disable cache in arena
+    params.max_cache_size = cache_size
     params.tree_reuse = tree_reuse
     params.mcts_visits = list(mcts_visits) if not isinstance(mcts_visits, list) else mcts_visits
     # Expand scalar mcts_visits to per-player
@@ -265,7 +265,7 @@ def load_agent(Game, agent_name, model_path, mcts_visits, rand_agents):
 # ---------------------------------------------------------------------------
 
 
-def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents):
+def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, cache_size=0):
     """Run a Monrad (Swiss-style) tournament."""
     if len(agents) % 2 == 1:
         agents.insert(0, "dummy")
@@ -355,6 +355,7 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents):
                     depths,
                     bs,
                     f"{_agent_label(agents[i])}-{_agent_label(agents[j])}",
+                    cache_size=cache_size,
                 )
 
                 win_matrix[i, j] = win_rates[0]
@@ -371,7 +372,7 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents):
     return agents, elo, win_matrix
 
 
-def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agents):
+def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agents, cache_size=0):
     """Run a round-robin tournament."""
     count = len(agents)
     win_matrix = np.zeros((count, count))
@@ -395,6 +396,7 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                     depths,
                     bs,
                     f"{_agent_label(agents[i])}-{_agent_label(agents[j])}",
+                    cache_size=cache_size,
                 )
 
                 if Game.NUM_PLAYERS() == 2:
@@ -415,6 +417,7 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                     depths,
                     bs,
                     f"{_agent_label(agents[j])}-{_agent_label(agents[i])}",
+                    cache_size=cache_size,
                 )
 
                 wr1 = win_rates[0]
@@ -482,6 +485,9 @@ def parse_args():
     )
     parser.add_argument(
         "--base-dir", default="data", help="Base data directory (default: data)"
+    )
+    parser.add_argument(
+        "--cache_size", type=int, default=200000, help="S3-FIFO cache size (default: 200000)"
     )
     return parser.parse_args()
 
@@ -610,11 +616,13 @@ def main():
     # Run tournament
     if args.format == "monrad":
         agents, elo, win_matrix = run_monrad(
-            config, Game, agents, args.mcts_visits, args.batch_size, model_path, rand_agents
+            config, Game, agents, args.mcts_visits, args.batch_size, model_path, rand_agents,
+            cache_size=args.cache_size,
         )
     else:
         agents, elo, win_matrix = run_roundrobin(
-            config, Game, agents, args.mcts_visits, args.batch_size, model_path, rand_agents
+            config, Game, agents, args.mcts_visits, args.batch_size, model_path, rand_agents,
+            cache_size=args.cache_size,
         )
 
     # Print results

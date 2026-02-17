@@ -23,6 +23,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import alphazero
+from cache_utils import create_cache, cached_inference, print_cache_stats
 from config import GAME_REGISTRY
 from game_ui import get_game_ui
 
@@ -75,13 +76,14 @@ class PlayerConfig:
 class PlayContext:
     """Game context for play sessions."""
 
-    def __init__(self, game, game_class):
+    def __init__(self, game, game_class, cache_size=0):
         self.game = game
         self.game_class = game_class
         self.players = [PlayerConfig(), PlayerConfig()]
         self.auto_play = False
         self.cpuct = DEFAULT_CPUCT
         self.fpu_reduction = DEFAULT_FPU_REDUCTION
+        self.cache = create_cache(game_class, cache_size)
 
 
 def create_mcts(game_class, cpuct=DEFAULT_CPUCT, fpu_reduction=DEFAULT_FPU_REDUCTION):
@@ -110,7 +112,8 @@ def apply_temperature(probs, temperature):
         return scaled / scaled.sum()
 
 
-def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None, eval_type="random"):
+def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None, eval_type="random",
+                    cache=None):
     """Run MCTS search. Returns (visit_counts, num_simulations, wld)."""
     if time_limit is None and node_limit is None:
         node_limit = DEFAULT_NODE_LIMIT
@@ -133,10 +136,7 @@ def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None, eval_type
             v = np.full(gs.NUM_PLAYERS() + 1, 1.0 / (gs.NUM_PLAYERS() + 1))
             pi = np.ones(gs.NUM_MOVES()) / gs.NUM_MOVES()
         else:
-            canonical = torch.from_numpy(np.array(leaf.canonicalized()))
-            v, pi = agent.predict(canonical)
-            v = v.cpu().numpy().flatten()
-            pi = pi.cpu().numpy().flatten()
+            v, pi, _ = cached_inference(cache, leaf, agent)
 
         mcts.process_result(gs, v, pi, sims == 0)
         sims += 1
@@ -168,6 +168,7 @@ def get_ai_probs(ctx, player_idx, valids):
             time_limit=pcfg.think_time,
             node_limit=pcfg.node_limit,
             eval_type=pcfg.eval_type,
+            cache=ctx.cache,
         )
         if counts.sum() > 0:
             probs = counts.astype(float) / counts.sum()
@@ -736,6 +737,9 @@ def main():
     parser.add_argument(
         "--base-dir", default="data", help="Base data directory (default: data)"
     )
+    parser.add_argument(
+        "--cache_size", type=int, default=0, help="S3-FIFO cache size (default: 0, disabled)"
+    )
     args = parser.parse_args()
 
     game_name, Game = resolve_game(args.game_or_config, args.base_dir)
@@ -753,7 +757,7 @@ def main():
     print(f"\n=== {game_name} Interactive Player ===\n")
 
     gs = Game()
-    ctx = PlayContext(gs, Game)
+    ctx = PlayContext(gs, Game, cache_size=args.cache_size)
 
     # Apply CLI overrides to AI defaults
     if args.think_time is not None:

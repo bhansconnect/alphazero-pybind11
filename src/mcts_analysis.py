@@ -30,6 +30,7 @@ from game_runner import (
     GameRunner, GRArgs, RandPlayer, PlayoutPlayer, base_params, elo_prob,
     set_eval_types,
 )
+from cache_utils import create_cache, print_cache_stats
 from tournament import pit_agents, calc_elo
 
 np.set_printoptions(precision=3, suppress=True)
@@ -156,7 +157,7 @@ def select_checkpoint(checkpoints):
 # --- Phase 1: Interactive Configuration ---
 
 def interactive_config():
-    """Interactive configuration. Returns (config, Game, network_path, visit_counts, phases, use_playout)."""
+    """Interactive configuration. Returns (config, Game, network_path, visit_counts, phases, use_playout, cache_size)."""
     print("=== MCTS Threshold Analysis ===\n")
 
     # Game selection from registry
@@ -268,12 +269,20 @@ def interactive_config():
         phases = {"tournament", "analysis"}
     print(f"  -> {phases}\n")
 
-    return config, Game, network_path, visit_counts, phases, use_playout
+    # Cache size
+    cache_input = input("Cache size (0 to disable) [200000]: ").strip()
+    if cache_input:
+        cache_size = int(cache_input)
+    else:
+        cache_size = 200000
+    print(f"  -> cache_size={cache_size}\n")
+
+    return config, Game, network_path, visit_counts, phases, use_playout, cache_size
 
 
 # --- Phase 2: Elo Tournament (Round-Robin) ---
 
-def run_tournament(config, Game, network_path, visit_counts, use_playout=False):
+def run_tournament(config, Game, network_path, visit_counts, use_playout=False, cache_size=0):
     """Run round-robin Elo tournament between visit count configs.
 
     Returns (elo_ratings, win_matrix) indexed by visit_counts order.
@@ -318,6 +327,7 @@ def run_tournament(config, Game, network_path, visit_counts, use_playout=False):
                 win_rates = pit_agents(
                     config, Game, players, depths,
                     TOURNAMENT_BATCH_SIZE, name,
+                    cache_size=cache_size,
                 )
                 win_matrix[i, j] = win_rates[0]
                 win_matrix[j, i] = win_rates[1]
@@ -339,7 +349,7 @@ def run_tournament(config, Game, network_path, visit_counts, use_playout=False):
 
 # --- Phase 3: Policy & Value Analysis ---
 
-def run_analysis(config, Game, network_path, visit_counts, use_playout=False):
+def run_analysis(config, Game, network_path, visit_counts, use_playout=False, cache_size=0):
     """Run policy & value convergence analysis with batched inference.
 
     Plays ANALYSIS_GAMES concurrently, batching all NN inference calls across
@@ -375,6 +385,8 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False):
     active = list(range(ANALYSIS_GAMES))
     game_scores = [None] * ANALYSIS_GAMES  # final scores per game
 
+    cache = create_cache(Game, cache_size) if not isinstance(agent, str) else None
+
     print(f"Playing {ANALYSIS_GAMES} games with max {max_visits} visits per position...")
 
     total_positions = 0
@@ -403,29 +415,55 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False):
                 for i in range(n)
             ]
 
-            # Evaluate leaves
+            # Evaluate leaves (with cache for NN agent)
             if agent == "playout":
                 v_np, pi_np = alphazero.playout_eval_batch(leaves)
+                # process_result for all
+                for i in range(n):
+                    mcts_list[i].process_result(
+                        game_states[active[i]], v_np[i], pi_np[i], False
+                    )
             elif agent == "random":
                 # Random evaluation: uniform policy, equal value
                 np_ = num_players
                 v_np = np.full((n, np_ + 1), 1.0 / (np_ + 1), dtype=np.float32)
                 pi_np = np.full((n, num_moves), 1.0 / num_moves, dtype=np.float32)
+                for i in range(n):
+                    mcts_list[i].process_result(
+                        game_states[active[i]], v_np[i], pi_np[i], False
+                    )
             else:
-                # Stack canonicals into batch tensor
-                canonicals = [np.array(leaf.canonicalized()) for leaf in leaves]
-                batch = torch.from_numpy(np.stack(canonicals))
+                # NN agent with cache support
+                # Check cache for each leaf
+                miss_indices = []
+                leaf_hashes = [None] * n
+                for i in range(n):
+                    h = alphazero.hash_game_state(leaves[i])
+                    leaf_hashes[i] = h
+                    if cache is not None:
+                        result = cache.find(h, num_moves, num_players + 1)
+                        if result is not None:
+                            pi_cached, v_cached = result
+                            mcts_list[i].process_result(
+                                game_states[active[i]], v_cached, pi_cached, False
+                            )
+                            continue
+                    miss_indices.append(i)
 
-                # Single batched GPU inference
-                v_batch, pi_batch = agent.process(batch)
-                v_np = v_batch.cpu().numpy()
-                pi_np = pi_batch.cpu().numpy()
+                # Batch GPU inference for misses
+                if miss_indices:
+                    canonicals = [np.array(leaves[i].canonicalized()) for i in miss_indices]
+                    batch = torch.from_numpy(np.stack(canonicals))
+                    v_batch, pi_batch = agent.process(batch)
+                    v_miss = v_batch.cpu().numpy()
+                    pi_miss = pi_batch.cpu().numpy()
 
-            # process_result for each active game
-            for i in range(n):
-                mcts_list[i].process_result(
-                    game_states[active[i]], v_np[i], pi_np[i], False
-                )
+                    for j, i in enumerate(miss_indices):
+                        if cache is not None:
+                            cache.insert(leaf_hashes[i], pi_miss[j], v_miss[j])
+                        mcts_list[i].process_result(
+                            game_states[active[i]], v_miss[j], pi_miss[j], False
+                        )
 
             sims_done = sim + 1
 
@@ -435,8 +473,8 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False):
                     # probs(1.0) after 1 sim returns the prior policy
                     probs_arr = np.array(mcts_list[i].probs(1.0))
                     pos_policies[i][1] = probs_arr
-                    # Value from NN output of sim 1 (root was the leaf)
-                    pos_values[i][1] = float(v_np[i][0])
+                    # Value from root after first simulation
+                    pos_values[i][1] = float(mcts_list[i].root_value()[0])
 
             # Check if we hit any target visit count
             for vc in target_vcs:
@@ -652,6 +690,7 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False):
         for vc in sorted(regret_means.keys()):
             print(f"{vc:>8d} {regret_means[vc]:>10.4f}")
 
+    print_cache_stats(cache)
     del agent
     gc.collect()
     return metrics
@@ -922,17 +961,19 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
 
 
 def main():
-    config, Game, network_path, visit_counts, phases, use_playout = interactive_config()
+    config, Game, network_path, visit_counts, phases, use_playout, cache_size = interactive_config()
 
     elo = None
     win_matrix = None
     metrics = None
 
     if "tournament" in phases:
-        elo, win_matrix = run_tournament(config, Game, network_path, visit_counts, use_playout)
+        elo, win_matrix = run_tournament(config, Game, network_path, visit_counts, use_playout,
+                                         cache_size=cache_size)
 
     if "analysis" in phases:
-        metrics = run_analysis(config, Game, network_path, visit_counts, use_playout)
+        metrics = run_analysis(config, Game, network_path, visit_counts, use_playout,
+                               cache_size=cache_size)
 
     visualize_and_save(visit_counts, elo=elo, win_matrix=win_matrix, metrics=metrics)
 

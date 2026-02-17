@@ -8,6 +8,7 @@
 #include "opentafl_gs.h"
 #include "photosynthesis_gs.h"
 #include "play_manager.h"
+#include "s3fifo_cache.h"
 #include "star_gambit_gs.h"
 #include "pybind11/eigen.h"
 #include "pybind11/numpy.h"
@@ -177,6 +178,36 @@ PYBIND11_MODULE(alphazero, m) {
       .def("probs", &MCTS::probs)
       .def("depth", &MCTS::depth)
       .def_static("pick_move", &MCTS::pick_move);
+
+  py::class_<S3FIFOCache>(m, "S3FIFOCache")
+      .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t>(),
+           py::arg("max_size"), py::arg("ghost_size"),
+           py::arg("num_policy"), py::arg("num_value"))
+      .def("find",
+           [](S3FIFOCache& cache, uint64_t hash, uint32_t num_policy,
+              uint32_t num_value) -> py::object {
+             auto policy = py::array_t<float>(num_policy);
+             auto value = py::array_t<float>(num_value);
+             bool hit = cache.find(hash, policy.mutable_data(),
+                                   value.mutable_data());
+             if (!hit) return py::none();
+             return py::make_tuple(policy, value);
+           },
+           py::arg("hash"), py::arg("num_policy"), py::arg("num_value"))
+      .def("insert",
+           [](S3FIFOCache& cache, uint64_t hash,
+              py::array_t<float>& policy, py::array_t<float>& value) {
+             cache.insert(hash, policy.data(), value.data());
+           },
+           py::arg("hash"), py::arg("policy"), py::arg("value"))
+      .def("hits", &S3FIFOCache::hits)
+      .def("misses", &S3FIFOCache::misses)
+      .def("size", &S3FIFOCache::size)
+      .def("max_size", &S3FIFOCache::max_size);
+
+  m.def("hash_game_state",
+        [](const GameState& gs) { return hash_game_state(gs); },
+        py::arg("gs"));
 
   py::class_<GameData>(m, "GameData")
       .def(

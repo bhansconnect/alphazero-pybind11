@@ -10,6 +10,8 @@ import os
 import torch
 import numpy as np
 
+from cache_utils import create_cache, cached_inference
+
 np.set_printoptions(precision=3, suppress=True)
 
 
@@ -40,15 +42,13 @@ def move_to_string(move, height, width):
     return f"{chr(ord('a') + piece_w)}{piece_h + 1}-{chr(ord('a') + new_w)}{new_h + 1}"
 
 
-def eval_position(gs, mcts, agent, args, time_limit):
+def eval_position(gs, mcts, agent, args, time_limit, cache=None):
     height = gs.CANONICAL_SHAPE()[1]
     width = gs.CANONICAL_SHAPE()[2]
     start = time.time()
     while time.time() - start < time_limit:
         leaf = mcts.find_leaf(gs)
-        v, pi = agent.predict(torch.from_numpy(leaf.canonicalized()))
-        v = v.cpu().numpy()
-        pi = pi.cpu().numpy()
+        v, pi, _ = cached_inference(cache, leaf, agent)
         mcts.process_result(gs, v, pi, False)
 
     v, pi = agent.predict(torch.from_numpy(gs.canonicalized()))
@@ -142,6 +142,9 @@ if __name__ == "__main__":
         default="computer-brandubh",
         help="The game/ruleset being played.",
     )
+    parser.add_argument(
+        "--cache_size", type=int, default=0, help="S3-FIFO cache size (default: 0, disabled)"
+    )
     args = parser.parse_args()
 
     if args.game.lower() == "computer-brandubh":
@@ -175,6 +178,8 @@ if __name__ == "__main__":
 
     print(f"status Loaded network in {time.time() - start} seconds")
 
+    cache = create_cache(Game, args.cache_size)
+
     max_turns = 2**16 - 1
     gs = Game(max_turns)
     height = gs.CANONICAL_SHAPE()[1]
@@ -188,7 +193,7 @@ if __name__ == "__main__":
         while True:
             command = input().strip()
             if command.startswith("play"):
-                move = eval_position(gs, mcts, nn, args, time_limit)
+                move = eval_position(gs, mcts, nn, args, time_limit, cache=cache)
                 print(f"move {move_to_string(move, width, height)}", flush=True)
                 mcts.update_root(gs, move)
                 gs.play_move(move)

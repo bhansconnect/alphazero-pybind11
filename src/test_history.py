@@ -25,6 +25,7 @@ from game_runner import (
     glob_file_triples, _replace_size_in_path,
     StreamingCompressedDataset, load_reservoir, train,
     exploit_symmetries, resample_by_surprise,
+    _bootstrap_retrain, _bootstrap_train_phase,
 )
 from config import TrainConfig
 
@@ -760,11 +761,11 @@ def test_load_reservoir_empty(tmp_path):
 
 
 def test_bootstrap_retrain_with_reservoir(tmp_path):
-    """E2E: build source experiment with history + reservoir, bootstrap retrain with streaming.
+    """E2E: call _bootstrap_retrain with reservoir + window files.
 
-    Simulates the diff-arch bootstrap path: glob reservoir + window files,
-    create StreamingCompressedDataset, train phase 1 (all data) and phase 2
-    (window only), verify finite loss and checkpoint creation.
+    Simulates the diff-arch bootstrap path: build source data,
+    call _bootstrap_retrain directly, verify training happened
+    and checkpoint can be saved.
     """
     cs = Game.CANONICAL_SHAPE()
 
@@ -772,22 +773,21 @@ def test_bootstrap_retrain_with_reservoir(tmp_path):
     source_dir = tmp_path / "source"
     source_hist = source_dir / "history"
     source_res = source_dir / "reservoir"
-    source_ckpt = source_dir / "checkpoint"
-    for d in (source_hist, source_res, source_ckpt):
+    for d in (source_hist, source_res):
         d.mkdir(parents=True)
 
-    # Source has 5 iterations of history (iters 3-4 in window, 0-2 evicted to reservoir)
+    # Source has 5 iterations (iters 0-2 in reservoir, 3-4 in window/history)
     for i in range(5):
         n = 60
         c = torch.randn(n, cs[0], cs[1], cs[2])
         v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
         pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
-        dest = source_hist if i >= 3 else source_res  # iters 0-2 in reservoir, 3-4 in history
+        dest = source_hist if i >= 3 else source_res
         save_compressed(c, str(dest / f"{i:04d}-0000-canonical-{n}.ptz"))
         save_compressed(v, str(dest / f"{i:04d}-0000-v-{n}.ptz"))
         save_compressed(pi, str(dest / f"{i:04d}-0000-pi-{n}.ptz"))
 
-    source_n = 5  # source had 5 iterations
+    source_n = 5
 
     # --- Setup dest experiment ---
     dest_dir = tmp_path / "dest"
@@ -796,68 +796,88 @@ def test_bootstrap_retrain_with_reservoir(tmp_path):
     for d in (dest_ckpt, dest_res):
         d.mkdir(parents=True)
 
-    # Create initial checkpoint
+    # Create neural net
     nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
     nn = NNWrapper(Game, nnargs)
     nn.save_checkpoint(str(dest_ckpt), "0000-test.pt")
 
-    # Copy reservoir from source
+    # Copy reservoir files to dest
     import shutil
-    source_triples = glob_file_triples(str(source_res))
-    assert len(source_triples) == 3  # iters 0, 1, 2
-    for c_path, v_path, pi_path, _ in source_triples:
+    for c_path, v_path, pi_path, _ in glob_file_triples(str(source_res)):
         for p in (c_path, v_path, pi_path):
             shutil.copy2(p, str(dest_res / os.path.basename(p)))
 
-    # --- Bootstrap retrain (diff-arch path) ---
-    source_paths = {"reservoir": str(source_res), "history": str(source_hist)}
-
-    # Discover all files
+    # Discover files
     reservoir_files = glob_file_triples(str(dest_res))
-    window_files = []
-    for wi in range(0, source_n):
-        triples = glob_file_triples(str(source_hist), f"{wi:04d}-*-canonical-*.ptz")
-        window_files.extend(triples)
-    all_files = reservoir_files + window_files
-    assert len(all_files) == 5  # 3 reservoir + 2 window
+    window_files = glob_file_triples(str(source_hist))
+    assert len(reservoir_files) == 3
+    assert len(window_files) == 2
 
     class DummyRun:
         def track(*a, **kw):
             pass
 
-    run = DummyRun()
-    total_train_steps = 0
-    bs = 64
+    config = TrainConfig(game="connect4", bootstrap_eval_interval=50)
 
-    # Phase 1: train on all data (reservoir + window)
-    total_samples = sum(s for _, _, _, s in all_files)
-    assert total_samples == 300  # 5 files × 60 samples
-    full_passes = 2
-    streaming_ds = StreamingCompressedDataset(all_files, bs, passes=full_passes)
-    dl = DataLoader(streaming_ds, batch_size=None, num_workers=0)
-    steps_p1 = int(math.ceil(total_samples / bs)) * full_passes
-    v_loss, pi_loss = nn.train(dl, steps_p1, run, source_n, total_train_steps)
-    total_train_steps += steps_p1
-    assert math.isfinite(v_loss)
-    assert math.isfinite(pi_loss)
+    # Call _bootstrap_retrain directly
+    total_train_steps = _bootstrap_retrain(
+        nn, reservoir_files, window_files, config, DummyRun(), source_n, 0,
+    )
 
-    # Phase 2: train on window only
-    if window_files:
-        window_total = sum(s for _, _, _, s in window_files)
-        assert window_total == 120  # 2 files × 60 samples
-        window_passes = 2
-        streaming_ds2 = StreamingCompressedDataset(window_files, bs, passes=window_passes)
-        dl2 = DataLoader(streaming_ds2, batch_size=None, num_workers=0)
-        steps_p2 = int(math.ceil(window_total / bs)) * window_passes
-        v_loss2, pi_loss2 = nn.train(dl2, steps_p2, run, source_n, total_train_steps)
-        total_train_steps += steps_p2
-        assert math.isfinite(v_loss2)
-        assert math.isfinite(pi_loss2)
+    assert total_train_steps > 0
 
-    # Save final checkpoint
+    # Verify checkpoint can be saved and loaded
     nn.save_checkpoint(str(dest_ckpt), f"{source_n:04d}-test.pt")
     assert (dest_ckpt / "0005-test.pt").exists()
-    assert total_train_steps > 0
+
+    loaded = NNWrapper.load_checkpoint(Game, str(dest_ckpt), "0005-test.pt")
+    assert loaded is not None
+
+
+# ============================================================
+# _bootstrap_train_phase early stopping
+# ============================================================
+
+
+def test_bootstrap_train_phase_early_stop(tmp_path):
+    """_bootstrap_train_phase returns positive steps with aggressive early stopping."""
+    cs = Game.CANONICAL_SHAPE()
+
+    # Create 2 small files
+    file_triples = []
+    for i in range(2):
+        n = 100
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+        pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+        c_path = str(tmp_path / f"{i:04d}-0000-canonical-{n}.ptz")
+        v_path = str(tmp_path / f"{i:04d}-0000-v-{n}.ptz")
+        pi_path = str(tmp_path / f"{i:04d}-0000-pi-{n}.ptz")
+        save_compressed(c, c_path)
+        save_compressed(v, v_path)
+        save_compressed(pi, pi_path)
+        file_triples.append((c_path, v_path, pi_path, n))
+
+    config = TrainConfig(
+        game="connect4",
+        bootstrap_eval_interval=1,
+        bootstrap_lr_patience=1,
+        bootstrap_convergence_patience=1,
+        bootstrap_lr_max_drops=1,
+    )
+
+    nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
+    nn = NNWrapper(Game, nnargs)
+
+    class DummyRun:
+        def track(*a, **kw):
+            pass
+
+    steps, early_stopped = _bootstrap_train_phase(
+        nn, file_triples, config, DummyRun(), source_n=0,
+        total_train_steps=0, phase_name="test",
+    )
+    assert steps > 0
 
 
 # ============================================================

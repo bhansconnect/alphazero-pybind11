@@ -141,6 +141,66 @@ def test_bootstrap_same_arch(tmp_path):
     assert new_elo.exists()
 
 
+def test_bootstrap_diff_arch(tmp_path):
+    """Bootstrap from existing experiment with different architecture.
+
+    Exercises the _bootstrap_retrain path with convergence detection and
+    fallback checkpoint loading for ELO calibration (no checkpoint copying).
+    """
+    import game_runner
+
+    aim_repo = str(tmp_path / "aim")
+
+    # --- Phase 1: Create source experiment (2 iterations) ---
+    source_config = load_config(
+        os.path.join(CONFIGS_DIR, "connect4.yaml"),
+        {**FAST_OVERRIDES, "iterations": "2"},
+    )
+    source_dir = str(tmp_path / "data" / "connect4" / "source")
+    game_runner.main(source_config, source_dir, aim_repo=aim_repo)
+
+    # Verify source produced expected artifacts
+    source_ckpt = tmp_path / "data" / "connect4" / "source" / "checkpoint"
+    assert source_ckpt.exists()
+    source_pts = sorted(source_ckpt.glob("*.pt"))
+    assert len(source_pts) >= 2, f"Source needs >= 2 checkpoints, got {len(source_pts)}"
+
+    # --- Phase 2: Bootstrap with different architecture (more channels) ---
+    bootstrap_config = load_config(
+        os.path.join(CONFIGS_DIR, "connect4.yaml"),
+        {
+            **FAST_OVERRIDES,
+            "iterations": "4",
+            "channels": str(source_config.channels + 4),  # different arch
+            "bootstrap_eval_interval": "50",
+        },
+    )
+    new_dir = str(tmp_path / "data" / "connect4" / "bootstrapped-diff")
+    game_runner.main(bootstrap_config, new_dir, aim_repo=aim_repo, bootstrap_from=source_dir)
+
+    # --- Phase 3: Verify artifacts ---
+    new_ckpt = tmp_path / "data" / "connect4" / "bootstrapped-diff" / "checkpoint"
+    assert new_ckpt.exists()
+    new_pts = list(new_ckpt.glob("*.pt"))
+    # Should have: initial (0000) + retrained (source_n) + newly trained
+    assert len(new_pts) >= 3, f"Expected >= 3 checkpoints, got {len(new_pts)}"
+
+    # No source checkpoints should have been copied (only 0000 and source_n+ should exist)
+    # Source checkpoints had different experiment name, so verify no foreign .pt files
+    new_exp_name = os.path.basename(new_dir)
+    for pt in new_pts:
+        assert new_exp_name in pt.name, \
+            f"Foreign checkpoint found: {pt.name} (expected all to contain '{new_exp_name}')"
+
+    # elo.csv should exist
+    new_elo = tmp_path / "data" / "connect4" / "bootstrapped-diff" / "elo.csv"
+    assert new_elo.exists()
+
+    # config.yaml should exist
+    new_config_path = tmp_path / "data" / "connect4" / "bootstrapped-diff" / "config.yaml"
+    assert new_config_path.exists()
+
+
 # ---------------------------------------------------------------------------
 # Resume + iterations validation
 # ---------------------------------------------------------------------------

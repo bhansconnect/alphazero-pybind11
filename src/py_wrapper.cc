@@ -205,6 +205,17 @@ PYBIND11_MODULE(alphazero, m) {
       .def("size", &S3FIFOCache::size)
       .def("max_size", &S3FIFOCache::max_size);
 
+  py::class_<ShardedS3FIFOCache, std::shared_ptr<ShardedS3FIFOCache>>(m, "ShardedS3FIFOCache")
+      .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(),
+           py::arg("max_size"), py::arg("shards"), py::arg("ghost_size"),
+           py::arg("num_policy"), py::arg("num_value"))
+      .def("hits", &ShardedS3FIFOCache::hits)
+      .def("misses", &ShardedS3FIFOCache::misses)
+      .def("evictions", &ShardedS3FIFOCache::evictions)
+      .def("reinserts", &ShardedS3FIFOCache::reinserts)
+      .def("size", &ShardedS3FIFOCache::size)
+      .def("max_size", &ShardedS3FIFOCache::max_size);
+
   m.def("hash_game_state",
         [](const GameState& gs) { return hash_game_state(gs); },
         py::arg("gs"));
@@ -266,13 +277,20 @@ PYBIND11_MODULE(alphazero, m) {
                      &PlayParams::resign_playthrough_percent)
       .def_readwrite("eval_type", &PlayParams::eval_type)
       .def_readwrite("model_groups", &PlayParams::model_groups)
-      .def_readwrite("seat_perms", &PlayParams::seat_perms);
+      .def_readwrite("seat_perms", &PlayParams::seat_perms)
+      .def_readwrite("seat_visits", &PlayParams::seat_visits);
 
   py::class_<PlayManager>(m, "PlayManager")
       .def(py::init([](const GameState* gs, PlayParams params) {
              return std::make_unique<PlayManager>(gs->copy(), params);
            }),
            py::arg().none(false), py::arg())
+      .def(py::init([](const GameState* gs, PlayParams params,
+                       std::vector<std::shared_ptr<ShardedS3FIFOCache>> caches) {
+             return std::make_unique<PlayManager>(gs->copy(), params,
+                                                  std::move(caches));
+           }),
+           py::arg().none(false), py::arg(), py::arg("caches"))
       .def("game_data", &PlayManager::game_data,
            py::return_value_policy::reference_internal)
       .def("params", &PlayManager::params,

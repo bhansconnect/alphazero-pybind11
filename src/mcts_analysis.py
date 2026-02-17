@@ -30,7 +30,7 @@ from game_runner import (
     GameRunner, GRArgs, RandPlayer, PlayoutPlayer, base_params, elo_prob,
     set_eval_types,
 )
-from cache_utils import create_cache, print_cache_stats
+from cache_utils import create_cache, create_sharded_cache, print_cache_stats, print_sharded_cache_stats
 from tournament import pit_agents, calc_elo
 
 np.set_printoptions(precision=3, suppress=True)
@@ -312,6 +312,9 @@ def run_tournament(config, Game, network_path, visit_counts, use_playout=False, 
 
     win_matrix = np.full((count, count), np.nan)
 
+    # Create a single shared cache for all matchups (same network throughout)
+    shared_cache = create_sharded_cache(Game, cache_size) if cache_size > 0 else None
+
     total_matchups = count * (count - 1) // 2
     with tqdm.tqdm(total=total_matchups, desc="Tournament") as pbar:
         for i in range(count):
@@ -323,16 +326,27 @@ def run_tournament(config, Game, network_path, visit_counts, use_playout=False, 
                 depths = [d2] * num_players
                 depths[0] = d1
 
+                # All model groups share the same cache (same network)
+                if shared_cache is not None:
+                    caches = [shared_cache] * num_players
+                else:
+                    caches = None
+
                 name = f"v{d1}-v{d2}"
                 win_rates = pit_agents(
                     config, Game, players, depths,
                     TOURNAMENT_BATCH_SIZE, name,
-                    cache_size=cache_size,
+                    cache_size=0,
+                    caches=caches,
                 )
                 win_matrix[i, j] = win_rates[0]
                 win_matrix[j, i] = win_rates[1]
                 pbar.update()
-                pbar.set_postfix_str(f"{name}: {win_rates[0]:.3f}-{win_rates[1]:.3f}")
+                wr_str = "-".join(f"{r*100:.1f}%" for r in win_rates)
+                pbar.set_postfix_str(f"{name}: {wr_str}")
+
+    # Print shared cache stats
+    print_sharded_cache_stats(shared_cache)
 
     # Compute Elo
     elo = np.zeros(count)

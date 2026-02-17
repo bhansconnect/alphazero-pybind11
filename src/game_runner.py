@@ -388,9 +388,7 @@ class GameRunner:
             completed = self.pm.games_completed()
             num_perms = self.pm.num_seat_perms()
             if completed > 0 and num_perms > 1:
-                seat_perms = self.pm.params().seat_perms
-                num_groups = self.pm.num_model_groups()
-                group_wins = [0.0] * (num_groups + 1)  # last = draws
+                player_wins = [0.0] * (self.num_players + 1)  # last = draws
                 total_games = 0
                 for perm_idx in range(num_perms):
                     ps = self.pm.perm_scores(perm_idx)
@@ -398,14 +396,14 @@ class GameRunner:
                     if pg == 0:
                         continue
                     total_games += pg
-                    perm = seat_perms[perm_idx]
                     for seat in range(self.num_players):
-                        group_wins[perm[seat]] += ps[seat]
-                    group_wins[-1] += ps[self.num_players]
+                        original_player = (seat + perm_idx) % self.num_players
+                        player_wins[original_player] += ps[seat]
+                    player_wins[-1] += ps[self.num_players]
                 if total_games > 0:
-                    win_rates = [gw / total_games for gw in group_wins]
+                    win_rates = [pw / total_games for pw in player_wins]
                 else:
-                    win_rates = [0] * (num_groups + 1)
+                    win_rates = [0] * (self.num_players + 1)
             else:
                 scores = self.pm.scores()
                 win_rates = [0] * len(scores)

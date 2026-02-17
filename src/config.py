@@ -108,10 +108,16 @@ class TrainConfig:
     reservoir_recency_decay: float = 0.99
     reservoir_thin_interval: int = 10
 
-    # Bootstrap training (only used when architecture differs from source)
-    bootstrap_full_passes: int = 5
-    bootstrap_window_passes: int = 2
+    # Bootstrap
+    bootstrap_window_only: bool = False
     bootstrap_compare_past: int = 5
+    bootstrap_eval_interval: int = 200
+    bootstrap_lr: float = 0.01
+    bootstrap_lr_drop_factor: float = 0.3
+    bootstrap_lr_patience: int = 4
+    bootstrap_lr_max_drops: int = 3
+    bootstrap_convergence_threshold: float = 0.005
+    bootstrap_convergence_patience: int = 5
 
     # Inference optimization (AMP autocast + compile on GPU, skipped on CPU)
     amp_inference: bool = True

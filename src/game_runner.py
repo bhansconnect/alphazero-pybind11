@@ -1316,8 +1316,26 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     )
 
 
+def _resolve_checkpoint(Game, primary_dir, experiment_name, iteration, fallback_dir=None):
+    """Load a checkpoint, falling back to a secondary directory if not found locally."""
+    import neural_net
+    primary_path = os.path.join(primary_dir, f"{iteration:04d}-{experiment_name}.pt")
+    if os.path.exists(primary_path):
+        return neural_net.NNWrapper.load_checkpoint(Game, primary_dir, f"{iteration:04d}-{experiment_name}.pt")
+    if fallback_dir:
+        fallback_path = os.path.join(fallback_dir, f"{iteration:04d}-{experiment_name}.pt")
+        if os.path.exists(fallback_path):
+            return neural_net.NNWrapper.load_checkpoint(Game, fallback_dir, f"{iteration:04d}-{experiment_name}.pt")
+        cps = glob.glob(os.path.join(fallback_dir, f"{iteration:04d}-*.pt"))
+        if cps:
+            return neural_net.NNWrapper.load_checkpoint(Game, "", cps[0])
+    raise FileNotFoundError(f"Checkpoint {iteration:04d} not found in {primary_dir}" +
+                           (f" or {fallback_dir}" if fallback_dir else ""))
+
+
 @tracy_zone
-def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch_size=64):
+def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch_size=64,
+              fallback_checkpoint_dir=None):
     import neural_net
 
     Game = config.Game
@@ -1329,9 +1347,8 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
     if past_iter == 0:
         nn_past = RandPlayer()
     else:
-        nn_past = neural_net.NNWrapper.load_checkpoint(
-            Game, paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt"
-        )
+        nn_past = _resolve_checkpoint(Game, paths["checkpoint"], experiment_name,
+                                      past_iter, fallback_checkpoint_dir)
         prepare_inference_model(nn_past, config)
 
     bs = batch_size
@@ -1461,6 +1478,139 @@ def _default_lr_state(config):
     }
 
 
+def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, phase_name):
+    """Run one epoch of bootstrap training with step-level LR patience and early stopping.
+
+    Returns (steps_trained, early_stopped).
+    """
+    bbs = config.train_batch_size
+    total_steps = sum(int(math.ceil(s / bbs)) for _, _, _, s in files)
+    eval_interval = min(config.bootstrap_eval_interval, max(total_steps, 1))
+
+    lr = config.bootstrap_lr
+    nn.set_lr(lr)
+    lr_drops = 0
+    lr_patience_counter = 0
+    convergence_patience_counter = 0
+    final_lr_dropped = False
+    best_chunk_loss = None
+
+    streaming_ds = StreamingCompressedDataset(files, bbs, passes=1)
+    dl = DataLoader(streaming_ds, batch_size=None, num_workers=0)
+
+    chunk_v_loss = 0.0
+    chunk_pi_loss = 0.0
+    chunk_steps = 0
+    current_step = 0
+    early_stopped = False
+
+    nn.nnet.train()
+    pbar = tqdm.tqdm(total=total_steps, desc=f"  {phase_name}", leave=False, unit="step")
+
+    for batch in dl:
+        canonical, target_vs, target_pis = batch
+        canonical = canonical.float().contiguous().to(nn.device, non_blocking=nn._non_blocking)
+        target_vs = target_vs.float().contiguous().to(nn.device, non_blocking=nn._non_blocking)
+        target_pis = target_pis.float().contiguous().to(nn.device, non_blocking=nn._non_blocking)
+
+        nn.optimizer.zero_grad()
+        out_v, out_pi = nn.nnet(canonical)
+        l_v = nn.loss_v(target_vs, out_v)
+        l_pi = nn.loss_pi(target_pis, out_pi)
+        total_loss = l_v + l_pi
+        total_loss.backward()
+        nn.optimizer.step()
+
+        v_val = l_v.item()
+        pi_val = l_pi.item()
+        chunk_v_loss += v_val
+        chunk_pi_loss += pi_val
+        chunk_steps += 1
+        current_step += 1
+
+        run.track(v_val, name="loss", epoch=source_n,
+                  step=total_train_steps + current_step, context={"type": "value"})
+        run.track(pi_val, name="loss", epoch=source_n,
+                  step=total_train_steps + current_step, context={"type": "policy"})
+        run.track(v_val + pi_val, name="loss", epoch=source_n,
+                  step=total_train_steps + current_step, context={"type": "total"})
+
+        pbar.update()
+        pbar.set_postfix(loss=f"{(chunk_v_loss + chunk_pi_loss) / chunk_steps:.4f}",
+                         lr=f"{lr:.6f}")
+
+        # Evaluate at interval boundaries or end of epoch
+        if chunk_steps >= eval_interval or current_step == total_steps:
+            avg_loss = (chunk_v_loss + chunk_pi_loss) / chunk_steps
+            chunk_v_loss = 0.0
+            chunk_pi_loss = 0.0
+            chunk_steps = 0
+
+            if best_chunk_loss is None:
+                best_chunk_loss = avg_loss
+                continue
+
+            rel_improvement = (best_chunk_loss - avg_loss) / (best_chunk_loss + 1e-8)
+            plateaued = rel_improvement < config.bootstrap_convergence_threshold
+
+            if final_lr_dropped:
+                if plateaued:
+                    convergence_patience_counter += 1
+            else:
+                if plateaued:
+                    lr_patience_counter += 1
+                else:
+                    lr_patience_counter = 0
+                    best_chunk_loss = avg_loss
+
+            # LR drop
+            if lr_patience_counter >= config.bootstrap_lr_patience and lr_drops < config.bootstrap_lr_max_drops:
+                lr *= config.bootstrap_lr_drop_factor
+                lr_drops += 1
+                nn.set_lr(lr)
+                lr_patience_counter = 0
+                pbar.write(f"  LR drop #{lr_drops}: lr={lr:.6f} (loss={avg_loss:.4f})")
+                if lr_drops >= config.bootstrap_lr_max_drops:
+                    final_lr_dropped = True
+                    convergence_patience_counter = 0
+
+            # Early stop
+            if final_lr_dropped and convergence_patience_counter >= config.bootstrap_convergence_patience:
+                pbar.write(f"  {phase_name} converged at step {current_step}/{total_steps} "
+                           f"(loss={avg_loss:.4f}, lr={lr:.6f})")
+                early_stopped = True
+                break
+
+    pbar.close()
+    if not early_stopped:
+        print(f"  {phase_name} completed {current_step} steps")
+
+    return current_step, early_stopped
+
+
+def _bootstrap_retrain(nn, reservoir_files, window_files, config, run, source_n, total_train_steps):
+    """Bootstrap retrain: 1 epoch on reservoir, then 1 epoch on window.
+
+    Each phase uses step-level LR patience with early stopping.
+    LR resets to bootstrap_lr at the start of each phase.
+
+    Returns updated total_train_steps.
+    """
+    phases = []
+    if reservoir_files:
+        phases.append(("Retrain: Reservoir", reservoir_files))
+    if window_files:
+        phases.append(("Retrain: Window", window_files))
+
+    for phase_name, files in phases:
+        steps, _ = _bootstrap_train_phase(
+            nn, files, config, run, source_n, total_train_steps, phase_name,
+        )
+        total_train_steps += steps
+
+    return total_train_steps
+
+
 def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
     """Main training loop.
 
@@ -1543,6 +1693,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
     # LR state for adaptive schedule
     lr_state_path = os.path.join(experiment_dir, "lr_state.json")
 
+    fallback_checkpoint_dir = None
+
     if start == 0:
         create_init_net()
 
@@ -1566,23 +1718,11 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         if bootstrap_from:
             source_dir = bootstrap_from
             source_config_path = os.path.join(source_dir, "config.yaml")
-
             source_paths = config.resolve_paths(source_dir)
-
-            # Copy reservoir (per-iteration .ptz files)
-            source_reservoir = source_paths["reservoir"]
-            source_res_triples = glob_file_triples(source_reservoir)
-            if source_res_triples:
-                os.makedirs(paths["reservoir"], exist_ok=True)
-                all_res_files = []
-                for c, v, p, _ in source_res_triples:
-                    all_res_files.extend([c, v, p])
-                for src in tqdm.tqdm(all_res_files, desc="Copying Reservoir", leave=False):
-                    shutil.copy2(src, os.path.join(paths["reservoir"], os.path.basename(src)))
-
-            # Copy elo/wr from source (if available)
             source_elo_path = os.path.join(source_dir, "elo.csv")
             source_wr_path = os.path.join(source_dir, "win_rate.csv")
+
+            # Copy elo/wr from source (if available)
             if os.path.exists(source_elo_path) and os.path.exists(source_wr_path):
                 source_elo = np.genfromtxt(source_elo_path, delimiter=",")
                 source_wr = np.genfromtxt(source_wr_path, delimiter=",")
@@ -1590,7 +1730,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 wr[:copy_size, :copy_size] = source_wr[:copy_size, :copy_size]
                 elo[:copy_size] = source_elo[:copy_size]
 
-            # Check if same architecture
+            # Detect architecture match before phase loop
             same_arch = True
             if os.path.exists(source_config_path):
                 source_cfg = load_config(source_config_path, {}, warn=False)
@@ -1602,77 +1742,93 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     and source_cfg.star_gambit_spatial == config.star_gambit_spatial
                 )
 
+            # Build phase list
+            bootstrap_phases = [] if config.bootstrap_window_only else ["Copy Reservoir"]
+            bootstrap_phases.append("Copy Window")
             if same_arch:
-                # Copy best-gated checkpoint from source
-                best_source = source_n  # default to latest
-                if os.path.exists(source_elo_path):
-                    best_source = int(np.argmax(source_elo[:source_n + 1]))
-                cps = sorted(glob.glob(os.path.join(source_paths["checkpoint"], f"{best_source:04d}-*.pt")))
-                if cps:
-                    dest_name = f"{source_n:04d}-{experiment_name}.pt"
-                    shutil.copy2(cps[-1], os.path.join(paths["checkpoint"], dest_name))
+                bootstrap_phases.append("Copy Checkpoint")
             else:
-                # Retrain on source data using streaming (bounded memory)
-                reservoir_files = glob_file_triples(source_paths["reservoir"])
-                window_files = []
-                for wi in range(0, source_n):
-                    triples = glob_file_triples(source_paths["history"], f"{wi:04d}-*-canonical-*.ptz")
-                    if not triples:
-                        triples = glob_file_triples(source_paths["history"], f"{wi:04d}-*-canonical-*.pt")
-                    window_files.extend(triples)
-                all_files = reservoir_files + window_files
+                bootstrap_phases.append("Retrain")
+            bootstrap_phases.append("Calibrate ELO")
 
-                nn = neural_net.NNWrapper.load_checkpoint(
-                    Game, paths["checkpoint"], f"0000-{experiment_name}.pt"
-                )
+            phase_bar = tqdm.tqdm(bootstrap_phases, desc="Bootstrap", leave=True)
+            for phase in phase_bar:
+                phase_bar.set_description(f"Bootstrap: {phase}")
 
-                if all_files:
-                    total_samples = sum(s for _, _, _, s in all_files)
-                    bbs = config.train_batch_size
-                    streaming_ds = StreamingCompressedDataset(all_files, bbs, passes=config.bootstrap_full_passes)
-                    dl = DataLoader(streaming_ds, batch_size=None, num_workers=0)
-                    steps_p1 = int(math.ceil(total_samples / bbs)) * config.bootstrap_full_passes
-                    nn.train(dl, steps_p1, run, source_n, total_train_steps)
-                    total_train_steps += steps_p1
+                if phase == "Copy Reservoir":
+                    source_res_triples = glob_file_triples(source_paths["reservoir"])
+                    if source_res_triples:
+                        os.makedirs(paths["reservoir"], exist_ok=True)
+                        all_res_files = []
+                        for c, v, p, _ in source_res_triples:
+                            all_res_files.extend([c, v, p])
+                        for src in tqdm.tqdm(all_res_files, desc="  Files", leave=False):
+                            shutil.copy2(src, os.path.join(paths["reservoir"], os.path.basename(src)))
 
-                    if window_files:
-                        window_total = sum(s for _, _, _, s in window_files)
-                        streaming_ds2 = StreamingCompressedDataset(window_files, bbs, passes=config.bootstrap_window_passes)
-                        dl2 = DataLoader(streaming_ds2, batch_size=None, num_workers=0)
-                        steps_p2 = int(math.ceil(window_total / bbs)) * config.bootstrap_window_passes
-                        nn.train(dl2, steps_p2, run, source_n, total_train_steps)
-                        total_train_steps += steps_p2
+                elif phase == "Copy Window":
+                    source_window_triples = []
+                    for wi in range(0, source_n):
+                        triples = glob_file_triples(source_paths["history"], f"{wi:04d}-*-canonical-*.ptz")
+                        if not triples:
+                            triples = glob_file_triples(source_paths["history"], f"{wi:04d}-*-canonical-*.pt")
+                        source_window_triples.extend(triples)
+                    if source_window_triples:
+                        os.makedirs(paths["history"], exist_ok=True)
+                        all_win_files = []
+                        for c, v, p, _ in source_window_triples:
+                            all_win_files.extend([c, v, p])
+                        for src in tqdm.tqdm(all_win_files, desc="  Files", leave=False):
+                            shutil.copy2(src, os.path.join(paths["history"], os.path.basename(src)))
 
-                nn.save_checkpoint(paths["checkpoint"], f"{source_n:04d}-{experiment_name}.pt",
-                                   zstd_level=config.zstd_level)
+                elif phase == "Copy Checkpoint":
+                    best_source = source_n
+                    if os.path.exists(source_elo_path):
+                        best_source = int(np.argmax(source_elo[:source_n + 1]))
+                    cps = sorted(glob.glob(os.path.join(source_paths["checkpoint"], f"{best_source:04d}-*.pt")))
+                    if cps:
+                        dest_name = f"{source_n:04d}-{experiment_name}.pt"
+                        shutil.copy2(cps[-1], os.path.join(paths["checkpoint"], dest_name))
+
+                elif phase == "Retrain":
+                    reservoir_files = glob_file_triples(paths["reservoir"])
+                    window_files = glob_file_triples(paths["history"])
+
+                    nn = neural_net.NNWrapper.load_checkpoint(
+                        Game, paths["checkpoint"], f"0000-{experiment_name}.pt"
+                    )
+
+                    if reservoir_files or window_files:
+                        total_train_steps = _bootstrap_retrain(
+                            nn, reservoir_files, window_files, config, run, source_n, total_train_steps
+                        )
+
+                    nn.save_checkpoint(paths["checkpoint"], f"{source_n:04d}-{experiment_name}.pt",
+                                       zstd_level=config.zstd_level)
+
+                elif phase == "Calibrate ELO":
+                    compare_start = max(0, source_n - config.bootstrap_compare_past)
+                    for past_iter in tqdm.tqdm(range(compare_start, source_n), desc="  ELO", leave=False):
+                        nn_rate, draw_rate, _, _, _, _, _, _ = play_past(
+                            config, paths, experiment_name, config.compare_mcts_visits,
+                            source_n, past_iter, config.past_compare_batch_size,
+                            fallback_checkpoint_dir=source_paths["checkpoint"],
+                        )
+                        wr[source_n, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
+                        wr[past_iter, source_n] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
+                        gc.collect()
+
+                    elo = get_elo(elo, wr, source_n)
+
+            phase_bar.close()
 
             current_best = source_n
             start = source_n
+            fallback_checkpoint_dir = source_paths["checkpoint"]
 
-            # Calibrate bootstrap network ELO against source networks
-            compare_start = max(0, source_n - config.bootstrap_compare_past)
-            for past_iter in tqdm.tqdm(range(compare_start, source_n), desc="Calibrating ELO", leave=False):
-                dest_cp = os.path.join(paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt")
-                if not os.path.exists(dest_cp):
-                    # Copy from source (try exact name first, then glob)
-                    source_cp = os.path.join(source_paths["checkpoint"], f"{past_iter:04d}-{experiment_name}.pt")
-                    if not os.path.exists(source_cp):
-                        cps = glob.glob(os.path.join(source_paths["checkpoint"], f"{past_iter:04d}-*.pt"))
-                        source_cp = cps[0] if cps else None
-                    if source_cp:
-                        shutil.copy2(source_cp, dest_cp)
-                    else:
-                        continue
-
-                nn_rate, draw_rate, _, _, _, _, _, _ = play_past(
-                    config, paths, experiment_name, config.compare_mcts_visits,
-                    source_n, past_iter, config.past_compare_batch_size
-                )
-                wr[source_n, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
-                wr[past_iter, source_n] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
-                gc.collect()
-
-            elo = get_elo(elo, wr, source_n)
+            # Save bootstrap metadata for resume
+            bootstrap_meta_path = os.path.join(experiment_dir, "bootstrap_meta.json")
+            with open(bootstrap_meta_path, "w") as f:
+                json.dump({"source_checkpoint_dir": source_paths["checkpoint"]}, f)
 
             if os.path.exists(source_elo_path):
                 best_source_iter = int(np.argmax(source_elo[:source_n + 1]))
@@ -1709,6 +1865,12 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         else:
             lr_state = _default_lr_state(config)
 
+        # Recover bootstrap fallback checkpoint dir on resume
+        bootstrap_meta_path = os.path.join(experiment_dir, "bootstrap_meta.json")
+        if os.path.exists(bootstrap_meta_path):
+            with open(bootstrap_meta_path) as f:
+                fallback_checkpoint_dir = json.load(f).get("source_checkpoint_dir")
+
     postfix = {"best": current_best}
     panel = [current_best]
 
@@ -1727,7 +1889,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 if past_iter != i and math.isnan(wr[i, past_iter]):
                     nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy, bench_mpt, bench_vm = play_past(
                         config, paths, experiment_name,
-                        config.compare_mcts_visits, i, past_iter, config.past_compare_batch_size
+                        config.compare_mcts_visits, i, past_iter, config.past_compare_batch_size,
+                        fallback_checkpoint_dir=fallback_checkpoint_dir,
                     )
                     wr[i, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
                     wr[past_iter, i] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
@@ -1848,7 +2011,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 ):
                     nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy, gate_mpt, gate_vm = play_past(
                         config, paths, experiment_name,
-                        config.compare_mcts_visits, next_net, gate_net, config.gate_compare_batch_size
+                        config.compare_mcts_visits, next_net, gate_net, config.gate_compare_batch_size,
+                        fallback_checkpoint_dir=fallback_checkpoint_dir,
                     )
                     panel_nn_rate += nn_rate
                     panel_draw_rate += draw_rate

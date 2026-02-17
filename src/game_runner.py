@@ -23,6 +23,11 @@ from neural_net import get_device, get_storage_dtype, to_half_safe
 from config import load_config, find_latest_checkpoint
 from tracy_utils import tracy_zone, tracy_thread, TracyZone, tracy_frame
 
+def _fmt_pct(x):
+    pct = x * 100
+    return f"{int(pct)}%" if pct == int(pct) else f"{pct:.1f}%"
+
+
 def save_compressed(tensor, path, half_storage=True, zstd_level=1):
     """Save tensor with zstd compression, optionally as half-precision."""
     buffer = io.BytesIO()
@@ -352,11 +357,10 @@ class GameRunner:
                 churn = evictions / hits if hits > 0 else 0
                 reinserts = self.pm.cache_reinserts()
                 thr = (hits + reinserts) / total if total > 0 else 0
-                postfix = {"cache hr": f"{thr:.3f}"}
-                postfix["sat"] = f"{sat:.2f}"
+                postfix = {"hr": _fmt_pct(hr), "thr": _fmt_pct(thr)}
                 postfix["churn"] = f"{churn:.2f}"
             else:
-                postfix = {"cache hr": f"{hr:.3f}"}
+                postfix = {"hr": "N/A"}
             if self.args.record_batch_metrics:
                 with self._batch_lock:
                     sizes = list(self._batch_sizes)
@@ -408,7 +412,7 @@ class GameRunner:
                 if completed > 0:
                     for i in range(len(scores)):
                         win_rates[i] = scores[i] / completed
-            postfix["wr"] = list(map(lambda x: f"{x:0.3f}", win_rates))
+            postfix["wr"] = "/".join(_fmt_pct(x) for x in win_rates)
             return postfix, completed
 
         while self.pm.remaining_games() > 0:
@@ -1736,7 +1740,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     run.track(bench_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}", "search": "full"})
                     run.track(bench_mpt, name="moves_per_turn", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
                     run.track(bench_vm, name="avg_valid_moves", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
-                    postfix[f"vs -{config.compare_past}"] = (nn_rate + draw_rate / Game.NUM_PLAYERS())
+                    postfix[f"vs -{config.compare_past}"] = _fmt_pct(nn_rate + draw_rate / Game.NUM_PLAYERS())
                     gc.collect()
             stage_times["history"] = time.time() - stage_start
 
@@ -1786,7 +1790,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 run.track(float(sp.median_inference_ms), name="inference_ms", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "median"})
                 run.track(float(sp.min_inference_ms), name="inference_ms", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "min"})
                 run.track(float(sp.max_inference_ms), name="inference_ms", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "max"})
-                postfix["win_rates"] = list(map(lambda x: f"{x:0.3f}", sp.win_rates))
+                postfix["wr"] = "/".join(_fmt_pct(x) for x in sp.win_rates)
                 pbar.set_postfix(postfix)
             stage_times["selfplay"] = time.time() - stage_start
 
@@ -1867,7 +1871,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         run.track(gate_mpt, name="moves_per_turn", epoch=next_net, step=total_train_steps, context={"vs": "best"})
                         run.track(gate_vm, name="avg_valid_moves", epoch=next_net, step=total_train_steps, context={"vs": "best"})
                         best_win_rate = nn_rate + draw_rate / Game.NUM_PLAYERS()
-                        postfix["vs best"] = best_win_rate
+                        postfix["vs best"] = _fmt_pct(best_win_rate)
                         pbar.set_postfix(postfix)
                 panel_nn_rate /= len(panel)
                 panel_draw_rate /= len(panel)
@@ -1884,7 +1888,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 run.track(panel_mpt, name="moves_per_turn", epoch=next_net, step=total_train_steps, context={"vs": "panel"})
                 run.track(panel_vm, name="avg_valid_moves", epoch=next_net, step=total_train_steps, context={"vs": "panel"})
                 panel_win_rate = panel_nn_rate + panel_draw_rate / Game.NUM_PLAYERS()
-                postfix["vs panel"] = panel_win_rate
+                if len(panel) > 1:
+                    postfix["vs panel"] = _fmt_pct(panel_win_rate)
                 panel_ratio = len(panel) / config.gating_panel_size
                 wanted_panel_win_rate = (config.gating_panel_win_rate * panel_ratio) + (
                     config.gating_best_win_rate * (1.0 - panel_ratio)

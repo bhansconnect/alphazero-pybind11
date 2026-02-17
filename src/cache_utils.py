@@ -49,14 +49,20 @@ def create_sharded_cache(game_class, cache_size, shards=None):
 
 
 def print_cache_stats(cache):
-    """Print cache hit rate and saturation."""
+    """Print cache hit rate, theoretical hit rate, and churn."""
     if cache is None:
         return
     hits, misses = cache.hits(), cache.misses()
     total = hits + misses
     if total == 0:
         return
-    print(f"Cache: {hits/total:.1%} hit rate, {cache.size()}/{cache.max_size()} entries")
+    evictions = cache.evictions()
+    reinserts = cache.reinserts()
+    theoretical_hits = hits + reinserts
+    theoretical_rate = theoretical_hits / total
+    churn = evictions / hits if hits > 0 else 0
+    print(f"Cache: {hits/total:.1%} hit rate, {theoretical_rate:.1%} theoretical, "
+          f"{churn:.1%} churn, {cache.size()}/{cache.max_size()} entries")
 
 
 def print_sharded_cache_stats(cache, label="Shared cache"):

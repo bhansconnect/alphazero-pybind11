@@ -66,8 +66,8 @@ def calc_elo(past_elo, win_rates):
     anchor = -1200
     anchor_wr = elo_prob(anchor, 0)
     for _ in tqdm.trange(iters, leave=False):
-        mean_update = 0
         for i in range(past_elo.shape[0]):
+            mean_update = 0
             for j in range(past_elo.shape[0]):
                 if not math.isnan(win_rates[i, j]):
                     rate = win_rates[i, j]
@@ -328,12 +328,13 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
     rounds = int(np.ceil(np.log2(count)))
     dist = count
 
-    # Pre-create shared caches for NN agents
+    # Pre-create shared caches for NN agents, splitting budget evenly
     cache_dict = {}
     if cache_size > 0:
-        for a in agents:
-            if _is_nn_agent(a, rand_agents) and a not in cache_dict:
-                cache_dict[a] = create_sharded_cache(Game, cache_size)
+        nn_agents = [a for a in dict.fromkeys(agents) if _is_nn_agent(a, rand_agents)]
+        per_agent_cache = cache_size // max(len(nn_agents), 1)
+        for a in nn_agents:
+            cache_dict[a] = create_sharded_cache(Game, per_agent_cache)
 
     for r in range(rounds):
         print(f"Round {r + 1}/{rounds}")
@@ -446,12 +447,13 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
     count = len(agents)
     win_matrix = np.zeros((count, count))
 
-    # Pre-create shared caches for NN agents
+    # Pre-create shared caches for NN agents, splitting budget evenly
     cache_dict = {}
     if cache_size > 0:
-        for a in agents:
-            if _is_nn_agent(a, rand_agents) and a not in cache_dict:
-                cache_dict[a] = create_sharded_cache(Game, cache_size)
+        nn_agents = [a for a in dict.fromkeys(agents) if _is_nn_agent(a, rand_agents)]
+        per_agent_cache = cache_size // max(len(nn_agents), 1)
+        for a in nn_agents:
+            cache_dict[a] = create_sharded_cache(Game, per_agent_cache)
 
     with tqdm.trange(count * (count - 1) // 2, desc="Pit Agents") as pbar:
         for i in range(count):

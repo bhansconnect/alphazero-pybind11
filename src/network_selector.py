@@ -36,7 +36,7 @@ def discover_runs(model_path: str) -> dict[str, RunInfo]:
             if run_name not in runs:
                 runs[run_name] = RunInfo(run_name=run_name)
             runs[run_name].iterations.append(iteration)
-            runs[run_name].filenames[iteration] = filename
+            runs[run_name].filenames[iteration] = pt_file
     # Sort iterations within each run
     for info in runs.values():
         info.iterations.sort()

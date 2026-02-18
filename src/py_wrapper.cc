@@ -177,6 +177,9 @@ PYBIND11_MODULE(alphazero, m) {
       .def("root_q_values", &MCTS::root_q_values)
       .def("probs", &MCTS::probs)
       .def("depth", &MCTS::depth)
+      .def("add_root_noise", &MCTS::add_root_noise)
+      .def("apply_root_policy_temp", &MCTS::apply_root_policy_temp)
+      .def("root_n", &MCTS::root_n)
       .def_static("pick_move", &MCTS::pick_move);
 
   py::class_<S3FIFOCache>(m, "S3FIFOCache")

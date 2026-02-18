@@ -54,6 +54,16 @@ def calc_temp(config, turn):
     return temp
 
 
+def calc_temp_selfplay(config, turn):
+    """Compute temperature using self_play_temp (for selfplay mode analysis)."""
+    ln2 = 0.693
+    ld = ln2 / config.temp_decay_half_life
+    temp = config.self_play_temp - config.final_temp
+    temp *= math.exp(-ld * turn)
+    temp += config.final_temp
+    return temp
+
+
 def jensen_shannon_divergence(p, q):
     """JSD(p, q). Bounded [0, ln(2)]."""
     m = 0.5 * (p + q)
@@ -157,7 +167,7 @@ def select_checkpoint(checkpoints):
 # --- Phase 1: Interactive Configuration ---
 
 def interactive_config():
-    """Interactive configuration. Returns (config, Game, network_path, visit_counts, phases, use_playout, cache_size)."""
+    """Interactive configuration. Returns (config, Game, network_path, visit_counts, phases, use_playout, cache_size, selfplay_mode)."""
     print("=== MCTS Threshold Analysis ===\n")
 
     # Game selection from registry
@@ -277,7 +287,12 @@ def interactive_config():
         cache_size = 200000
     print(f"  -> cache_size={cache_size}\n")
 
-    return config, Game, network_path, visit_counts, phases, use_playout, cache_size
+    # Selfplay mode
+    selfplay_input = input("Use selfplay MCTS settings (noise, tree reuse, selfplay temp)? [n]: ").strip().lower()
+    selfplay_mode = selfplay_input == 'y'
+    print(f"  -> selfplay_mode={selfplay_mode}\n")
+
+    return config, Game, network_path, visit_counts, phases, use_playout, cache_size, selfplay_mode
 
 
 # --- Phase 2: Elo Tournament (Round-Robin) ---
@@ -363,16 +378,19 @@ def run_tournament(config, Game, network_path, visit_counts, use_playout=False, 
 
 # --- Phase 3: Policy & Value Analysis ---
 
-def run_analysis(config, Game, network_path, visit_counts, use_playout=False, cache_size=0):
+def run_analysis(config, Game, network_path, visit_counts, use_playout=False, cache_size=0, selfplay_mode=False):
     """Run policy & value convergence analysis with batched inference.
 
     Plays ANALYSIS_GAMES concurrently, batching all NN inference calls across
     games for ~25x speedup over sequential single-sample inference.
 
+    When selfplay_mode=True, uses selfplay MCTS settings: Dirichlet noise,
+    tree reuse, and self_play_temp instead of eval_temp.
+
     Returns dict with all collected metrics.
     """
     print("=" * 60)
-    print("Phase: Policy & Value Analysis")
+    print(f"Phase: Policy & Value Analysis{' (selfplay mode)' if selfplay_mode else ''}")
     print("=" * 60)
 
     if network_path is None and use_playout:
@@ -401,6 +419,16 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
 
     cache = create_cache(Game, cache_size) if not isinstance(agent, str) else None
 
+    epsilon = 0.25 if selfplay_mode else 0.0
+
+    # For selfplay mode, create persistent MCTS objects for tree reuse
+    if selfplay_mode:
+        persistent_mcts = {
+            gid: alphazero.MCTS(config.cpuct, num_players, num_moves, epsilon, 1.4, config.fpu_reduction,
+                                relative_values)
+            for gid in range(ANALYSIS_GAMES)
+        }
+
     print(f"Playing {ANALYSIS_GAMES} games with max {max_visits} visits per position...")
 
     total_positions = 0
@@ -409,12 +437,16 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
     while active:
         n = len(active)
 
-        # Create fresh MCTS for each active game's current position
-        mcts_list = [
-            alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.4, config.fpu_reduction,
-                           relative_values)
-            for _ in range(n)
-        ]
+        if selfplay_mode:
+            # Reuse persistent MCTS objects
+            mcts_list = [persistent_mcts[active[i]] for i in range(n)]
+        else:
+            # Create fresh MCTS for each active game's current position
+            mcts_list = [
+                alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.4, config.fpu_reduction,
+                               relative_values)
+                for _ in range(n)
+            ]
 
         # Per-position snapshot storage (indexed by slot in active list)
         pos_policies = [{} for _ in range(n)]
@@ -435,7 +467,7 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
                 # process_result for all
                 for i in range(n):
                     mcts_list[i].process_result(
-                        game_states[active[i]], v_np[i], pi_np[i], False
+                        game_states[active[i]], v_np[i], pi_np[i], selfplay_mode
                     )
             elif agent == "random":
                 # Random evaluation: uniform policy, equal value
@@ -444,7 +476,7 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
                 pi_np = np.full((n, num_moves), 1.0 / num_moves, dtype=np.float32)
                 for i in range(n):
                     mcts_list[i].process_result(
-                        game_states[active[i]], v_np[i], pi_np[i], False
+                        game_states[active[i]], v_np[i], pi_np[i], selfplay_mode
                     )
             else:
                 # NN agent with cache support
@@ -459,7 +491,7 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
                         if result is not None:
                             pi_cached, v_cached = result
                             mcts_list[i].process_result(
-                                game_states[active[i]], v_cached, pi_cached, False
+                                game_states[active[i]], v_cached, pi_cached, selfplay_mode
                             )
                             continue
                     miss_indices.append(i)
@@ -476,7 +508,7 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
                         if cache is not None:
                             cache.insert(leaf_hashes[i], pi_miss[j], v_miss[j])
                         mcts_list[i].process_result(
-                            game_states[active[i]], v_miss[j], pi_miss[j], False
+                            game_states[active[i]], v_miss[j], pi_miss[j], selfplay_mode
                         )
 
             sims_done = sim + 1
@@ -515,7 +547,10 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
             # Select move from max-visits policy with temperature
             if max_visits in pos_policies[slot]:
                 probs = pos_policies[slot][max_visits].copy()
-                temp = calc_temp(config, gs.current_turn())
+                if selfplay_mode:
+                    temp = calc_temp_selfplay(config, gs.current_turn())
+                else:
+                    temp = calc_temp(config, gs.current_turn())
                 if temp > 0 and temp != 1.0:
                     probs = np.power(probs + 1e-10, 1.0 / temp)
                     probs /= probs.sum()
@@ -525,7 +560,18 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
                 valid_indices = np.where(valids == 1)[0]
                 move = np.random.choice(valid_indices)
 
+            # Tree reuse: update root before playing the move
+            if selfplay_mode:
+                persistent_mcts[gid].update_root(gs, move)
+
             gs.play_move(move)
+
+            # Re-apply noise/temp on the reused subtree (matches play_manager.cc:271-279)
+            if selfplay_mode and gs.scores() is None:
+                mcts_obj = persistent_mcts[gid]
+                if mcts_obj.root_n() > 0:
+                    mcts_obj.apply_root_policy_temp()
+                    mcts_obj.add_root_noise()
 
             if gs.scores() is not None:
                 game_scores[gid] = np.array(gs.scores())
@@ -975,7 +1021,7 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
 
 
 def main():
-    config, Game, network_path, visit_counts, phases, use_playout, cache_size = interactive_config()
+    config, Game, network_path, visit_counts, phases, use_playout, cache_size, selfplay_mode = interactive_config()
 
     elo = None
     win_matrix = None
@@ -987,7 +1033,7 @@ def main():
 
     if "analysis" in phases:
         metrics = run_analysis(config, Game, network_path, visit_counts, use_playout,
-                               cache_size=cache_size)
+                               cache_size=cache_size, selfplay_mode=selfplay_mode)
 
     visualize_and_save(visit_counts, elo=elo, win_matrix=win_matrix, metrics=metrics)
 

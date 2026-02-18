@@ -1644,6 +1644,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             lr=config.lr,
             cv=config.cv,
             star_gambit_spatial=config.star_gambit_spatial,
+            head_channels=config.head_channels,
+            head_pool=config.head_pool,
         )
         nn = neural_net.NNWrapper(Game, nnargs)
         nn.save_checkpoint(paths["checkpoint"], f"0000-{experiment_name}.pt",
@@ -1740,6 +1742,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     and source_cfg.kernel_size == config.kernel_size
                     and source_cfg.dense_net == config.dense_net
                     and source_cfg.star_gambit_spatial == config.star_gambit_spatial
+                    and source_cfg.head_channels == config.head_channels
+                    and source_cfg.head_pool == config.head_pool
                 )
 
             # Build phase list

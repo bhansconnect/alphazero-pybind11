@@ -1,4 +1,4 @@
-from collections import namedtuple
+from dataclasses import dataclass, asdict
 import io
 import logging
 import os
@@ -37,12 +37,25 @@ def to_half_safe(tensor, dtype):
 # This is an autotuner for network speed.
 torch.backends.cudnn.benchmark = True
 
-NNArgs = namedtuple(
-    "NNArgs",
-    ["num_channels", "depth", "kernel_size", "dense_net", "lr", "cv",
-     "star_gambit_spatial"],
-    defaults=(False, 0.01, 1.5, False),
-)
+@dataclass
+class NNArgs:
+    num_channels: int
+    depth: int
+    kernel_size: int
+    dense_net: bool = False
+    lr: float = 0.01
+    cv: float = 1.5
+    star_gambit_spatial: bool = False
+    head_channels: int = 32
+    head_pool: bool = True
+    v_fc_hidden: int = -1    # -1 = auto-derive as head_channels * 8
+    pi_fc_hidden: int = -1   # -1 = auto-derive as head_channels * 8
+
+    def __post_init__(self):
+        if self.v_fc_hidden == -1:
+            self.v_fc_hidden = self.head_channels * 8
+        if self.pi_fc_hidden == -1:
+            self.pi_fc_hidden = self.head_channels * 8
 
 
 def nnargs_from_config(config):
@@ -55,6 +68,8 @@ def nnargs_from_config(config):
         lr=config.lr,
         cv=config.cv,
         star_gambit_spatial=config.star_gambit_spatial,
+        head_channels=config.head_channels,
+        head_pool=config.head_pool,
     )
 
 
@@ -147,6 +162,8 @@ class NNArch(nn.Module):
         in_channels, in_x, in_y = game.CANONICAL_SHAPE()
         self.dense_net = args.dense_net
         self.star_gambit_spatial = args.star_gambit_spatial
+        self.head_pool = args.head_pool
+        HC = args.head_channels
 
         if not self.dense_net:
             self.conv1 = conv(
@@ -176,21 +193,26 @@ class NNArch(nn.Module):
 
         if self.dense_net:
             final_size = in_channels + args.num_channels * args.depth
-            self.v_conv = conv1x1(final_size, 32)
-            self.pi_conv = conv1x1(final_size, 32)
+            self.v_conv = conv1x1(final_size, HC)
+            self.pi_conv = conv1x1(final_size, HC)
         else:
-            self.v_conv = conv1x1(args.num_channels, 32)
-            self.pi_conv = conv1x1(args.num_channels, 32)
+            self.v_conv = conv1x1(args.num_channels, HC)
+            self.pi_conv = conv1x1(args.num_channels, HC)
 
-        self.v_bn = nn.BatchNorm2d(32)
+        self.v_bn = nn.BatchNorm2d(HC)
         self.v_relu = nn.ReLU(inplace=True)
+        if args.head_pool:
+            self.v_pool = nn.AdaptiveAvgPool2d(1)
+            v_fc1_in = HC
+        else:
+            v_fc1_in = HC * in_x * in_y
         self.v_flatten = nn.Flatten()
-        self.v_fc1 = nn.Linear(32 * in_x * in_y, 256)
+        self.v_fc1 = nn.Linear(v_fc1_in, args.v_fc_hidden)
         self.v_fc1_relu = nn.ReLU(inplace=True)
-        self.v_fc2 = nn.Linear(256, game.NUM_PLAYERS() + 1)
+        self.v_fc2 = nn.Linear(args.v_fc_hidden, game.NUM_PLAYERS() + 1)
         self.v_softmax = nn.LogSoftmax(1)
 
-        self.pi_bn = nn.BatchNorm2d(32)
+        self.pi_bn = nn.BatchNorm2d(HC)
         self.pi_relu = nn.ReLU(inplace=True)
 
         if self.star_gambit_spatial:
@@ -202,22 +224,27 @@ class NNArch(nn.Module):
             self.sg_global_actions = 19  # deploy (18) + end_turn (1)
 
             # Spatial policy: conv output (B, 10, H, W) -> (B, H*W*10)
-            self.pi_conv2 = conv1x1(32, 10)
+            self.pi_conv2 = conv1x1(HC, 10)
             self.pi_bn2 = nn.BatchNorm2d(10)
 
             # Global policy: for deploy and end_turn actions
             self.pi_flatten = nn.Flatten()
+            if args.head_pool:
+                self.pi_pool = nn.AdaptiveAvgPool2d(1)
+                pi_global_in = HC
+            else:
+                pi_global_in = HC * in_x * in_y
             self.pi_global = nn.Sequential(
-                nn.Linear(32 * in_x * in_y, 64),
+                nn.Linear(pi_global_in, args.pi_fc_hidden),
                 nn.ReLU(inplace=True),
-                nn.Linear(64, self.sg_global_actions),
+                nn.Linear(args.pi_fc_hidden, self.sg_global_actions),
                 nn.LayerNorm(self.sg_global_actions)
             )
             self.pi_softmax = nn.LogSoftmax(1)
         else:
             # Standard fully-connected policy head
             self.pi_flatten = nn.Flatten()
-            self.pi_fc1 = nn.Linear(in_x * in_y * 32, game.NUM_MOVES())
+            self.pi_fc1 = nn.Linear(in_x * in_y * HC, game.NUM_MOVES())
             self.pi_softmax = nn.LogSoftmax(1)
 
     def forward(self, s):
@@ -230,6 +257,8 @@ class NNArch(nn.Module):
         v = self.v_conv(s)
         v = self.v_bn(v)
         v = self.v_relu(v)
+        if self.head_pool:
+            v = self.v_pool(v)
         v = self.v_flatten(v)
         v = self.v_fc1(v)
         v = self.v_fc1_relu(v)
@@ -243,9 +272,12 @@ class NNArch(nn.Module):
         if self.star_gambit_spatial:
             # Spatial policy head for Star Gambit
             # s_flat for global actions, pi for spatial
-            s_flat = self.pi_flatten(pi)
+            if self.head_pool:
+                s_flat = self.pi_flatten(self.pi_pool(pi))
+            else:
+                s_flat = self.pi_flatten(pi)
 
-            # Spatial actions: (B, 32, H, W) -> (B, 10, H, W) -> (B, H, W, 10) -> (B, H*W*10)
+            # Spatial actions: (B, HC, H, W) -> (B, 10, H, W) -> (B, H, W, 10) -> (B, H*W*10)
             pi_spatial = self.pi_conv2(pi)
             pi_spatial = self.pi_bn2(pi_spatial)
             pi_spatial = pi_spatial.permute(0, 2, 3, 1)  # (B, H, W, 10)
@@ -565,15 +597,14 @@ class NNWrapper:
         filepath = os.path.join(folder, filename)
         os.makedirs(folder, exist_ok=True)
 
-        # Convert NNArgs namedtuple to dict for safe serialization
-        args_dict = self.args._asdict()
+        args_dict = asdict(self.args)
 
         buffer = io.BytesIO()
         torch.save(
             {
                 "state_dict": self.nnet.state_dict(),
                 "opt_state": self.optimizer.state_dict(),
-                "args": args_dict,  # Save as dict, not namedtuple
+                "args": args_dict,
                 "game": self.game,
                 "version": "5.0",  # zstd-compressed, float32 weights, no scheduler
             },
@@ -614,6 +645,14 @@ class NNWrapper:
         # Reconstruct NNArgs from dict, dropping removed fields
         args_dict = checkpoint["args"]
         args_dict.pop("lr_milestone", None)
+
+        # Legacy checkpoints: fill in new fields with old hardcoded values
+        if "head_channels" not in args_dict:
+            args_dict["head_channels"] = 32
+            args_dict["head_pool"] = False
+            args_dict["v_fc_hidden"] = 256   # was hardcoded 32 * 8
+            args_dict["pi_fc_hidden"] = 64   # was hardcoded 32 * 2
+
         args = NNArgs(**args_dict)
 
         net = NNWrapper(checkpoint["game"], args)

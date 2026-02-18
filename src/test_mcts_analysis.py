@@ -16,6 +16,7 @@ from mcts_analysis import (
     hellinger_distance,
     top_k_agreement,
     calc_temp,
+    calc_temp_selfplay,
     get_available_games,
 )
 
@@ -103,6 +104,24 @@ def test_calc_temp_half_life():
     """At turn = half_life, temp is halfway between eval and final."""
     config = TrainConfig(eval_temp=1.0, final_temp=0.0, temp_decay_half_life=10)
     assert calc_temp(config, 10) == pytest.approx(0.5, abs=0.01)
+
+
+def test_calc_temp_selfplay_turn_zero():
+    """At turn 0, selfplay temp equals self_play_temp."""
+    config = TrainConfig(self_play_temp=1.0, final_temp=0.2, temp_decay_half_life=10)
+    assert calc_temp_selfplay(config, 0) == pytest.approx(1.0)
+
+
+def test_calc_temp_selfplay_large_turn():
+    """At very large turn, selfplay temp approaches final_temp."""
+    config = TrainConfig(self_play_temp=1.0, final_temp=0.2, temp_decay_half_life=10)
+    assert calc_temp_selfplay(config, 1000) == pytest.approx(0.2, abs=0.01)
+
+
+def test_calc_temp_selfplay_differs_from_eval():
+    """Selfplay temp uses self_play_temp, not eval_temp."""
+    config = TrainConfig(self_play_temp=1.0, eval_temp=0.5, final_temp=0.2, temp_decay_half_life=10)
+    assert calc_temp_selfplay(config, 0) > calc_temp(config, 0)
 
 
 # --- Import / smoke tests ---

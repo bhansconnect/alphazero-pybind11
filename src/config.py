@@ -39,6 +39,8 @@ class TrainConfig:
     kernel_size: int = 5
     dense_net: bool = True
     star_gambit_spatial: bool = False
+    head_channels: int = 32
+    head_pool: bool = True
 
     # MCTS
     cpuct: float = 1.25

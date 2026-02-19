@@ -37,7 +37,7 @@ def test_default_config():
     assert config.lr_schedule == "constant"
     assert config.lr_steps == []
     assert config.lr_drop_factor == 0.3
-    assert config.lr_patience == 5
+    assert config.lr_patience == 8
     assert config.lr_min_iter == 50
     assert config.lr_min_between_drops == 30
     assert config.lr_max_drops == 3

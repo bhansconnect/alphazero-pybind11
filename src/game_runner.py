@@ -143,12 +143,6 @@ def _load_and_select(args):
     return result
 
 
-def _replace_size_in_path(path, new_size):
-    """Replace the sample count in a history/reservoir filename."""
-    base, ext = os.path.splitext(path)
-    prefix = base.rsplit("-", 1)[0]
-    return f"{prefix}-{new_size}{ext}"
-
 
 GRArgs = namedtuple(
     "GRArgs",
@@ -1021,20 +1015,19 @@ def glob_reservoir_chunks(reservoir_dir):
     if not c_files:
         return []
 
-    # Try to get chunk_size from metadata (avoids loading tensors)
+    # Try to get per-chunk sizes from metadata (avoids loading tensors)
     meta = _load_reservoir_meta(reservoir_dir)
-    meta_chunk_size = meta.get("chunk_size") if meta else None
+    chunk_sizes = meta.get("chunk_sizes") if meta else None
 
     triples = []
     for i, c_path in enumerate(c_files):
         v_path = c_path.replace("_canonical.ptz", "_v.ptz")
         pi_path = c_path.replace("_canonical.ptz", "_pi.ptz")
         if os.path.exists(v_path) and os.path.exists(pi_path):
-            # Last chunk or no metadata: need actual size
-            is_last = (meta and i == meta.get("chunks_filled", 0) - 1)
-            if meta_chunk_size and not is_last:
-                size = meta_chunk_size
+            if chunk_sizes and i < len(chunk_sizes):
+                size = chunk_sizes[i]
             else:
+                # Backward compat: no chunk_sizes in metadata, load tensor
                 c_tensor = load_compressed(c_path)
                 size = c_tensor.shape[0]
                 del c_tensor
@@ -1067,6 +1060,7 @@ def _migrate_legacy_reservoir(config, reservoir_dir):
     print(f"Migrating {len(legacy_triples)} legacy reservoir files to chunked format...")
     chunk_size = config.reservoir_chunk_size
     chunks_filled = 0
+    chunk_sizes_list = []
     buf_c, buf_v, buf_pi, buf_iters = [], [], [], []
     buf_len = 0
 
@@ -1100,6 +1094,7 @@ def _migrate_legacy_reservoir(config, reservoir_dir):
             else:
                 buf_c, buf_v, buf_pi, buf_iters = [], [], [], []
             buf_len = remainder
+            chunk_sizes_list.append(chunk_size)
             chunks_filled += 1
             del all_c, all_v, all_pi, all_iters
 
@@ -1112,6 +1107,7 @@ def _migrate_legacy_reservoir(config, reservoir_dir):
         _save_chunk(reservoir_dir, chunks_filled,
                     all_c, all_v, all_pi, all_iters,
                     zstd_level=config.zstd_level)
+        chunk_sizes_list.append(buf_len)
         chunks_filled += 1
 
     # Determine last_updated from iteration numbers in filenames
@@ -1124,6 +1120,7 @@ def _migrate_legacy_reservoir(config, reservoir_dir):
         "version": 2,
         "n_chunks": config.reservoir_n_chunks,
         "chunk_size": chunk_size,
+        "chunk_sizes": chunk_sizes_list,
         "chunks_filled": chunks_filled,
         "last_updated": last_updated,
     }
@@ -1190,6 +1187,7 @@ def update_reservoir(config, paths, iteration, hist_size):
             "version": 2,
             "n_chunks": config.reservoir_n_chunks,
             "chunk_size": config.reservoir_chunk_size,
+            "chunk_sizes": [],
             "chunks_filled": 0,
             "last_updated": [],
         }
@@ -1197,6 +1195,10 @@ def update_reservoir(config, paths, iteration, hist_size):
     n_chunks = config.reservoir_n_chunks
     chunk_size = config.reservoir_chunk_size
     chunks_filled = meta["chunks_filled"]
+
+    # Ensure chunk_sizes exists (backward compat with old metadata)
+    if "chunk_sizes" not in meta:
+        meta["chunk_sizes"] = [chunk_size] * chunks_filled
 
     if chunks_filled < n_chunks:
         # FILLING PHASE: fill next chunks sequentially
@@ -1211,10 +1213,22 @@ def update_reservoir(config, paths, iteration, hist_size):
                         chunk_c, chunk_v, chunk_pi, chunk_iters,
                         zstd_level=config.zstd_level)
             meta["last_updated"].append(iteration)
+            meta["chunk_sizes"].append(end - offset)
             chunks_filled += 1
             offset = end
         meta["chunks_filled"] = chunks_filled
-    else:
+
+        # Slice staging to remaining unconsumed portion for potential merge
+        if offset < total_staging:
+            staging_c = staging_c[offset:]
+            staging_v = staging_v[offset:]
+            staging_pi = staging_pi[offset:]
+            staging_iters = staging_iters[offset:]
+            total_staging = staging_c.shape[0]
+        else:
+            total_staging = 0
+
+    if chunks_filled >= n_chunks and total_staging > 0:
         # MERGE PHASE: merge staging into K stalest chunks
         K = min(config.reservoir_chunks_per_update, chunks_filled)
 
@@ -1267,6 +1281,7 @@ def update_reservoir(config, paths, iteration, hist_size):
                         pool_c[selected], pool_v[selected],
                         pool_pi[selected], pool_iters[selected],
                         zstd_level=config.zstd_level)
+            meta["chunk_sizes"][chunk_idx] = select_size
             del pool_c, pool_v, pool_pi, pool_iters, weights
             last_updated[chunk_idx] = iteration
 

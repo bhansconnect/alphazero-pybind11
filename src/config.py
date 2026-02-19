@@ -111,8 +111,11 @@ class TrainConfig:
     compare_past: int = 20
 
     # Reservoir
-    reservoir_recency_decay: float = 0.99
-    reservoir_thin_interval: int = 10
+    reservoir_recency_decay: float = 0.995
+    reservoir_n_chunks: int = 100
+    reservoir_chunk_size: int = 100_000
+    reservoir_chunks_per_update: int = 10
+    reservoir_update_interval: int = 10
 
     # Bootstrap
     bootstrap_window_only: bool = False

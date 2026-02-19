@@ -143,34 +143,6 @@ def _load_and_select(args):
     return result
 
 
-def _thin_triple(args):
-    """Thin a single file triple: load, subsample, save, cleanup. Runs in thread pool."""
-    c_path, v_path, pi_path, file_size, keep, zstd_level = args
-    c = _load_hist_tensor(c_path)
-    v = _load_hist_tensor(v_path)
-    pi = _load_hist_tensor(pi_path)
-    perm = torch.randperm(file_size)[:keep]
-    c, v, pi = c[perm], v[perm], pi[perm]
-
-    new_c = _replace_size_in_path(c_path, keep)
-    new_v = _replace_size_in_path(v_path, keep)
-    new_pi = _replace_size_in_path(pi_path, keep)
-    # Migrate legacy .pt -> .ptz
-    if not new_c.endswith(".ptz"):
-        new_c = os.path.splitext(new_c)[0] + ".ptz"
-        new_v = os.path.splitext(new_v)[0] + ".ptz"
-        new_pi = os.path.splitext(new_pi)[0] + ".ptz"
-
-    _atomic_save_compressed(c, new_c, zstd_level=zstd_level)
-    _atomic_save_compressed(v, new_v, zstd_level=zstd_level)
-    _atomic_save_compressed(pi, new_pi, zstd_level=zstd_level)
-
-    for old, new in ((c_path, new_c), (v_path, new_v), (pi_path, new_pi)):
-        if old != new and os.path.exists(old):
-            os.remove(old)
-    del c, v, pi
-
-
 def _replace_size_in_path(path, new_size):
     """Replace the sample count in a history/reservoir filename."""
     base, ext = os.path.splitext(path)
@@ -1003,128 +975,334 @@ def train(config, paths, experiment_name, iteration, hist_size, run, total_train
     return v_loss, pi_loss, total_train_steps
 
 
-def update_reservoir(config, paths, iteration, hist_size):
-    """Move evicted window data to reservoir and thin if over capacity.
+def _load_reservoir_meta(reservoir_dir):
+    """Load reservoir metadata, or None if not found."""
+    meta_path = os.path.join(reservoir_dir, "reservoir_meta.json")
+    if not os.path.exists(meta_path):
+        return None
+    with open(meta_path) as f:
+        return json.load(f)
 
-    Uses per-iteration .ptz files (same naming as history). Eviction is O(1)
-    via os.rename. Thinning uses age-weighted removal biased toward oldest data.
+
+def _save_reservoir_meta(reservoir_dir, meta):
+    """Save reservoir metadata atomically."""
+    meta_path = os.path.join(reservoir_dir, "reservoir_meta.json")
+    tmp_path = meta_path + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(meta, f)
+    os.replace(tmp_path, meta_path)
+
+
+def _load_chunk(reservoir_dir, chunk_idx):
+    """Load a reservoir chunk, returning (c, v, pi, iters) tensors."""
+    prefix = os.path.join(reservoir_dir, f"chunk_{chunk_idx:02d}")
+    c = load_compressed(prefix + "_canonical.ptz")
+    v = load_compressed(prefix + "_v.ptz")
+    pi = load_compressed(prefix + "_pi.ptz")
+    iters = load_compressed(prefix + "_iters.ptz")
+    return c, v, pi, iters
+
+
+def _save_chunk(reservoir_dir, chunk_idx, c, v, pi, iters, zstd_level=1):
+    """Save a reservoir chunk atomically."""
+    prefix = os.path.join(reservoir_dir, f"chunk_{chunk_idx:02d}")
+    _atomic_save_compressed(c, prefix + "_canonical.ptz", zstd_level=zstd_level)
+    _atomic_save_compressed(v, prefix + "_v.ptz", zstd_level=zstd_level)
+    _atomic_save_compressed(pi, prefix + "_pi.ptz", zstd_level=zstd_level)
+    _atomic_save_compressed(iters, prefix + "_iters.ptz", half_storage=False, zstd_level=zstd_level)
+
+
+def glob_reservoir_chunks(reservoir_dir):
+    """Glob for reservoir chunk files, returning (c_path, v_path, pi_path, size) tuples.
+
+    Uses metadata chunk_size when available, falls back to loading canonical tensor.
+    """
+    c_files = sorted(glob.glob(os.path.join(reservoir_dir, "chunk_*_canonical.ptz")))
+    if not c_files:
+        return []
+
+    # Try to get chunk_size from metadata (avoids loading tensors)
+    meta = _load_reservoir_meta(reservoir_dir)
+    meta_chunk_size = meta.get("chunk_size") if meta else None
+
+    triples = []
+    for i, c_path in enumerate(c_files):
+        v_path = c_path.replace("_canonical.ptz", "_v.ptz")
+        pi_path = c_path.replace("_canonical.ptz", "_pi.ptz")
+        if os.path.exists(v_path) and os.path.exists(pi_path):
+            # Last chunk or no metadata: need actual size
+            is_last = (meta and i == meta.get("chunks_filled", 0) - 1)
+            if meta_chunk_size and not is_last:
+                size = meta_chunk_size
+            else:
+                c_tensor = load_compressed(c_path)
+                size = c_tensor.shape[0]
+                del c_tensor
+            triples.append((c_path, v_path, pi_path, size))
+    return triples
+
+
+def _load_staging_data(staging_dir):
+    """Load all staging files, returning (c, v, pi, iters) concatenated tensors, or None if empty."""
+    staging_triples = glob_file_triples(staging_dir)
+    if not staging_triples:
+        return None
+    cs, vs, pis, iters_list = [], [], [], []
+    for c_path, v_path, pi_path, size in staging_triples:
+        cs.append(load_compressed(c_path))
+        vs.append(load_compressed(v_path))
+        pis.append(load_compressed(pi_path))
+        iter_num = int(os.path.basename(c_path).split("-")[0])
+        iters_list.append(torch.full((size,), iter_num, dtype=torch.int16))
+    return torch.cat(cs), torch.cat(vs), torch.cat(pis), torch.cat(iters_list)
+
+
+def _migrate_legacy_reservoir(config, reservoir_dir):
+    """One-time migration from per-iteration reservoir files to chunked format."""
+    legacy_triples = glob_file_triples(reservoir_dir)
+    legacy_triples += glob_file_triples(reservoir_dir, "*-canonical-*.pt")
+    if not legacy_triples:
+        return
+
+    print(f"Migrating {len(legacy_triples)} legacy reservoir files to chunked format...")
+    chunk_size = config.reservoir_chunk_size
+    chunks_filled = 0
+    buf_c, buf_v, buf_pi, buf_iters = [], [], [], []
+    buf_len = 0
+
+    for c_path, v_path, pi_path, size in tqdm.tqdm(legacy_triples, desc="Migration", leave=False):
+        c = _load_hist_tensor(c_path)
+        v = _load_hist_tensor(v_path)
+        pi = _load_hist_tensor(pi_path)
+        iter_num = int(os.path.basename(c_path).split("-")[0])
+        buf_c.append(c)
+        buf_v.append(v)
+        buf_pi.append(pi)
+        buf_iters.append(torch.full((size,), iter_num, dtype=torch.int16))
+        buf_len += size
+
+        while buf_len >= chunk_size:
+            all_c = torch.cat(buf_c)
+            all_v = torch.cat(buf_v)
+            all_pi = torch.cat(buf_pi)
+            all_iters = torch.cat(buf_iters)
+            _save_chunk(reservoir_dir, chunks_filled,
+                        all_c[:chunk_size], all_v[:chunk_size],
+                        all_pi[:chunk_size], all_iters[:chunk_size],
+                        zstd_level=config.zstd_level)
+            # Keep remainder
+            remainder = buf_len - chunk_size
+            if remainder > 0:
+                buf_c = [all_c[chunk_size:]]
+                buf_v = [all_v[chunk_size:]]
+                buf_pi = [all_pi[chunk_size:]]
+                buf_iters = [all_iters[chunk_size:]]
+            else:
+                buf_c, buf_v, buf_pi, buf_iters = [], [], [], []
+            buf_len = remainder
+            chunks_filled += 1
+            del all_c, all_v, all_pi, all_iters
+
+    # Save final partial chunk
+    if buf_len > 0:
+        all_c = torch.cat(buf_c)
+        all_v = torch.cat(buf_v)
+        all_pi = torch.cat(buf_pi)
+        all_iters = torch.cat(buf_iters)
+        _save_chunk(reservoir_dir, chunks_filled,
+                    all_c, all_v, all_pi, all_iters,
+                    zstd_level=config.zstd_level)
+        chunks_filled += 1
+
+    # Determine last_updated from iteration numbers in filenames
+    last_updated = []
+    for i in range(chunks_filled):
+        _, _, _, iters = _load_chunk(reservoir_dir, i)
+        last_updated.append(int(iters.max().item()))
+
+    meta = {
+        "version": 2,
+        "n_chunks": config.reservoir_n_chunks,
+        "chunk_size": chunk_size,
+        "chunks_filled": chunks_filled,
+        "last_updated": last_updated,
+    }
+    _save_reservoir_meta(reservoir_dir, meta)
+
+    # Delete legacy files
+    for c_path, v_path, pi_path, _ in legacy_triples:
+        for p in (c_path, v_path, pi_path):
+            if os.path.exists(p):
+                os.remove(p)
+
+    print(f"Migration complete: {chunks_filled} chunks created")
+
+
+def update_reservoir(config, paths, iteration, hist_size):
+    """Move evicted window data to reservoir staging, then periodically merge into chunks.
+
+    Uses a fixed N-chunk reservoir with recency-weighted merge. Each update cycle
+    touches only K chunks (the stalest), keeping cost bounded and predictable.
     """
     hist_location = paths["history"]
     reservoir_location = paths["reservoir"]
+    staging_dir = os.path.join(reservoir_location, "staging")
 
     oldest_in_window = max(0, iteration - hist_size)
     prev_oldest = max(0, (iteration - 1) - calc_hist_size(config, iteration - 1))
     evicted_iters = list(range(prev_oldest, oldest_in_window))
-    if not evicted_iters:
+
+    # Move evicted files to staging (zero memory, O(1) per file)
+    if evicted_iters:
+        os.makedirs(staging_dir, exist_ok=True)
+        for it in tqdm.tqdm(evicted_iters, desc="Moving Evicted History", leave=False):
+            for pattern in (f"{it:04d}-*.ptz", f"{it:04d}-*.pt"):
+                for src in glob.glob(os.path.join(hist_location, pattern)):
+                    dst = os.path.join(staging_dir, os.path.basename(src))
+                    os.rename(src, dst)
+
+    # Only merge every N iterations
+    if iteration % config.reservoir_update_interval != 0:
         return
 
-    # Move evicted files to reservoir (zero memory, O(1) per file)
     os.makedirs(reservoir_location, exist_ok=True)
-    for it in tqdm.tqdm(evicted_iters, desc="Moving Evicted History", leave=False):
-        for pattern in (f"{it:04d}-*.ptz", f"{it:04d}-*.pt"):
-            for src in glob.glob(os.path.join(hist_location, pattern)):
-                dst = os.path.join(reservoir_location, os.path.basename(src))
-                os.rename(src, dst)
 
-    # Only thin every N iterations to batch expensive I/O
-    if iteration % config.reservoir_thin_interval != 0:
+    # Migrate legacy per-iteration files if needed
+    meta = _load_reservoir_meta(reservoir_location)
+    if meta is None:
+        legacy_triples = glob_file_triples(reservoir_location)
+        legacy_triples += glob_file_triples(reservoir_location, "*-canonical-*.pt")
+        if legacy_triples:
+            _migrate_legacy_reservoir(config, reservoir_location)
+            meta = _load_reservoir_meta(reservoir_location)
+
+    # Check if there's staging data to process
+    staging_data = _load_staging_data(staging_dir) if os.path.isdir(staging_dir) else None
+    if staging_data is None:
         return
 
-    # Check if thinning is needed
-    reservoir_triples = glob_file_triples(reservoir_location)
-    # Also check for .pt files in reservoir (legacy)
-    reservoir_triples += glob_file_triples(reservoir_location, "*-canonical-*.pt")
-    reservoir_total = sum(s for _, _, _, s in reservoir_triples)
+    staging_c, staging_v, staging_pi, staging_iters = staging_data
+    total_staging = staging_c.shape[0]
 
-    capacity = 0
-    for i in range(oldest_in_window, iteration + 1):
-        for fn in glob.glob(os.path.join(hist_location, f"{i:04d}-*-canonical-*.pt*")):
-            capacity += int(fn.rsplit("-", 1)[-1].split(".")[0])
+    # Initialize metadata if needed
+    if meta is None:
+        meta = {
+            "version": 2,
+            "n_chunks": config.reservoir_n_chunks,
+            "chunk_size": config.reservoir_chunk_size,
+            "chunks_filled": 0,
+            "last_updated": [],
+        }
 
-    excess = reservoir_total - capacity
-    if excess <= 0:
-        return
+    n_chunks = config.reservoir_n_chunks
+    chunk_size = config.reservoir_chunk_size
+    chunks_filled = meta["chunks_filled"]
 
-    # Build per-iteration info from reservoir filenames
-    iter_info = {}   # iter_num -> total_samples
-    iter_files = {}  # iter_num -> [(c, v, pi, size), ...]
-    for c_path, v_path, pi_path, size in reservoir_triples:
-        iter_num = int(os.path.basename(c_path).split("-")[0])
-        iter_info[iter_num] = iter_info.get(iter_num, 0) + size
-        iter_files.setdefault(iter_num, []).append((c_path, v_path, pi_path, size))
+    if chunks_filled < n_chunks:
+        # FILLING PHASE: fill next chunks sequentially
+        offset = 0
+        while offset < total_staging and chunks_filled < n_chunks:
+            end = min(offset + chunk_size, total_staging)
+            chunk_c = staging_c[offset:end]
+            chunk_v = staging_v[offset:end]
+            chunk_pi = staging_pi[offset:end]
+            chunk_iters = staging_iters[offset:end]
+            _save_chunk(reservoir_location, chunks_filled,
+                        chunk_c, chunk_v, chunk_pi, chunk_iters,
+                        zstd_level=config.zstd_level)
+            meta["last_updated"].append(iteration)
+            chunks_filled += 1
+            offset = end
+        meta["chunks_filled"] = chunks_filled
+    else:
+        # MERGE PHASE: merge staging into K stalest chunks
+        K = min(config.reservoir_chunks_per_update, chunks_filled)
 
-    # Compute age-weighted removal targets (older → more removals per sample)
-    total_weight = 0.0
-    iter_weights = {}
-    for iter_num, iter_samples in iter_info.items():
-        age = iteration - iter_num
-        weight = ((1.0 / config.reservoir_recency_decay) ** age) * iter_samples
-        iter_weights[iter_num] = weight
-        total_weight += weight
+        # Select K stalest chunks
+        last_updated = meta["last_updated"]
+        target_indices = sorted(range(chunks_filled),
+                                key=lambda i: last_updated[i])[:K]
 
-    removals = {}
-    for iter_num, weight in iter_weights.items():
-        removals[iter_num] = round(excess * weight / total_weight)
+        # Compute per-chunk new data budget from decay
+        C = (n_chunks / K) * config.reservoir_update_interval
+        decay = config.reservoir_recency_decay
+        target_rate = 1 - decay ** C
+        w_old_est = decay ** (C / 2)
+        new_per_chunk = int(target_rate * chunk_size * w_old_est / (1 - target_rate))
+        new_per_chunk = max(1, min(new_per_chunk, total_staging))
 
-    # Phase A: pre-compute work items (sequential, fast integer math)
-    delete_files = []  # file paths to remove outright
-    thin_work = []     # args tuples for _thin_triple
-
-    for iter_num in sorted(removals.keys()):
-        budget = removals[iter_num]
-        if budget <= 0:
-            continue
-        iter_samples = iter_info[iter_num]
-        if budget >= iter_samples:
-            for c_path, v_path, pi_path, _ in iter_files[iter_num]:
-                delete_files.extend([c_path, v_path, pi_path])
-            continue
-        remaining_budget = budget
-        for c_path, v_path, pi_path, file_size in iter_files[iter_num]:
-            if remaining_budget <= 0:
-                break
-            sub_budget = min(
-                round(budget * file_size / iter_samples),
-                remaining_budget, file_size
-            )
-            if sub_budget <= 0:
-                continue
-            keep = file_size - sub_budget
-            if keep <= 0:
-                delete_files.extend([c_path, v_path, pi_path])
-                remaining_budget -= file_size
+        for chunk_idx in tqdm.tqdm(target_indices, desc="Merging Reservoir Chunks", leave=False):
+            # Subsample staging data for this chunk (random draw)
+            if total_staging <= new_per_chunk:
+                new_c, new_v, new_pi, new_iters = staging_c, staging_v, staging_pi, staging_iters
             else:
-                thin_work.append((c_path, v_path, pi_path, file_size, keep,
-                                  config.zstd_level))
-                remaining_budget -= sub_budget
+                perm = torch.randperm(total_staging)[:new_per_chunk]
+                new_c = staging_c[perm]
+                new_v = staging_v[perm]
+                new_pi = staging_pi[perm]
+                new_iters = staging_iters[perm]
 
-    # Phase B: execute deletions then thin in parallel
-    for fp in delete_files:
-        if os.path.exists(fp):
-            os.remove(fp)
+            # Load existing chunk
+            old_c, old_v, old_pi, old_iters = _load_chunk(reservoir_location, chunk_idx)
 
-    num_workers = config.resolved_loader_threads
-    if thin_work:
-        if num_workers <= 1:
-            for item in tqdm.tqdm(thin_work, desc="Thinning Reservoir", leave=False):
-                _thin_triple(item)
-        else:
-            with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                futures = [executor.submit(_thin_triple, item) for item in thin_work]
-                for fut in tqdm.tqdm(as_completed(futures), total=len(futures),
-                                     desc="Thinning Reservoir", leave=False):
-                    fut.result()  # propagate exceptions
+            # Pool = concat(old, new)
+            pool_c = torch.cat([old_c, new_c])
+            pool_v = torch.cat([old_v, new_v])
+            pool_pi = torch.cat([old_pi, new_pi])
+            pool_iters = torch.cat([old_iters, new_iters])
+            del old_c, old_v, old_pi, old_iters
 
+            # Compute recency weights
+            ages = (iteration - pool_iters.float()).clamp(min=0)
+            weights = decay ** ages
+
+            # Select chunk_size samples (or all if pool is smaller)
+            select_size = min(chunk_size, pool_c.shape[0])
+            if select_size < pool_c.shape[0]:
+                selected = torch.multinomial(weights, select_size, replacement=False)
+            else:
+                selected = torch.arange(pool_c.shape[0])
+
+            _save_chunk(reservoir_location, chunk_idx,
+                        pool_c[selected], pool_v[selected],
+                        pool_pi[selected], pool_iters[selected],
+                        zstd_level=config.zstd_level)
+            del pool_c, pool_v, pool_pi, pool_iters, weights
+            last_updated[chunk_idx] = iteration
+
+        meta["last_updated"] = last_updated
+
+    _save_reservoir_meta(reservoir_location, meta)
+
+    # Delete staging files
+    if os.path.isdir(staging_dir):
+        shutil.rmtree(staging_dir)
+
+    del staging_c, staging_v, staging_pi, staging_iters
     gc.collect()
 
 
 def load_reservoir(paths, num_workers=1):
     """Load reservoir as a TensorDataset, or None if no reservoir exists.
 
-    Supports both per-iteration files (new format) and monolithic files (legacy).
+    Supports chunked format (primary), per-iteration files (legacy), and
+    monolithic files (oldest legacy).
     """
-    # Try new per-iteration format first
-    triples = glob_file_triples(paths["reservoir"])
+    reservoir_dir = paths["reservoir"]
+
+    # Try chunked format first
+    meta = _load_reservoir_meta(reservoir_dir)
+    if meta is not None and meta.get("chunks_filled", 0) > 0:
+        chunk_triples = glob_reservoir_chunks(reservoir_dir)
+        if chunk_triples:
+            loaded = _parallel_load_triples(chunk_triples, num_workers, desc="Loading Reservoir")
+            cs = [ct for ct, _, _ in loaded]
+            vs = [vt for _, vt, _ in loaded]
+            pis = [pt for _, _, pt in loaded]
+            return TensorDataset(torch.cat(cs), torch.cat(vs), torch.cat(pis))
+
+    # Try per-iteration format
+    triples = glob_file_triples(reservoir_dir)
     if triples:
         loaded = _parallel_load_triples(triples, num_workers, desc="Loading Reservoir")
         cs = [ct for ct, _, _ in loaded]
@@ -1133,12 +1311,12 @@ def load_reservoir(paths, num_workers=1):
         return TensorDataset(torch.cat(cs), torch.cat(vs), torch.cat(pis))
 
     # Fall back to old monolithic format
-    res_c_path = os.path.join(paths["reservoir"], "canonical.ptz")
+    res_c_path = os.path.join(reservoir_dir, "canonical.ptz")
     if not os.path.exists(res_c_path):
         return None
     c = load_compressed(res_c_path)
-    v = load_compressed(os.path.join(paths["reservoir"], "v.ptz"))
-    pi = load_compressed(os.path.join(paths["reservoir"], "pi.ptz"))
+    v = load_compressed(os.path.join(reservoir_dir, "v.ptz"))
+    pi = load_compressed(os.path.join(reservoir_dir, "pi.ptz"))
     return TensorDataset(c, v, pi)
 
 
@@ -1776,13 +1954,17 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 phase_bar.set_description(f"Bootstrap: {phase}")
 
                 if phase == "Copy Reservoir":
-                    source_res_triples = glob_file_triples(source_paths["reservoir"])
-                    if source_res_triples:
-                        os.makedirs(paths["reservoir"], exist_ok=True)
-                        all_res_files = []
-                        for c, v, p, _ in source_res_triples:
-                            all_res_files.extend([c, v, p])
-                        for src in tqdm.tqdm(all_res_files, desc="  Files", leave=False):
+                    os.makedirs(paths["reservoir"], exist_ok=True)
+                    # Copy all reservoir files (chunks, metadata, and any legacy files)
+                    source_res = source_paths["reservoir"]
+                    res_files = (
+                        glob.glob(os.path.join(source_res, "chunk_*.ptz"))
+                        + glob.glob(os.path.join(source_res, "reservoir_meta.json"))
+                        + [p for c, v, p2, _ in glob_file_triples(source_res)
+                           for p in (c, v, p2)]
+                    )
+                    if res_files:
+                        for src in tqdm.tqdm(res_files, desc="  Files", leave=False):
                             shutil.copy2(src, os.path.join(paths["reservoir"], os.path.basename(src)))
 
                 elif phase == "Copy Window":
@@ -1810,7 +1992,10 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         shutil.copy2(cps[-1], os.path.join(paths["checkpoint"], dest_name))
 
                 elif phase == "Retrain":
-                    reservoir_files = glob_file_triples(paths["reservoir"])
+                    # Try chunked reservoir first, fall back to per-iteration
+                    reservoir_files = glob_reservoir_chunks(paths["reservoir"])
+                    if not reservoir_files:
+                        reservoir_files = glob_file_triples(paths["reservoir"])
                     window_files = glob_file_triples(paths["history"])
 
                     nn = neural_net.NNWrapper.load_checkpoint(

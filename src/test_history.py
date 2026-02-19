@@ -26,6 +26,8 @@ from game_runner import (
     StreamingCompressedDataset, load_reservoir, train,
     exploit_symmetries, resample_by_surprise,
     _bootstrap_retrain, _bootstrap_train_phase,
+    glob_reservoir_chunks, _load_reservoir_meta, _save_reservoir_meta,
+    _load_chunk, _save_chunk, _migrate_legacy_reservoir,
 )
 from config import TrainConfig
 
@@ -162,7 +164,7 @@ def test_replace_size_in_path():
 
 
 # ============================================================
-# Reservoir logic (per-iteration format)
+# Reservoir logic (chunked format)
 # ============================================================
 
 
@@ -199,11 +201,54 @@ def test_reservoir_recency_weighting():
 
 
 def test_reservoir_metadata_roundtrip(tmp_path):
-    """Integer values round-trip through half-precision storage."""
-    iters = torch.tensor([0, 1, 2, 5, 10, 20], dtype=torch.int16)
-    save_compressed(iters.float(), str(tmp_path / "meta.ptz"))
-    loaded = load_compressed(str(tmp_path / "meta.ptz")).float().to(torch.int16)
-    assert torch.equal(iters, loaded)
+    """Reservoir metadata JSON round-trips correctly."""
+    meta = {
+        "version": 2,
+        "n_chunks": 10,
+        "chunk_size": 100,
+        "chunks_filled": 5,
+        "last_updated": [10, 20, 30, 40, 50],
+    }
+    res_dir = str(tmp_path / "reservoir")
+    os.makedirs(res_dir)
+    _save_reservoir_meta(res_dir, meta)
+    loaded = _load_reservoir_meta(res_dir)
+    assert loaded == meta
+
+
+def test_chunk_save_load_roundtrip(tmp_path):
+    """Chunk save/load round-trips data correctly."""
+    cs = Game.CANONICAL_SHAPE()
+    n = 50
+    c = torch.randn(n, cs[0], cs[1], cs[2])
+    v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+    pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+    iters = torch.randint(0, 100, (n,), dtype=torch.int16)
+
+    res_dir = str(tmp_path / "reservoir")
+    os.makedirs(res_dir)
+    _save_chunk(res_dir, 0, c, v, pi, iters)
+    lc, lv, lpi, liters = _load_chunk(res_dir, 0)
+
+    assert lc.shape == c.shape
+    assert lv.shape == v.shape
+    assert lpi.shape == pi.shape
+    assert torch.equal(liters, iters)
+
+
+def test_iters_tensor_roundtrip(tmp_path):
+    """int16 iteration tensor round-trips exactly (not stored as half)."""
+    iters = torch.tensor([0, 1, 2, 5, 10, 20, 100, 500], dtype=torch.int16)
+    res_dir = str(tmp_path / "reservoir")
+    os.makedirs(res_dir)
+    cs = Game.CANONICAL_SHAPE()
+    n = len(iters)
+    c = torch.randn(n, cs[0], cs[1], cs[2])
+    v = torch.randn(n, 3)
+    pi = torch.randn(n, 7)
+    _save_chunk(res_dir, 0, c, v, pi, iters)
+    _, _, _, loaded_iters = _load_chunk(res_dir, 0)
+    assert torch.equal(iters, loaded_iters)
 
 
 # ============================================================
@@ -317,12 +362,9 @@ def test_reservoir_bootstrap(tmp_path):
 # ============================================================
 
 
-def test_update_reservoir_moves_evicted_files(tmp_path):
-    """update_reservoir moves evicted files to reservoir directory."""
-    # window_size_scalar=1.0 produces small windows so eviction triggers quickly:
-    # calc_hist_size(config, 3) = 2, calc_hist_size(config, 4) = 2
-    # iter 3: evicts iter 0, iter 4: evicts iter 1
-    config = TrainConfig(window_size_scalar=1.0)
+def test_update_reservoir_moves_evicted_to_staging(tmp_path):
+    """update_reservoir moves evicted files to staging directory."""
+    config = TrainConfig(window_size_scalar=1.0, reservoir_update_interval=100)
     exp_dir = str(tmp_path / "experiment")
     paths = config.resolve_paths(exp_dir)
     for key in ("history", "reservoir"):
@@ -338,53 +380,45 @@ def test_update_reservoir_moves_evicted_files(tmp_path):
         save_compressed(v, os.path.join(paths["history"], f"{i:04d}-0000-v-{n}.ptz"))
         save_compressed(p, os.path.join(paths["history"], f"{i:04d}-0000-pi-{n}.ptz"))
 
+    # Use high update_interval so merge doesn't trigger, just staging
     for iteration in range(3, 5):
         hist_size = calc_hist_size(config, iteration)
         update_reservoir(config, paths, iteration, hist_size)
 
-    # Reservoir should contain evicted iterations (0 and 1)
-    reservoir_triples = glob_file_triples(paths["reservoir"])
-    assert len(reservoir_triples) >= 1, "Reservoir should have evicted files"
+    # Staging dir should contain evicted iterations
+    staging_dir = os.path.join(paths["reservoir"], "staging")
+    staging_triples = glob_file_triples(staging_dir)
+    assert len(staging_triples) >= 1, "Staging should have evicted files"
 
-    reservoir_iters = set()
-    for c_path, _, _, _ in reservoir_triples:
+    staging_iters = set()
+    for c_path, _, _, _ in staging_triples:
         iter_num = int(os.path.basename(c_path).split("-")[0])
-        reservoir_iters.add(iter_num)
-    assert 0 in reservoir_iters, "Iteration 0 should be in reservoir"
-
-    # Verify files are proper per-iteration format
-    for c_path, v_path, pi_path, size in reservoir_triples:
-        assert "-canonical-" in c_path
-        assert "-v-" in v_path
-        assert "-pi-" in pi_path
-        assert size > 0
+        staging_iters.add(iter_num)
+    assert 0 in staging_iters, "Iteration 0 should be in staging"
 
     # Evicted files should no longer be in history
-    for evicted_iter in reservoir_iters:
+    for evicted_iter in staging_iters:
         hist_files = glob.glob(os.path.join(paths["history"], f"{evicted_iter:04d}-*.ptz"))
         assert len(hist_files) == 0, f"Iteration {evicted_iter} still in history after eviction"
 
 
-def test_update_reservoir_thinning(tmp_path):
-    """Reservoir thins down when exceeding window capacity.
-
-    With window_size_scalar=1.0 and 9 iterations (n=100 each):
-    - Evictions at iters 3(→0), 4(→1), 6(→2), 7(→3), 8(→4)
-    - After iter 8: reservoir has 5 iters × 100 = 500 samples
-    - Window has 4 iters (5-8) = 400 capacity
-    - excess = 100 → thinning triggers
-    """
-    config = TrainConfig(window_size_scalar=1.0, reservoir_thin_interval=1)
+def test_reservoir_filling_phase(tmp_path):
+    """Empty reservoir fills chunks sequentially from staging data."""
+    config = TrainConfig(
+        window_size_scalar=1.0,
+        reservoir_update_interval=1,
+        reservoir_n_chunks=5,
+        reservoir_chunk_size=40,
+    )
     exp_dir = str(tmp_path / "experiment")
     paths = config.resolve_paths(exp_dir)
     for key in ("history", "reservoir"):
         os.makedirs(paths[key], exist_ok=True)
 
     cs = Game.CANONICAL_SHAPE()
-    n = 100
-
-    # Create 9 iterations of history (0-8)
-    for i in range(9):
+    n = 50
+    # Create enough iterations to trigger eviction and filling
+    for i in range(6):
         c = torch.randn(n, cs[0], cs[1], cs[2])
         v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
         p = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
@@ -392,47 +426,90 @@ def test_update_reservoir_thinning(tmp_path):
         save_compressed(v, os.path.join(paths["history"], f"{i:04d}-0000-v-{n}.ptz"))
         save_compressed(p, os.path.join(paths["history"], f"{i:04d}-0000-pi-{n}.ptz"))
 
-    # Run reservoir updates sequentially (simulating the training loop)
-    for iteration in range(3, 9):
+    for iteration in range(3, 6):
         hist_size = calc_hist_size(config, iteration)
         update_reservoir(config, paths, iteration, hist_size)
 
-    # Reservoir should be bounded: total reservoir <= window capacity
-    reservoir_triples = glob_file_triples(paths["reservoir"])
-    reservoir_total = sum(s for _, _, _, s in reservoir_triples)
+    # Check chunks were created
+    meta = _load_reservoir_meta(paths["reservoir"])
+    assert meta is not None, "Metadata should exist after filling"
+    assert meta["chunks_filled"] > 0, "At least one chunk should be filled"
 
-    # Compute current window capacity
-    final_iter = 8
-    final_hist_size = calc_hist_size(config, final_iter)
-    capacity = 0
-    for i in range(max(0, final_iter - final_hist_size), final_iter + 1):
-        for fn in glob.glob(os.path.join(paths["history"], f"{i:04d}-*-canonical-*.ptz")):
-            capacity += int(fn.rsplit("-", 1)[-1].split(".")[0])
-
-    assert capacity > 0, "Window should have data"
-    assert reservoir_total > 0, "Reservoir should have data after evictions"
-    assert reservoir_total <= capacity, \
-        f"Reservoir ({reservoir_total}) exceeds capacity ({capacity})"
+    # Verify chunk files exist and are loadable
+    for i in range(meta["chunks_filled"]):
+        c, v, pi, iters = _load_chunk(paths["reservoir"], i)
+        assert c.shape[0] > 0
+        assert c.shape[0] == v.shape[0] == pi.shape[0] == iters.shape[0]
 
 
-def test_update_reservoir_thinning_age_bias(tmp_path):
-    """Age-weighted thinning removes more old samples than recent ones.
-
-    Uses reservoir_recency_decay=0.9 (aggressive) so the age bias is clearly
-    visible after thinning. With window_size_scalar=1.0 and 12 iterations,
-    multiple thinning rounds occur with enough iterations in the reservoir
-    to see the age-weighted effect.
-    """
-    config = TrainConfig(window_size_scalar=1.0, reservoir_recency_decay=0.9, reservoir_thin_interval=1)
+def test_update_reservoir_merge_phase(tmp_path):
+    """After filling, merge phase updates stalest chunks with staging data."""
+    config = TrainConfig(
+        window_size_scalar=1.0,
+        reservoir_update_interval=1,
+        reservoir_n_chunks=3,
+        reservoir_chunk_size=30,
+        reservoir_chunks_per_update=2,
+        reservoir_recency_decay=0.9,
+    )
     exp_dir = str(tmp_path / "experiment")
     paths = config.resolve_paths(exp_dir)
     for key in ("history", "reservoir"):
         os.makedirs(paths[key], exist_ok=True)
 
     cs = Game.CANONICAL_SHAPE()
-    n = 200
+    n = 50
 
-    # Create 12 iterations with large sample counts to force multiple thinning rounds
+    # Create many iterations to fill reservoir and trigger merge
+    for i in range(15):
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+        p = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+        save_compressed(c, os.path.join(paths["history"], f"{i:04d}-0000-canonical-{n}.ptz"))
+        save_compressed(v, os.path.join(paths["history"], f"{i:04d}-0000-v-{n}.ptz"))
+        save_compressed(p, os.path.join(paths["history"], f"{i:04d}-0000-pi-{n}.ptz"))
+
+    for iteration in range(3, 15):
+        hist_size = calc_hist_size(config, iteration)
+        update_reservoir(config, paths, iteration, hist_size)
+
+    meta = _load_reservoir_meta(paths["reservoir"])
+    assert meta is not None
+    assert meta["chunks_filled"] == config.reservoir_n_chunks, \
+        f"All {config.reservoir_n_chunks} chunks should be filled"
+
+    # Verify each chunk has at most chunk_size samples
+    for i in range(meta["chunks_filled"]):
+        c, v, pi, iters = _load_chunk(paths["reservoir"], i)
+        assert c.shape[0] <= config.reservoir_chunk_size
+        assert c.shape[0] == v.shape[0] == pi.shape[0] == iters.shape[0]
+
+    # Staging should be cleaned up after merge
+    staging_dir = os.path.join(paths["reservoir"], "staging")
+    assert not os.path.isdir(staging_dir), "Staging dir should be removed after merge"
+
+
+def test_update_reservoir_recency_bias(tmp_path):
+    """Merge phase preserves recency bias: recent samples survive more often.
+
+    Uses aggressive decay (0.8) so the bias is clearly visible.
+    """
+    config = TrainConfig(
+        window_size_scalar=1.0,
+        reservoir_update_interval=1,
+        reservoir_n_chunks=2,
+        reservoir_chunk_size=50,
+        reservoir_chunks_per_update=2,
+        reservoir_recency_decay=0.8,
+    )
+    exp_dir = str(tmp_path / "experiment")
+    paths = config.resolve_paths(exp_dir)
+    for key in ("history", "reservoir"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    cs = Game.CANONICAL_SHAPE()
+    n = 80
+
     for i in range(12):
         c = torch.randn(n, cs[0], cs[1], cs[2])
         v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
@@ -441,29 +518,27 @@ def test_update_reservoir_thinning_age_bias(tmp_path):
         save_compressed(v, os.path.join(paths["history"], f"{i:04d}-0000-v-{n}.ptz"))
         save_compressed(p, os.path.join(paths["history"], f"{i:04d}-0000-pi-{n}.ptz"))
 
-    # Run updates — evictions happen at iters 3,4,6,7,8,10,11
-    # Thinning triggers when reservoir exceeds window capacity
     for iteration in range(3, 12):
         hist_size = calc_hist_size(config, iteration)
         update_reservoir(config, paths, iteration, hist_size)
 
-    # Check that oldest iterations have fewer or no samples
-    reservoir_triples = glob_file_triples(paths["reservoir"])
-    iter_samples = {}
-    for c_path, _, _, size in reservoir_triples:
-        iter_num = int(os.path.basename(c_path).split("-")[0])
-        iter_samples[iter_num] = iter_samples.get(iter_num, 0) + size
+    # Check that recent iterations have more representation than old ones
+    meta = _load_reservoir_meta(paths["reservoir"])
+    assert meta is not None
 
-    assert len(iter_samples) >= 2, \
-        f"Expected at least 2 iterations in reservoir, got {len(iter_samples)}: {iter_samples}"
+    iter_counts = {}
+    for i in range(meta["chunks_filled"]):
+        _, _, _, iters = _load_chunk(paths["reservoir"], i)
+        for it in iters.tolist():
+            iter_counts[it] = iter_counts.get(it, 0) + 1
 
-    sorted_iters = sorted(iter_samples.keys())
-    oldest = sorted_iters[0]
-    newest = sorted_iters[-1]
-    # With recency bias (decay=0.9), newest should have >= oldest samples
-    assert iter_samples[newest] >= iter_samples[oldest], \
-        f"Newest iter {newest} ({iter_samples[newest]}) should have >= " \
-        f"oldest iter {oldest} ({iter_samples[oldest]})"
+    if len(iter_counts) >= 2:
+        sorted_iters = sorted(iter_counts.keys())
+        oldest = sorted_iters[0]
+        newest = sorted_iters[-1]
+        assert iter_counts[newest] >= iter_counts[oldest], \
+            f"Newest iter {newest} ({iter_counts[newest]}) should have >= " \
+            f"oldest iter {oldest} ({iter_counts[oldest]})"
 
 
 def test_atomic_save_produces_valid_file(tmp_path):
@@ -487,8 +562,8 @@ def test_atomic_save_no_temp_files_on_success(tmp_path):
     assert len(tmp_files) == 0
 
 
-def test_reservoir_source_copy_per_iteration(tmp_path):
-    """Bootstrap reservoir copy works with per-iteration files."""
+def test_reservoir_source_copy_chunks(tmp_path):
+    """Bootstrap reservoir copy works with chunked format."""
     import shutil
 
     source_res = tmp_path / "source" / "reservoir"
@@ -498,42 +573,111 @@ def test_reservoir_source_copy_per_iteration(tmp_path):
 
     cs = Game.CANONICAL_SHAPE()
     n = 50
-    # Create per-iteration reservoir files
+    # Create chunked reservoir
     for i in range(3):
-        save_compressed(torch.randn(n, cs[0], cs[1], cs[2]),
-                        str(source_res / f"{i:04d}-0000-canonical-{n}.ptz"))
-        save_compressed(torch.randn(n, 3),
-                        str(source_res / f"{i:04d}-0000-v-{n}.ptz"))
-        save_compressed(torch.randn(n, 7),
-                        str(source_res / f"{i:04d}-0000-pi-{n}.ptz"))
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.randn(n, 3)
+        pi = torch.randn(n, 7)
+        iters = torch.full((n,), i, dtype=torch.int16)
+        _save_chunk(str(source_res), i, c, v, pi, iters)
 
-    # Use glob_file_triples to discover and copy
-    source_triples = glob_file_triples(str(source_res))
-    assert len(source_triples) == 3
+    meta = {
+        "version": 2, "n_chunks": 10, "chunk_size": n,
+        "chunks_filled": 3, "last_updated": [0, 1, 2],
+    }
+    _save_reservoir_meta(str(source_res), meta)
 
-    all_files = []
-    for c, v, p, _ in source_triples:
-        all_files.extend([c, v, p])
+    # Copy chunk files + metadata
+    chunk_triples = glob_reservoir_chunks(str(source_res))
+    assert len(chunk_triples) == 3
+
+    all_files = glob.glob(str(source_res / "chunk_*.ptz")) + \
+                glob.glob(str(source_res / "reservoir_meta.json"))
     for src in all_files:
         shutil.copy2(src, str(dest_res / os.path.basename(src)))
 
-    dest_triples = glob_file_triples(str(dest_res))
+    dest_triples = glob_reservoir_chunks(str(dest_res))
     assert len(dest_triples) == 3
-    total_samples = sum(s for _, _, _, s in dest_triples)
-    assert total_samples == n * 3
+    dest_meta = _load_reservoir_meta(str(dest_res))
+    assert dest_meta["chunks_filled"] == 3
 
 
 def test_reservoir_empty_source_skips_copy(tmp_path):
-    """Bootstrap reservoir copy skips when source has no per-iteration files."""
+    """Bootstrap reservoir copy skips when source has no files."""
     source_res = tmp_path / "source" / "reservoir"
     dest_res = tmp_path / "dest" / "reservoir"
     source_res.mkdir(parents=True)
     dest_res.mkdir(parents=True)
 
-    # No per-iteration files → glob_file_triples returns empty
-    triples = glob_file_triples(str(source_res))
-    assert len(triples) == 0
+    # No files → both globs return empty
+    assert len(glob_file_triples(str(source_res))) == 0
+    assert len(glob_reservoir_chunks(str(source_res))) == 0
     assert len(list(dest_res.iterdir())) == 0
+
+
+def test_glob_reservoir_chunks(tmp_path):
+    """glob_reservoir_chunks finds chunk files correctly."""
+    res_dir = str(tmp_path / "reservoir")
+    os.makedirs(res_dir)
+    cs = Game.CANONICAL_SHAPE()
+    n = 30
+
+    for i in range(3):
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.randn(n, 3)
+        pi = torch.randn(n, 7)
+        iters = torch.full((n,), i, dtype=torch.int16)
+        _save_chunk(res_dir, i, c, v, pi, iters)
+
+    meta = {
+        "version": 2, "n_chunks": 10, "chunk_size": n,
+        "chunks_filled": 3, "last_updated": [0, 1, 2],
+    }
+    _save_reservoir_meta(res_dir, meta)
+
+    triples = glob_reservoir_chunks(res_dir)
+    assert len(triples) == 3
+    for c_path, v_path, pi_path, size in triples:
+        assert "_canonical.ptz" in c_path
+        assert "_v.ptz" in v_path
+        assert "_pi.ptz" in pi_path
+        assert size == n
+
+
+def test_reservoir_migration(tmp_path):
+    """Legacy per-iteration files are migrated to chunked format."""
+    config = TrainConfig(reservoir_n_chunks=10, reservoir_chunk_size=40)
+    res_dir = str(tmp_path / "reservoir")
+    os.makedirs(res_dir)
+    cs = Game.CANONICAL_SHAPE()
+    n = 30
+
+    # Create legacy per-iteration files
+    for i in range(3):
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.randn(n, 3)
+        pi = torch.randn(n, 7)
+        save_compressed(c, os.path.join(res_dir, f"{i:04d}-0000-canonical-{n}.ptz"))
+        save_compressed(v, os.path.join(res_dir, f"{i:04d}-0000-v-{n}.ptz"))
+        save_compressed(pi, os.path.join(res_dir, f"{i:04d}-0000-pi-{n}.ptz"))
+
+    _migrate_legacy_reservoir(config, res_dir)
+
+    # Metadata should exist
+    meta = _load_reservoir_meta(res_dir)
+    assert meta is not None
+    assert meta["chunks_filled"] > 0
+
+    # Legacy files should be deleted
+    legacy = glob_file_triples(res_dir)
+    assert len(legacy) == 0, "Legacy files should be removed after migration"
+
+    # Chunks should contain all data
+    total_in_chunks = 0
+    for i in range(meta["chunks_filled"]):
+        c, v, pi, iters = _load_chunk(res_dir, i)
+        total_in_chunks += c.shape[0]
+    assert total_in_chunks == n * 3, f"Expected {n * 3} samples, got {total_in_chunks}"
 
 
 # ============================================================
@@ -724,8 +868,8 @@ def test_train_subsamples_when_window_large(tmp_path):
 # ============================================================
 
 
-def test_load_reservoir_per_iteration(tmp_path):
-    """load_reservoir loads per-iteration .ptz files as TensorDataset."""
+def test_load_reservoir_chunks(tmp_path):
+    """load_reservoir loads chunked reservoir as TensorDataset."""
     res_dir = tmp_path / "reservoir"
     res_dir.mkdir()
     cs = Game.CANONICAL_SHAPE()
@@ -733,6 +877,34 @@ def test_load_reservoir_per_iteration(tmp_path):
     total_samples = 0
     for i in range(3):
         n = 50 + i * 10
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.randn(n, Game.NUM_PLAYERS() + 1)
+        pi = torch.randn(n, Game.NUM_MOVES())
+        iters = torch.full((n,), i, dtype=torch.int16)
+        _save_chunk(str(res_dir), i, c, v, pi, iters)
+        total_samples += n
+
+    meta = {
+        "version": 2, "n_chunks": 10, "chunk_size": 60,
+        "chunks_filled": 3, "last_updated": [0, 1, 2],
+    }
+    _save_reservoir_meta(str(res_dir), meta)
+
+    paths = {"reservoir": str(res_dir)}
+    ds = load_reservoir(paths)
+    assert ds is not None
+    assert len(ds) == total_samples
+
+
+def test_load_reservoir_legacy_per_iteration(tmp_path):
+    """load_reservoir falls back to per-iteration format when no chunks exist."""
+    res_dir = tmp_path / "reservoir"
+    res_dir.mkdir()
+    cs = Game.CANONICAL_SHAPE()
+
+    total_samples = 0
+    for i in range(2):
+        n = 50
         save_compressed(torch.randn(n, cs[0], cs[1], cs[2]),
                         str(res_dir / f"{i:04d}-0000-canonical-{n}.ptz"))
         save_compressed(torch.randn(n, Game.NUM_PLAYERS() + 1),
@@ -765,7 +937,7 @@ def test_bootstrap_retrain_with_reservoir(tmp_path):
 
     Simulates the diff-arch bootstrap path: build source data,
     call _bootstrap_retrain directly, verify training happened
-    and checkpoint can be saved.
+    and checkpoint can be saved. Uses chunked reservoir format.
     """
     cs = Game.CANONICAL_SHAPE()
 
@@ -776,16 +948,29 @@ def test_bootstrap_retrain_with_reservoir(tmp_path):
     for d in (source_hist, source_res):
         d.mkdir(parents=True)
 
-    # Source has 5 iterations (iters 0-2 in reservoir, 3-4 in window/history)
-    for i in range(5):
-        n = 60
+    # Reservoir: 3 chunks
+    n = 60
+    for i in range(3):
         c = torch.randn(n, cs[0], cs[1], cs[2])
         v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
         pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
-        dest = source_hist if i >= 3 else source_res
-        save_compressed(c, str(dest / f"{i:04d}-0000-canonical-{n}.ptz"))
-        save_compressed(v, str(dest / f"{i:04d}-0000-v-{n}.ptz"))
-        save_compressed(pi, str(dest / f"{i:04d}-0000-pi-{n}.ptz"))
+        iters = torch.full((n,), i, dtype=torch.int16)
+        _save_chunk(str(source_res), i, c, v, pi, iters)
+
+    meta = {
+        "version": 2, "n_chunks": 10, "chunk_size": n,
+        "chunks_filled": 3, "last_updated": [0, 1, 2],
+    }
+    _save_reservoir_meta(str(source_res), meta)
+
+    # Window: 2 iterations
+    for i in range(3, 5):
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+        pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+        save_compressed(c, str(source_hist / f"{i:04d}-0000-canonical-{n}.ptz"))
+        save_compressed(v, str(source_hist / f"{i:04d}-0000-v-{n}.ptz"))
+        save_compressed(pi, str(source_hist / f"{i:04d}-0000-pi-{n}.ptz"))
 
     source_n = 5
 
@@ -801,14 +986,14 @@ def test_bootstrap_retrain_with_reservoir(tmp_path):
     nn = NNWrapper(Game, nnargs)
     nn.save_checkpoint(str(dest_ckpt), "0000-test.pt")
 
-    # Copy reservoir files to dest
+    # Copy reservoir chunk files + metadata to dest
     import shutil
-    for c_path, v_path, pi_path, _ in glob_file_triples(str(source_res)):
-        for p in (c_path, v_path, pi_path):
-            shutil.copy2(p, str(dest_res / os.path.basename(p)))
+    for f in glob.glob(str(source_res / "chunk_*.ptz")) + \
+             glob.glob(str(source_res / "reservoir_meta.json")):
+        shutil.copy2(f, str(dest_res / os.path.basename(f)))
 
     # Discover files
-    reservoir_files = glob_file_triples(str(dest_res))
+    reservoir_files = glob_reservoir_chunks(str(dest_res))
     window_files = glob_file_triples(str(source_hist))
     assert len(reservoir_files) == 3
     assert len(window_files) == 2

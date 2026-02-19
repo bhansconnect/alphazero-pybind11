@@ -3,8 +3,8 @@
 
 Determines the optimal MCTS visit count for self-play and evaluation by:
 1. Running an Elo tournament between different visit count configurations
-2. Measuring policy convergence (JSD, TV, Hellinger, top-k agreement vs max-visits policy)
-3. Measuring value estimate convergence (correlation + MAE vs max-visits, and vs game outcomes)
+2. Measuring policy convergence (JSD, TV, Hellinger, top-k agreement vs anchor policy)
+3. Measuring value estimate convergence (correlation + MAE vs anchor, and vs game outcomes)
 """
 
 import os
@@ -42,6 +42,20 @@ DEFAULT_VISIT_COUNTS = [1, 25, 50, 100, 200, 400, 800]
 TOURNAMENT_BATCH_SIZE = 64
 TOURNAMENT_CONCURRENT_BATCHES = 2
 ANALYSIS_GAMES = 64
+
+
+# --- Entry helpers ---
+
+def entry_label(entry):
+    """Label for an (vc, mode) entry: '200' or '200sp'."""
+    vc, mode = entry
+    return f"{vc}sp" if mode == "selfplay" else str(vc)
+
+
+def entry_sort_key(entry):
+    """Sort key: by VC, then base before selfplay."""
+    vc, mode = entry
+    return (vc, 0 if mode == "base" else 1)
 
 
 def calc_temp(config, turn):
@@ -167,7 +181,7 @@ def select_checkpoint(checkpoints):
 # --- Phase 1: Interactive Configuration ---
 
 def interactive_config():
-    """Interactive configuration. Returns (config, Game, network_path, visit_counts, phases, use_playout, cache_size, visit_modes, tree_reuse)."""
+    """Interactive configuration. Returns (config, Game, network_path, entries, anchor, phases, use_playout, cache_size, tree_reuse)."""
     print("=== MCTS Threshold Analysis ===\n")
 
     # Game selection from registry
@@ -255,31 +269,33 @@ def interactive_config():
         else:
             print(f"  -> {os.path.basename(network_path)}\n")
 
-    # Visit counts (append 'sp' for selfplay mode, e.g. 200sp)
+    # Visit counts as (vc, mode) entries (append 'sp' for selfplay mode, e.g. 200sp)
     print(f"Default visit counts: {DEFAULT_VISIT_COUNTS}")
     print("  (1 = raw network policy, no MCTS search)")
     print("  (append 'sp' for selfplay mode, e.g. 200sp)")
+    print("  (same VC can appear in both modes, e.g. 200, 200sp)")
     vc_input = input("Enter comma-separated visit counts or press Enter for defaults: ").strip()
-    visit_modes = {}  # vc -> "base" or "selfplay"
     if vc_input:
-        visit_counts = []
+        entries = []
         for token in vc_input.split(","):
             token = token.strip().lower()
             if token.endswith("sp"):
                 vc = int(token[:-2])
-                visit_modes[vc] = "selfplay"
+                mode = "selfplay"
             else:
                 vc = int(token)
-                visit_modes[vc] = "base"
-            visit_counts.append(vc)
-        visit_counts = sorted(set(visit_counts))
+                mode = "base"
+            entry = (vc, mode)
+            if entry not in entries:
+                entries.append(entry)
+        anchor = entries[-1]  # last entry typed
+        entries.sort(key=entry_sort_key)
     else:
-        visit_counts = list(DEFAULT_VISIT_COUNTS)
-        for vc in visit_counts:
-            visit_modes[vc] = "base"
+        entries = [(vc, "base") for vc in DEFAULT_VISIT_COUNTS]
+        anchor = entries[-1]
     # Display with mode indicators
-    vc_display = [f"{vc}sp" if visit_modes[vc] == "selfplay" else str(vc) for vc in visit_counts]
-    print(f"  -> [{', '.join(vc_display)}]\n")
+    print(f"  -> [{', '.join(entry_label(e) for e in entries)}]")
+    print(f"  -> anchor: {entry_label(anchor)}\n")
 
     # Phase selection
     print("Select phases to run:")
@@ -304,24 +320,26 @@ def interactive_config():
     print(f"  -> cache_size={cache_size}\n")
 
     # Tree reuse
-    tree_reuse_input = input("Tree reuse (persistent MCTS across positions)? [n]: ").strip().lower()
-    tree_reuse = tree_reuse_input == 'y'
+    tree_reuse_input = input("Tree reuse (persistent MCTS across positions)? [Y/n]: ").strip().lower()
+    tree_reuse = tree_reuse_input != 'n'
     print(f"  -> tree_reuse={tree_reuse}\n")
 
-    return config, Game, network_path, visit_counts, phases, use_playout, cache_size, visit_modes, tree_reuse
+    return config, Game, network_path, entries, anchor, phases, use_playout, cache_size, tree_reuse
 
 
 # --- Phase 2: Elo Tournament (Round-Robin) ---
 
-def run_tournament(config, Game, network_path, visit_counts, use_playout=False, cache_size=0):
+def run_tournament(config, Game, network_path, entries, use_playout=False, cache_size=0):
     """Run round-robin Elo tournament between visit count configs.
 
-    Returns (elo_ratings, win_matrix) indexed by visit_counts order.
+    Returns (elo_ratings, win_matrix) indexed by unique numeric visit counts.
     """
     print("=" * 60)
     print("Phase: Elo Tournament (Round-Robin)")
     print("=" * 60)
 
+    # Tournament uses unique numeric VCs (mode doesn't affect tournament play)
+    visit_counts = sorted(set(vc for vc, _ in entries))
     count = len(visit_counts)
 
     # Load network (shared across players)
@@ -433,26 +451,25 @@ def _evaluate_leaves(agent, items, game_states, num_players, num_moves, cache):
         return list(zip(v_np, pi_np))
 
 
-def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
-                 cache_size=0, visit_modes=None, tree_reuse=False):
+def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
+                 cache_size=0, tree_reuse=False):
     """Run policy & value convergence analysis with batched inference.
 
     Plays ANALYSIS_GAMES concurrently, batching all NN inference calls across
     games for maximum cache sharing.
 
-    Per-VC modes: each visit count can be "base" (no noise, eval temp) or
-    "selfplay" (Dirichlet noise, root policy temp, selfplay temp).
+    Per-entry modes: each (vc, mode) entry can be "base" (no noise, eval temp)
+    or "selfplay" (Dirichlet noise, root policy temp, selfplay temp).
 
-    Tree reuse OFF: VCs within the same mode share one fresh tree per position.
-    Tree reuse ON: each VC gets its own persistent tree across positions.
+    Tree reuse OFF: entries within the same mode share one fresh tree per position.
+    Tree reuse ON: each entry gets its own persistent tree across positions.
 
     Returns dict with all collected metrics.
     """
-    if visit_modes is None:
-        visit_modes = {vc: "base" for vc in visit_counts}
-
-    has_selfplay = any(m == "selfplay" for m in visit_modes.values())
-    has_base = any(m == "base" for m in visit_modes.values())
+    base_entries = [e for e in entries if e[1] == "base"]
+    selfplay_entries = [e for e in entries if e[1] == "selfplay"]
+    has_selfplay = len(selfplay_entries) > 0
+    has_base = len(base_entries) > 0
 
     mode_str = []
     if has_base and has_selfplay:
@@ -482,15 +499,16 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
     num_players = Game.NUM_PLAYERS()
     num_moves = Game.NUM_MOVES()
     relative_values = Game().relative_values()
-    max_visits = max(visit_counts)
-    has_vc1 = 1 in visit_counts
 
-    base_vcs = sorted(vc for vc in visit_counts if visit_modes[vc] == "base")
-    selfplay_vcs = sorted(vc for vc in visit_counts if visit_modes[vc] == "selfplay")
+    anchor_vc = anchor[0]
+    has_vc1_base = (1, "base") in entries
+    has_vc1_selfplay = (1, "selfplay") in entries
 
-    # The base reference tree always runs to max_visits for move selection + Q-values
-    # even if max_visits is a selfplay VC
-    base_ref_target = max_visits
+    base_vcs = sorted(set(e[0] for e in base_entries))
+    selfplay_vcs = sorted(set(e[0] for e in selfplay_entries))
+
+    # The base reference tree always runs to anchor_vc for move selection + Q-values
+    base_ref_target = anchor_vc
 
     # Per-game state
     game_states = [Game() for _ in range(ANALYSIS_GAMES)]
@@ -512,24 +530,25 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
                               config.shaped_dirichlet)
 
     # Tree storage: trees[gid] = {key: (mcts_obj, target_vc, is_selfplay)}
-    # key is either a vc (int) for tree_reuse, or "base"/"selfplay" for shared trees,
-    # plus "base_ref" if needed
+    # key is either an entry tuple (vc, mode) for tree_reuse, or "base"/"selfplay"
+    # for shared trees, plus "base_ref" if needed
     trees = {}
 
     if tree_reuse:
-        # One persistent tree per VC per game
+        # One persistent tree per entry per game
         for gid in range(ANALYSIS_GAMES):
             trees[gid] = {}
-            for vc in visit_counts:
-                is_sp = visit_modes[vc] == "selfplay"
+            for entry in entries:
+                vc, mode = entry
+                is_sp = mode == "selfplay"
                 mcts_obj = _make_selfplay_mcts() if is_sp else _make_base_mcts()
-                trees[gid][vc] = (mcts_obj, vc, is_sp)
-            # If max_visits is selfplay, we need a separate base ref tree
-            if visit_modes[max_visits] == "selfplay":
-                trees[gid]["base_ref"] = (_make_base_mcts(), max_visits, False)
+                trees[gid][entry] = (mcts_obj, vc, is_sp)
+            # If anchor is selfplay, we need a separate base ref tree
+            if anchor[1] == "selfplay":
+                trees[gid]["base_ref"] = (_make_base_mcts(), anchor_vc, False)
     # Shared trees created per-position below
 
-    print(f"Playing {ANALYSIS_GAMES} games with max {max_visits} visits per position...")
+    print(f"Playing {ANALYSIS_GAMES} games with anchor {entry_label(anchor)} per position...")
 
     total_positions = 0
     pbar = tqdm.tqdm(desc="Positions", unit="pos")
@@ -537,7 +556,7 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
     while active:
         n = len(active)
 
-        # Per-position snapshot storage
+        # Per-position snapshot storage (keyed by entry tuples)
         pos_policies = [{} for _ in range(n)]
         pos_values = [{} for _ in range(n)]
         pos_q_values = [None] * n
@@ -546,56 +565,54 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
             # Create fresh shared trees per position
             for slot, gid in enumerate(active):
                 trees[gid] = {}
-                # Base shared tree — runs to max of base VCs and base_ref_target
-                base_target = max(base_vcs + [base_ref_target]) if base_vcs else base_ref_target
+                # Base shared tree — runs to max of base VCs and anchor_vc
+                base_target = max(base_vcs + [anchor_vc]) if base_vcs else anchor_vc
                 trees[gid]["base"] = (_make_base_mcts(), base_target, False)
-                # Selfplay shared tree (if any selfplay VCs)
+                # Selfplay shared tree (if any selfplay entries)
                 if selfplay_vcs:
                     trees[gid]["selfplay"] = (_make_selfplay_mcts(), max(selfplay_vcs), True)
 
         # Build the work list: (gid, key, tree, target_vc, is_selfplay)
-        # For tree_reuse, keys are individual VCs + optional "base_ref"
+        # For tree_reuse, keys are entry tuples + optional "base_ref"
         # For shared trees, keys are "base" and "selfplay"
         work_items = []
         for slot, gid in enumerate(active):
             for key, (mcts_obj, target, is_sp) in trees[gid].items():
                 work_items.append((gid, key, mcts_obj, target, is_sp, slot))
 
-        # Snapshot tracking: which VCs have been captured for each slot
-        # For shared trees, we snapshot intermediate VCs as root_n passes them
+        # Snapshot tracking: which entries have been captured for each slot
         snapshotted = [set() for _ in range(n)]
 
-        def _snapshot(slot, vc, mcts_obj, is_sp):
-            """Capture policy and value snapshot for a VC."""
-            if vc in snapshotted[slot]:
+        def _snapshot(slot, entry, mcts_obj, is_sp):
+            """Capture policy and value snapshot for an entry."""
+            if entry in snapshotted[slot]:
                 return
-            snapshotted[slot].add(vc)
-            pos_policies[slot][vc] = _get_policy(mcts_obj, is_sp, config)
+            snapshotted[slot].add(entry)
+            pos_policies[slot][entry] = _get_policy(mcts_obj, is_sp, config)
             wld = np.array(mcts_obj.root_value())
-            pos_values[slot][vc] = float(wld[0])
+            pos_values[slot][entry] = float(wld[0])
 
         def _check_snapshots(gid, key, mcts_obj, is_sp, slot):
-            """Check if root_n has reached any target VCs for this tree."""
+            """Check if root_n has reached any target entries for this tree."""
             rn = mcts_obj.root_n()
             if tree_reuse:
-                # key is a vc int or "base_ref"
-                if isinstance(key, int) and rn >= key:
+                # key is an entry tuple or "base_ref"
+                if isinstance(key, tuple) and rn >= key[0]:
                     _snapshot(slot, key, mcts_obj, is_sp)
             else:
-                # Shared tree — check all VCs of matching mode
-                vcs_to_check = selfplay_vcs if is_sp else base_vcs
-                for vc in vcs_to_check:
-                    if vc <= rn:
-                        _snapshot(slot, vc, mcts_obj, is_sp)
+                # Shared tree — check all entries of matching mode
+                entries_to_check = selfplay_entries if is_sp else base_entries
+                for entry in entries_to_check:
+                    if entry[0] <= rn:
+                        _snapshot(slot, entry, mcts_obj, is_sp)
 
         # Check if any trees are already at their target (tree reuse: root_n > 0)
         for gid, key, mcts_obj, target, is_sp, slot in work_items:
             _check_snapshots(gid, key, mcts_obj, is_sp, slot)
 
         # vc=1 is special: captured after 1 simulation from the appropriate tree
-        # For base vc=1: from base tree after 1 sim
-        # For selfplay vc=1: from selfplay tree after 1 sim
-        vc1_captured = [False] * n
+        vc1_captured_base = [False] * n
+        vc1_captured_selfplay = [False] * n
 
         # Main simulation loop — interleaved across all trees
         while True:
@@ -624,9 +641,10 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
                             mcts_obj.process_result(gs, v_cached, pi_cached, is_sp)
                             _check_snapshots(gid, key, mcts_obj, is_sp, slot)
                             # Check vc=1
-                            if has_vc1 and mcts_obj.root_n() >= 1 and not vc1_captured[slot]:
-                                if (is_sp and 1 in selfplay_vcs) or (not is_sp and 1 in base_vcs):
-                                    _snapshot(slot, 1, mcts_obj, is_sp)
+                            if has_vc1_base and not is_sp and mcts_obj.root_n() >= 1 and not vc1_captured_base[slot]:
+                                _snapshot(slot, (1, "base"), mcts_obj, is_sp)
+                            if has_vc1_selfplay and is_sp and mcts_obj.root_n() >= 1 and not vc1_captured_selfplay[slot]:
+                                _snapshot(slot, (1, "selfplay"), mcts_obj, is_sp)
                             continue  # try next leaf
                     miss_items.append((gid, key, mcts_obj, leaf, h, is_sp, slot, gs))
                     break  # need eval, stop this tree
@@ -643,35 +661,34 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
                 mcts_obj.process_result(gs, v, pi, is_sp)
                 _check_snapshots(gid, key, mcts_obj, is_sp, slot)
                 # Check vc=1 after first sim
-                if has_vc1 and mcts_obj.root_n() >= 1:
-                    if not vc1_captured[slot]:
-                        if (is_sp and 1 in selfplay_vcs) or (not is_sp and 1 in base_vcs):
-                            _snapshot(slot, 1, mcts_obj, is_sp)
-                            vc1_captured[slot] = True
+                if has_vc1_base and not is_sp and mcts_obj.root_n() >= 1 and not vc1_captured_base[slot]:
+                    _snapshot(slot, (1, "base"), mcts_obj, is_sp)
+                    vc1_captured_base[slot] = True
+                if has_vc1_selfplay and is_sp and mcts_obj.root_n() >= 1 and not vc1_captured_selfplay[slot]:
+                    _snapshot(slot, (1, "selfplay"), mcts_obj, is_sp)
+                    vc1_captured_selfplay[slot] = True
 
-        # Capture Q-values from the base reference tree at max_visits
+        # Capture Q-values from the base reference tree at anchor_vc
         for slot, gid in enumerate(active):
             if tree_reuse:
                 if "base_ref" in trees[gid]:
                     ref_tree = trees[gid]["base_ref"][0]
-                elif max_visits in trees[gid] and not trees[gid][max_visits][2]:
-                    # max_visits is a base VC
-                    ref_tree = trees[gid][max_visits][0]
+                elif anchor in trees[gid] and not trees[gid][anchor][2]:
+                    # anchor is a base entry
+                    ref_tree = trees[gid][anchor][0]
                 else:
-                    # Shouldn't happen, but fallback to any base tree at max_visits
-                    ref_tree = trees[gid][max_visits][0]
+                    ref_tree = trees[gid][anchor][0]
             else:
                 ref_tree = trees[gid]["base"][0]
             pos_q_values[slot] = np.array(ref_tree.root_q_values())
 
             # Always store base reference policy/value under "base_ref" key
-            # (separate from selfplay snapshots at the same VC)
             pos_policies[slot]["base_ref"] = _get_policy(ref_tree, False, config)
             pos_values[slot]["base_ref"] = float(np.array(ref_tree.root_value())[0])
-            # Also store at max_visits if no selfplay snapshot claimed it
-            if max_visits not in pos_policies[slot]:
-                pos_policies[slot][max_visits] = pos_policies[slot]["base_ref"]
-                pos_values[slot][max_visits] = pos_values[slot]["base_ref"]
+            # Fill anchor entry from base_ref if anchor is base mode and not yet captured
+            if anchor[1] == "base" and anchor not in pos_policies[slot]:
+                pos_policies[slot][anchor] = pos_policies[slot]["base_ref"]
+                pos_values[slot][anchor] = pos_values[slot]["base_ref"]
 
         # Record position data and advance games
         next_active = []
@@ -683,12 +700,12 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
             total_positions += 1
             pbar.update(1)
 
-            # Select move from base ref tree's max-visits policy with temperature
+            # Select move from base ref tree's policy with temperature
             if tree_reuse:
                 if "base_ref" in trees[gid]:
                     ref_tree = trees[gid]["base_ref"][0]
                 else:
-                    ref_tree = trees[gid][max_visits][0]
+                    ref_tree = trees[gid][anchor][0]
             else:
                 ref_tree = trees[gid]["base"][0]
 
@@ -722,22 +739,18 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
     pbar.close()
     print(f"Collected {total_positions} positions across {ANALYSIS_GAMES} games")
 
-    # Aggregate metrics from all games
-    all_jsd = {vc: [] for vc in visit_counts}
-    all_tv = {vc: [] for vc in visit_counts}
-    all_hellinger = {vc: [] for vc in visit_counts}
-    all_top1 = {vc: [] for vc in visit_counts}
-    all_top3 = {vc: [] for vc in visit_counts}
-    all_top9 = {vc: [] for vc in visit_counts}
-    position_values = {vc: [] for vc in visit_counts}
+    # Aggregate metrics from all games (keyed by entry tuples)
+    all_jsd = {e: [] for e in entries}
+    all_tv = {e: [] for e in entries}
+    all_hellinger = {e: [] for e in entries}
+    all_top1 = {e: [] for e in entries}
+    all_top3 = {e: [] for e in entries}
+    all_top9 = {e: [] for e in entries}
+    position_values = {e: [] for e in entries}
     position_max_values = []
     position_outcomes = []
-    # Expected reward: V(pi_vc) = sum(pi_vc * Q_max)
-    expected_reward = {vc: [] for vc in visit_counts}
-
-    # Only skip max_visits from divergence if it's base mode (identical to reference)
-    # If max_visits is selfplay, include it (divergence from base ref is interesting)
-    skip_div_vc = max_visits if visit_modes.get(max_visits, "base") == "base" else None
+    # Expected reward: V(pi_entry) = sum(pi_entry * Q_base_ref)
+    expected_reward = {e: [] for e in entries}
 
     for gid in range(ANALYSIS_GAMES):
         scores = game_scores[gid]
@@ -751,40 +764,39 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
                 outcome = 0.0
             position_outcomes.append(outcome)
 
-            # Policy divergence metrics vs base reference
-            if "base_ref" in policies_at_pos:
-                ref_policy = policies_at_pos["base_ref"]
-                for vc in visit_counts:
-                    if vc == skip_div_vc:
-                        continue  # skip base max_visits (identical to reference)
-                    if vc in policies_at_pos:
-                        q = policies_at_pos[vc]
-                        all_jsd[vc].append(jensen_shannon_divergence(ref_policy, q))
-                        all_tv[vc].append(total_variation(ref_policy, q))
-                        all_hellinger[vc].append(hellinger_distance(ref_policy, q))
-                        all_top1[vc].append(top_k_agreement(ref_policy, q, 1))
-                        all_top3[vc].append(top_k_agreement(ref_policy, q, 3))
-                        all_top9[vc].append(top_k_agreement(ref_policy, q, 9))
+            # Policy divergence metrics vs anchor entry
+            if anchor in policies_at_pos:
+                ref_policy = policies_at_pos[anchor]
+                for entry in entries:
+                    if entry in policies_at_pos:
+                        q = policies_at_pos[entry]
+                        all_jsd[entry].append(jensen_shannon_divergence(ref_policy, q))
+                        all_tv[entry].append(total_variation(ref_policy, q))
+                        all_hellinger[entry].append(hellinger_distance(ref_policy, q))
+                        all_top1[entry].append(top_k_agreement(ref_policy, q, 1))
+                        all_top3[entry].append(top_k_agreement(ref_policy, q, 3))
+                        all_top9[entry].append(top_k_agreement(ref_policy, q, 9))
 
             # Store values
-            for vc in visit_counts:
-                if vc in values_at_pos:
-                    position_values[vc].append(values_at_pos[vc])
-            if "base_ref" in values_at_pos:
-                position_max_values.append(values_at_pos["base_ref"])
+            for entry in entries:
+                if entry in values_at_pos:
+                    position_values[entry].append(values_at_pos[entry])
+            if anchor in values_at_pos:
+                position_max_values.append(values_at_pos[anchor])
 
-            # Expected reward using Q-values from max-visits base ref tree
-            for vc in visit_counts:
-                if vc in policies_at_pos:
-                    v_pi = float(np.sum(policies_at_pos[vc] * q_values))
-                    expected_reward[vc].append(v_pi)
+            # Expected reward using Q-values from base ref tree (objective evaluation)
+            for entry in entries:
+                if entry in policies_at_pos:
+                    v_pi = float(np.sum(policies_at_pos[entry] * q_values))
+                    expected_reward[entry].append(v_pi)
 
     position_outcomes = np.array(position_outcomes)
     position_max_values = np.array(position_max_values)
 
     metrics = {
-        "visit_counts": visit_counts,
-        "max_visits": max_visits,
+        "entries": entries,
+        "anchor": anchor,
+        "anchor_vc": anchor_vc,
         "total_positions": total_positions,
         "num_games": ANALYSIS_GAMES,
     }
@@ -798,12 +810,12 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
     for name in policy_metric_names:
         means = {}
         all_vals = {}
-        for vc in visit_counts:
+        for entry in entries:
             data = policy_metric_data[name]
-            if vc != skip_div_vc and vc in data and len(data[vc]) > 0:
-                arr = np.array(data[vc])
-                means[vc] = float(np.mean(arr))
-                all_vals[vc] = arr
+            if entry in data and len(data[entry]) > 0:
+                arr = np.array(data[entry])
+                means[entry] = float(np.mean(arr))
+                all_vals[entry] = arr
         metrics[f"{name}_means"] = means
         metrics[f"{name}_all"] = all_vals
 
@@ -813,8 +825,8 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
     value_corr_vs_outcome = {}
     value_mae_vs_outcome = {}
 
-    for vc in visit_counts:
-        vals = np.array(position_values[vc])
+    for entry in entries:
+        vals = np.array(position_values[entry])
         n = min(len(vals), len(position_max_values), len(position_outcomes))
         if n < 3:
             continue
@@ -822,17 +834,17 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
         max_vals = position_max_values[:n]
         outcomes = position_outcomes[:n]
 
-        # vs max-visits
+        # vs anchor entry
         corr = np.corrcoef(vals, max_vals)[0, 1] if np.std(vals) > 1e-9 and np.std(max_vals) > 1e-9 else 0.0
         mae = float(np.mean(np.abs(vals - max_vals)))
-        value_corr_vs_max[vc] = float(corr)
-        value_mae_vs_max[vc] = mae
+        value_corr_vs_max[entry] = float(corr)
+        value_mae_vs_max[entry] = mae
 
         # vs game outcome
         corr = np.corrcoef(vals, outcomes)[0, 1] if np.std(vals) > 1e-9 and np.std(outcomes) > 1e-9 else 0.0
         mae = float(np.mean(np.abs(vals - outcomes)))
-        value_corr_vs_outcome[vc] = float(corr)
-        value_mae_vs_outcome[vc] = mae
+        value_corr_vs_outcome[entry] = float(corr)
+        value_mae_vs_outcome[entry] = mae
 
     metrics["value_corr_vs_max"] = value_corr_vs_max
     metrics["value_mae_vs_max"] = value_mae_vs_max
@@ -844,68 +856,67 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
     reward_all = {}
     regret_means = {}
     regret_all = {}
-    # Base ref expected reward (for regret computation)
-    base_ref_reward_list = []
+    # Anchor entry expected reward (for regret computation)
+    anchor_reward_list = []
     for gid in range(ANALYSIS_GAMES):
         for current_player, values_at_pos, policies_at_pos, q_values in game_positions[gid]:
-            if "base_ref" in policies_at_pos:
-                base_ref_reward_list.append(float(np.sum(policies_at_pos["base_ref"] * q_values)))
-    base_ref_reward = np.array(base_ref_reward_list) if base_ref_reward_list else None
+            if anchor in policies_at_pos:
+                anchor_reward_list.append(float(np.sum(policies_at_pos[anchor] * q_values)))
+    anchor_reward = np.array(anchor_reward_list) if anchor_reward_list else None
 
-    for vc in visit_counts:
-        if vc in expected_reward and len(expected_reward[vc]) > 0:
-            arr = np.array(expected_reward[vc])
-            reward_means[vc] = float(np.mean(arr))
-            reward_all[vc] = arr
-    # Regret = V(pi_base_ref) - V(pi_vc)
-    if base_ref_reward is not None:
-        for vc in visit_counts:
-            if vc in reward_all:
-                n_common = min(len(base_ref_reward), len(reward_all[vc]))
-                reg = base_ref_reward[:n_common] - reward_all[vc][:n_common]
-                regret_means[vc] = float(np.mean(reg))
-                regret_all[vc] = reg
+    for entry in entries:
+        if entry in expected_reward and len(expected_reward[entry]) > 0:
+            arr = np.array(expected_reward[entry])
+            reward_means[entry] = float(np.mean(arr))
+            reward_all[entry] = arr
+    # Regret = V(pi_anchor) - V(pi_entry)
+    if anchor_reward is not None:
+        for entry in entries:
+            if entry in reward_all:
+                n_common = min(len(anchor_reward), len(reward_all[entry]))
+                reg = anchor_reward[:n_common] - reward_all[entry][:n_common]
+                regret_means[entry] = float(np.mean(reg))
+                regret_all[entry] = reg
     metrics["reward_means"] = reward_means
     metrics["reward_all"] = reward_all
     metrics["regret_means"] = regret_means
     metrics["regret_all"] = regret_all
 
-    # Print summary — show mode suffix for selfplay VCs
-    def _vc_label(vc):
-        suffix = "sp" if visit_modes.get(vc, "base") == "selfplay" else ""
-        return f"{vc}{suffix}"
-
-    print("\n--- Policy Analysis (divergence from max-visits policy) ---")
+    # Print summary
+    print(f"\n--- Policy Analysis (divergence from {entry_label(anchor)}) ---")
     print(f"{'Visits':>8s} {'JSD':>10s} {'TV':>10s} {'Hellinger':>10s} {'Top-1':>10s} {'Top-3':>10s} {'Top-9':>10s}")
-    all_policy_vcs = sorted(set().union(*(metrics[f"{n}_means"].keys() for n in policy_metric_names)))
-    for vc in all_policy_vcs:
+    all_policy_entries = sorted(
+        set().union(*(metrics[f"{n}_means"].keys() for n in policy_metric_names)),
+        key=entry_sort_key
+    )
+    for entry in all_policy_entries:
         vals = []
         for name in policy_metric_names:
-            v = metrics[f"{name}_means"].get(vc)
+            v = metrics[f"{name}_means"].get(entry)
             vals.append(f"{v:>10.4f}" if v is not None else f"{'N/A':>10s}")
-        print(f"{_vc_label(vc):>8s} {''.join(vals)}")
+        print(f"{entry_label(entry):>8s} {''.join(vals)}")
 
-    print("\n--- Value Analysis vs Max-Visits ---")
+    print(f"\n--- Value Analysis vs {entry_label(anchor)} ---")
     print(f"{'Visits':>8s} {'Corr':>8s} {'MAE':>8s}")
-    for vc in sorted(value_corr_vs_max.keys()):
-        print(f"{_vc_label(vc):>8s} {value_corr_vs_max[vc]:>8.4f} {value_mae_vs_max[vc]:>8.4f}")
+    for entry in sorted(value_corr_vs_max.keys(), key=entry_sort_key):
+        print(f"{entry_label(entry):>8s} {value_corr_vs_max[entry]:>8.4f} {value_mae_vs_max[entry]:>8.4f}")
 
     print("\n--- Value Analysis vs Game Outcome ---")
     print(f"{'Visits':>8s} {'Corr':>8s} {'MAE':>8s}")
-    for vc in sorted(value_corr_vs_outcome.keys()):
-        print(f"{_vc_label(vc):>8s} {value_corr_vs_outcome[vc]:>8.4f} {value_mae_vs_outcome[vc]:>8.4f}")
+    for entry in sorted(value_corr_vs_outcome.keys(), key=entry_sort_key):
+        print(f"{entry_label(entry):>8s} {value_corr_vs_outcome[entry]:>8.4f} {value_mae_vs_outcome[entry]:>8.4f}")
 
     if reward_means:
-        print("\n--- Expected Reward (V(pi) = sum(pi * Q_max)) ---")
+        print("\n--- Expected Reward (V(pi) = sum(pi * Q_anchor)) ---")
         print(f"{'Visits':>8s} {'E[reward]':>10s}")
-        for vc in sorted(reward_means.keys()):
-            print(f"{_vc_label(vc):>8s} {reward_means[vc]:>10.4f}")
+        for entry in sorted(reward_means.keys(), key=entry_sort_key):
+            print(f"{entry_label(entry):>8s} {reward_means[entry]:>10.4f}")
 
     if regret_means:
-        print("\n--- Policy Regret (V(pi_max) - V(pi_vc)) ---")
+        print("\n--- Policy Regret (V(pi_anchor) - V(pi_entry)) ---")
         print(f"{'Visits':>8s} {'Regret':>10s}")
-        for vc in sorted(regret_means.keys()):
-            print(f"{_vc_label(vc):>8s} {regret_means[vc]:>10.4f}")
+        for entry in sorted(regret_means.keys(), key=entry_sort_key):
+            print(f"{entry_label(entry):>8s} {regret_means[entry]:>10.4f}")
 
     print_cache_stats(cache)
     del agent
@@ -923,21 +934,19 @@ def _has_display():
     return matplotlib.get_backend().lower() != 'agg'
 
 
-def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None, visit_modes=None):
+def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None):
     """Generate plots and save raw data."""
     if not _has_display():
         import matplotlib
         matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    if visit_modes is None:
-        visit_modes = {vc: "base" for vc in visit_counts}
-    has_mixed = len(set(visit_modes.values())) > 1
+    has_mixed = len(set(mode for _, mode in entries)) > 1
 
-    def _plot_by_mode(ax, vcs, values, base_color="tab:blue", sp_color="tab:orange", **kwargs):
+    def _plot_by_mode(ax, sorted_entries, values, base_color="tab:blue", sp_color="tab:orange", **kwargs):
         """Plot values split by mode with appropriate markers/lines."""
-        base = [(vc, v) for vc, v in zip(vcs, values) if visit_modes.get(vc, "base") == "base"]
-        sp = [(vc, v) for vc, v in zip(vcs, values) if visit_modes.get(vc, "base") == "selfplay"]
+        base = [(e[0], v) for e, v in zip(sorted_entries, values) if e[1] == "base"]
+        sp = [(e[0], v) for e, v in zip(sorted_entries, values) if e[1] == "selfplay"]
         if base:
             bx, by = zip(*base)
             ax.plot(bx, by, "o-", markersize=8, linewidth=2, color=base_color,
@@ -952,13 +961,16 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None, vi
     save_dir = os.path.join("data", "threshold_analysis")
     os.makedirs(save_dir, exist_ok=True)
 
+    # Tournament uses unique numeric VCs
+    tournament_vcs = sorted(set(vc for vc, _ in entries))
+
     fig_num = 1
 
     # Figure 1: Elo vs visit count
     if elo is not None:
         fig, ax = plt.subplots(figsize=(8, 5))
-        ax.plot(visit_counts, elo, "o-", markersize=8, linewidth=2)
-        for i, vc in enumerate(visit_counts):
+        ax.plot(tournament_vcs, elo, "o-", markersize=8, linewidth=2)
+        for i, vc in enumerate(tournament_vcs):
             ax.annotate(f"{elo[i]:.0f}", (vc, elo[i]),
                         textcoords="offset points", xytext=(0, 12),
                         ha="center", fontsize=9)
@@ -966,8 +978,8 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None, vi
         ax.set_xlabel("MCTS Visit Count")
         ax.set_ylabel("Elo Rating")
         ax.set_title("Elo vs MCTS Visit Count")
-        ax.set_xticks(visit_counts)
-        ax.set_xticklabels([str(v) for v in visit_counts])
+        ax.set_xticks(tournament_vcs)
+        ax.set_xticklabels([str(v) for v in tournament_vcs])
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
         path = os.path.join(save_dir, "elo_vs_visits.png")
@@ -991,7 +1003,7 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None, vi
         fig, axes = plt.subplots(2, 3, figsize=(18, 10))
         axes = axes.flatten()
 
-        for idx, (name, title, color) in enumerate(policy_metric_info):
+        for idx, (name, title, base_color) in enumerate(policy_metric_info):
             ax = axes[idx]
             means = metrics.get(f"{name}_means", {})
             all_data = metrics.get(f"{name}_all", {})
@@ -999,25 +1011,28 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None, vi
                 ax.set_visible(False)
                 continue
 
-            vcs = sorted(means.keys())
-            labels = [str(v) for v in vcs]
+            sorted_entries = sorted(means.keys(), key=entry_sort_key)
+            labels = [entry_label(e) for e in sorted_entries]
 
             # Box plot with mean overlay
             if all_data:
-                bp_data = [all_data[vc] for vc in vcs]
+                bp_data = [all_data[e] for e in sorted_entries]
                 bp = ax.boxplot(bp_data, tick_labels=labels,
                                 showfliers=False, patch_artist=True)
-                for patch in bp["boxes"]:
-                    patch.set_facecolor(color)
+                for i, entry in enumerate(sorted_entries):
+                    if entry[1] == "selfplay":
+                        bp["boxes"][i].set_facecolor("lightyellow" if base_color != "lightyellow" else "lightblue")
+                    else:
+                        bp["boxes"][i].set_facecolor(base_color)
                 # Overlay mean line
-                ax.plot(range(1, len(vcs) + 1), [means[vc] for vc in vcs],
+                ax.plot(range(1, len(sorted_entries) + 1), [means[e] for e in sorted_entries],
                         "D-", markersize=6, linewidth=2, color="tab:blue",
                         zorder=3, label="mean")
                 ax.legend(fontsize=8)
             else:
-                ax.plot(range(1, len(vcs) + 1), [means[vc] for vc in vcs],
+                ax.plot(range(1, len(sorted_entries) + 1), [means[e] for e in sorted_entries],
                         "o-", markersize=8, linewidth=2)
-                ax.set_xticks(range(1, len(vcs) + 1))
+                ax.set_xticks(range(1, len(sorted_entries) + 1))
                 ax.set_xticklabels(labels)
 
             ax.set_xlabel("MCTS Visit Count")
@@ -1040,39 +1055,39 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None, vi
 
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
-        # Top-left: correlation vs max-visits
+        def _set_entry_xticks(ax, sorted_entries):
+            unique_vcs = sorted(set(e[0] for e in sorted_entries))
+            ax.set_xscale("log")
+            ax.set_xticks(unique_vcs)
+            ax.set_xticklabels([str(v) for v in unique_vcs])
+
+        # Top-left: correlation vs anchor
         if corr_max:
-            vcs = sorted(corr_max.keys())
-            _plot_by_mode(axes[0, 0], vcs, [corr_max[vc] for vc in vcs])
-            axes[0, 0].set_xscale("log")
-            axes[0, 0].set_xticks(vcs)
-            axes[0, 0].set_xticklabels([str(v) for v in vcs])
+            es = sorted(corr_max.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[0, 0], es, [corr_max[e] for e in es])
+            _set_entry_xticks(axes[0, 0], es)
         axes[0, 0].set_xlabel("MCTS Visit Count")
         axes[0, 0].set_ylabel("Pearson Correlation")
-        axes[0, 0].set_title("Value Correlation vs Max-Visits")
+        axes[0, 0].set_title(f"Value Correlation vs {entry_label(anchor)}")
         axes[0, 0].grid(True, alpha=0.3)
 
-        # Top-right: MAE vs max-visits
+        # Top-right: MAE vs anchor
         if mae_max:
-            vcs = sorted(mae_max.keys())
-            _plot_by_mode(axes[0, 1], vcs, [mae_max[vc] for vc in vcs],
+            es = sorted(mae_max.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[0, 1], es, [mae_max[e] for e in es],
                           base_color="tab:orange", sp_color="tab:red")
-            axes[0, 1].set_xscale("log")
-            axes[0, 1].set_xticks(vcs)
-            axes[0, 1].set_xticklabels([str(v) for v in vcs])
+            _set_entry_xticks(axes[0, 1], es)
         axes[0, 1].set_xlabel("MCTS Visit Count")
         axes[0, 1].set_ylabel("MAE")
-        axes[0, 1].set_title("Value MAE vs Max-Visits")
+        axes[0, 1].set_title(f"Value MAE vs {entry_label(anchor)}")
         axes[0, 1].grid(True, alpha=0.3)
 
         # Bottom-left: correlation vs game outcome
         if corr_out:
-            vcs = sorted(corr_out.keys())
-            _plot_by_mode(axes[1, 0], vcs, [corr_out[vc] for vc in vcs],
+            es = sorted(corr_out.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[1, 0], es, [corr_out[e] for e in es],
                           base_color="tab:green", sp_color="tab:olive")
-            axes[1, 0].set_xscale("log")
-            axes[1, 0].set_xticks(vcs)
-            axes[1, 0].set_xticklabels([str(v) for v in vcs])
+            _set_entry_xticks(axes[1, 0], es)
         axes[1, 0].set_xlabel("MCTS Visit Count")
         axes[1, 0].set_ylabel("Pearson Correlation")
         axes[1, 0].set_title("Value Correlation vs Game Outcome")
@@ -1080,12 +1095,10 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None, vi
 
         # Bottom-right: MAE vs game outcome
         if mae_out:
-            vcs = sorted(mae_out.keys())
-            _plot_by_mode(axes[1, 1], vcs, [mae_out[vc] for vc in vcs],
+            es = sorted(mae_out.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[1, 1], es, [mae_out[e] for e in es],
                           base_color="tab:red", sp_color="tab:purple")
-            axes[1, 1].set_xscale("log")
-            axes[1, 1].set_xticks(vcs)
-            axes[1, 1].set_xticklabels([str(v) for v in vcs])
+            _set_entry_xticks(axes[1, 1], es)
         axes[1, 1].set_xlabel("MCTS Visit Count")
         axes[1, 1].set_ylabel("MAE")
         axes[1, 1].set_title("Value MAE vs Game Outcome")
@@ -1111,39 +1124,42 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None, vi
         panel = 0
 
         # Left: expected reward curve
-        reward_vcs = sorted(reward_means.keys())
-        _plot_by_mode(axes[panel], reward_vcs, [reward_means[vc] for vc in reward_vcs])
+        reward_es = sorted(reward_means.keys(), key=entry_sort_key)
+        _plot_by_mode(axes[panel], reward_es, [reward_means[e] for e in reward_es])
+        reward_unique_vcs = sorted(set(e[0] for e in reward_es))
         axes[panel].set_xscale("log")
         axes[panel].set_xlabel("MCTS Visit Count")
         axes[panel].set_ylabel("Expected Reward V(pi)")
         axes[panel].set_title("Expected Reward vs Visit Count")
-        axes[panel].set_xticks(reward_vcs)
-        axes[panel].set_xticklabels([str(v) for v in reward_vcs])
+        axes[panel].set_xticks(reward_unique_vcs)
+        axes[panel].set_xticklabels([str(v) for v in reward_unique_vcs])
         axes[panel].grid(True, alpha=0.3)
         panel += 1
 
         # Center: mean regret curve
         if regret_means:
-            regret_vcs = sorted(regret_means.keys())
-            _plot_by_mode(axes[panel], regret_vcs, [regret_means[vc] for vc in regret_vcs],
+            regret_es = sorted(regret_means.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[panel], regret_es, [regret_means[e] for e in regret_es],
                           base_color="tab:red", sp_color="tab:purple")
+            regret_unique_vcs = sorted(set(e[0] for e in regret_es))
             axes[panel].set_xscale("log")
             axes[panel].set_xlabel("MCTS Visit Count")
             axes[panel].set_ylabel("Regret")
             axes[panel].set_title("Mean Policy Regret vs Visit Count")
-            axes[panel].set_xticks(regret_vcs)
-            axes[panel].set_xticklabels([str(v) for v in regret_vcs])
+            axes[panel].set_xticks(regret_unique_vcs)
+            axes[panel].set_xticklabels([str(v) for v in regret_unique_vcs])
             axes[panel].grid(True, alpha=0.3)
             panel += 1
 
         # Right: regret distribution box plot
         if regret_all:
-            regret_vcs = sorted(regret_all.keys())
-            bp_data = [regret_all[vc] for vc in regret_vcs]
-            bp = axes[panel].boxplot(bp_data, tick_labels=[str(v) for v in regret_vcs],
+            regret_box_es = sorted(regret_all.keys(), key=entry_sort_key)
+            bp_data = [regret_all[e] for e in regret_box_es]
+            labels = [entry_label(e) for e in regret_box_es]
+            bp = axes[panel].boxplot(bp_data, tick_labels=labels,
                                      showfliers=False, patch_artist=True)
-            for patch in bp["boxes"]:
-                patch.set_facecolor("lightsalmon")
+            for i, entry in enumerate(regret_box_es):
+                bp["boxes"][i].set_facecolor("lightyellow" if entry[1] == "selfplay" else "lightsalmon")
             axes[panel].set_xlabel("MCTS Visit Count")
             axes[panel].set_ylabel("Regret")
             axes[panel].set_title("Policy Regret Distribution")
@@ -1155,38 +1171,42 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None, vi
         print(f"Saved: {path}")
 
     # Save raw data
-    save_data = {"visit_counts": np.array(visit_counts)}
+    save_data = {
+        "visit_counts": np.array(tournament_vcs),
+        "entry_labels": np.array([entry_label(e) for e in entries]),
+        "anchor": np.array(entry_label(anchor)),
+    }
     if elo is not None:
         save_data["elo"] = elo
     if win_matrix is not None:
         save_data["win_matrix"] = win_matrix
     if metrics:
-        for key in ["total_positions", "num_games", "max_visits"]:
+        for key in ["total_positions", "num_games", "anchor_vc"]:
             if key in metrics:
                 save_data[key] = np.array(metrics[key])
         # Policy divergence metrics
         for prefix in ["jsd", "tv", "hellinger", "top1", "top3", "top9"]:
             if f"{prefix}_means" in metrics:
-                for vc, val in metrics[f"{prefix}_means"].items():
-                    save_data[f"{prefix}_mean_{vc}"] = np.array(val)
+                for entry, val in metrics[f"{prefix}_means"].items():
+                    save_data[f"{prefix}_mean_{entry_label(entry)}"] = np.array(val)
             if f"{prefix}_all" in metrics:
-                for vc, arr in metrics[f"{prefix}_all"].items():
-                    save_data[f"{prefix}_all_{vc}"] = arr
+                for entry, arr in metrics[f"{prefix}_all"].items():
+                    save_data[f"{prefix}_all_{entry_label(entry)}"] = arr
         # Value data
         for prefix in ["value_corr_vs_max", "value_mae_vs_max",
                         "value_corr_vs_outcome", "value_mae_vs_outcome"]:
             if prefix in metrics:
-                for vc, val in metrics[prefix].items():
-                    save_data[f"{prefix}_{vc}"] = np.array(val)
+                for entry, val in metrics[prefix].items():
+                    save_data[f"{prefix}_{entry_label(entry)}"] = np.array(val)
         # Expected reward and regret data
         for prefix in ["reward_means", "regret_means"]:
             if prefix in metrics:
-                for vc, val in metrics[prefix].items():
-                    save_data[f"{prefix}_{vc}"] = np.array(val)
+                for entry, val in metrics[prefix].items():
+                    save_data[f"{prefix}_{entry_label(entry)}"] = np.array(val)
         for prefix in ["reward_all", "regret_all"]:
             if prefix in metrics:
-                for vc, arr in metrics[prefix].items():
-                    save_data[f"{prefix}_{vc}"] = arr
+                for entry, arr in metrics[prefix].items():
+                    save_data[f"{prefix}_{entry_label(entry)}"] = arr
 
     npz_path = os.path.join(save_dir, "threshold_data.npz")
     np.savez(npz_path, **save_data)
@@ -1199,23 +1219,21 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None, vi
 
 
 def main():
-    config, Game, network_path, visit_counts, phases, use_playout, cache_size, visit_modes, tree_reuse = interactive_config()
+    config, Game, network_path, entries, anchor, phases, use_playout, cache_size, tree_reuse = interactive_config()
 
     elo = None
     win_matrix = None
     metrics = None
 
     if "tournament" in phases:
-        elo, win_matrix = run_tournament(config, Game, network_path, visit_counts, use_playout,
+        elo, win_matrix = run_tournament(config, Game, network_path, entries, use_playout,
                                          cache_size=cache_size)
 
     if "analysis" in phases:
-        metrics = run_analysis(config, Game, network_path, visit_counts, use_playout,
-                               cache_size=cache_size, visit_modes=visit_modes,
-                               tree_reuse=tree_reuse)
+        metrics = run_analysis(config, Game, network_path, entries, anchor, use_playout,
+                               cache_size=cache_size, tree_reuse=tree_reuse)
 
-    visualize_and_save(visit_counts, elo=elo, win_matrix=win_matrix, metrics=metrics,
-                       visit_modes=visit_modes)
+    visualize_and_save(entries, anchor, elo=elo, win_matrix=win_matrix, metrics=metrics)
 
     print("\nDone!")
 

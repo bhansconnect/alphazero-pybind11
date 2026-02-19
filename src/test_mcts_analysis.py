@@ -18,6 +18,8 @@ from mcts_analysis import (
     calc_temp,
     calc_temp_selfplay,
     get_available_games,
+    entry_label,
+    entry_sort_key,
 )
 
 
@@ -140,3 +142,110 @@ def test_game_registry_used():
     # Should have all registry games
     for game in GAME_REGISTRY:
         assert game in available
+
+
+# --- Entry helper tests ---
+
+
+def test_entry_label_base():
+    """Base mode entries show just the VC number."""
+    assert entry_label((200, "base")) == "200"
+    assert entry_label((1, "base")) == "1"
+
+
+def test_entry_label_selfplay():
+    """Selfplay mode entries show VC with 'sp' suffix."""
+    assert entry_label((200, "selfplay")) == "200sp"
+    assert entry_label((1, "selfplay")) == "1sp"
+
+
+def test_entry_sort_key_base_before_selfplay():
+    """At the same VC, base sorts before selfplay."""
+    assert entry_sort_key((200, "base")) < entry_sort_key((200, "selfplay"))
+
+
+def test_entry_sort_key_lower_vc_first():
+    """Lower VC sorts before higher VC regardless of mode."""
+    assert entry_sort_key((100, "selfplay")) < entry_sort_key((200, "base"))
+
+
+def test_entry_sort_key_full_ordering():
+    """Full sort produces expected order."""
+    entries = [(200, "selfplay"), (100, "base"), (200, "base"), (50, "selfplay")]
+    sorted_entries = sorted(entries, key=entry_sort_key)
+    assert sorted_entries == [(50, "selfplay"), (100, "base"), (200, "base"), (200, "selfplay")]
+
+
+def test_entry_sort_key_duplicate_entries():
+    """Identical entries sort equally."""
+    assert entry_sort_key((400, "base")) == entry_sort_key((400, "base"))
+
+
+# --- Anchor reference tests ---
+
+
+def test_anchor_selfplay_is_reference(monkeypatch):
+    """When anchor is selfplay, metrics use the anchor entry as reference, not base_ref.
+
+    Regression test: previously base_ref (base-mode tree at anchor VC) was always
+    the comparison reference, so (vc, "base") always got JSD=0 instead of the anchor.
+    """
+    import mcts_analysis
+    monkeypatch.setattr(mcts_analysis, "ANALYSIS_GAMES", 4)
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [(10, "base"), (10, "selfplay")]
+    anchor = (10, "selfplay")
+
+    metrics = mcts_analysis.run_analysis(
+        config, Game, network_path=None, entries=entries, anchor=anchor,
+        use_playout=False, cache_size=0, tree_reuse=False,
+    )
+
+    jsd_means = metrics["jsd_means"]
+    regret_means = metrics["regret_means"]
+
+    # The anchor entry must have JSD=0 — it IS the reference (JSD(p,p)=0 exactly)
+    assert anchor in jsd_means
+    assert jsd_means[anchor] == pytest.approx(0.0, abs=1e-10)
+
+    # The anchor entry must have regret=0 — V(pi_anchor) - V(pi_anchor) = 0
+    assert anchor in regret_means
+    assert regret_means[anchor] == pytest.approx(0.0, abs=1e-10)
+
+    # The base entry at the same VC must have JSD > 0
+    # (base policy differs from selfplay due to Dirichlet noise)
+    base_entry = (10, "base")
+    assert base_entry in jsd_means
+    assert jsd_means[base_entry] > 0.0
+
+
+def test_anchor_base_is_reference(monkeypatch):
+    """When anchor is base, the anchor base entry gets JSD=0 and regret=0."""
+    import mcts_analysis
+    monkeypatch.setattr(mcts_analysis, "ANALYSIS_GAMES", 4)
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [(10, "base"), (10, "selfplay")]
+    anchor = (10, "base")
+
+    metrics = mcts_analysis.run_analysis(
+        config, Game, network_path=None, entries=entries, anchor=anchor,
+        use_playout=False, cache_size=0, tree_reuse=False,
+    )
+
+    jsd_means = metrics["jsd_means"]
+    regret_means = metrics["regret_means"]
+
+    # Base anchor must have JSD=0 and regret=0
+    assert jsd_means[anchor] == pytest.approx(0.0, abs=1e-10)
+    assert regret_means[anchor] == pytest.approx(0.0, abs=1e-10)
+
+    # Selfplay entry should diverge from the base anchor
+    sp_entry = (10, "selfplay")
+    assert sp_entry in jsd_means
+    assert jsd_means[sp_entry] > 0.0

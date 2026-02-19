@@ -167,7 +167,7 @@ def select_checkpoint(checkpoints):
 # --- Phase 1: Interactive Configuration ---
 
 def interactive_config():
-    """Interactive configuration. Returns (config, Game, network_path, visit_counts, phases, use_playout, cache_size, selfplay_mode)."""
+    """Interactive configuration. Returns (config, Game, network_path, visit_counts, phases, use_playout, cache_size, visit_modes, tree_reuse)."""
     print("=== MCTS Threshold Analysis ===\n")
 
     # Game selection from registry
@@ -255,15 +255,31 @@ def interactive_config():
         else:
             print(f"  -> {os.path.basename(network_path)}\n")
 
-    # Visit counts
+    # Visit counts (append 'sp' for selfplay mode, e.g. 200sp)
     print(f"Default visit counts: {DEFAULT_VISIT_COUNTS}")
     print("  (1 = raw network policy, no MCTS search)")
+    print("  (append 'sp' for selfplay mode, e.g. 200sp)")
     vc_input = input("Enter comma-separated visit counts or press Enter for defaults: ").strip()
+    visit_modes = {}  # vc -> "base" or "selfplay"
     if vc_input:
-        visit_counts = sorted(set(int(x.strip()) for x in vc_input.split(",")))
+        visit_counts = []
+        for token in vc_input.split(","):
+            token = token.strip().lower()
+            if token.endswith("sp"):
+                vc = int(token[:-2])
+                visit_modes[vc] = "selfplay"
+            else:
+                vc = int(token)
+                visit_modes[vc] = "base"
+            visit_counts.append(vc)
+        visit_counts = sorted(set(visit_counts))
     else:
         visit_counts = list(DEFAULT_VISIT_COUNTS)
-    print(f"  -> {visit_counts}\n")
+        for vc in visit_counts:
+            visit_modes[vc] = "base"
+    # Display with mode indicators
+    vc_display = [f"{vc}sp" if visit_modes[vc] == "selfplay" else str(vc) for vc in visit_counts]
+    print(f"  -> [{', '.join(vc_display)}]\n")
 
     # Phase selection
     print("Select phases to run:")
@@ -287,12 +303,12 @@ def interactive_config():
         cache_size = 200000
     print(f"  -> cache_size={cache_size}\n")
 
-    # Selfplay mode
-    selfplay_input = input("Use selfplay MCTS settings (noise, tree reuse, selfplay temp)? [n]: ").strip().lower()
-    selfplay_mode = selfplay_input == 'y'
-    print(f"  -> selfplay_mode={selfplay_mode}\n")
+    # Tree reuse
+    tree_reuse_input = input("Tree reuse (persistent MCTS across positions)? [n]: ").strip().lower()
+    tree_reuse = tree_reuse_input == 'y'
+    print(f"  -> tree_reuse={tree_reuse}\n")
 
-    return config, Game, network_path, visit_counts, phases, use_playout, cache_size, selfplay_mode
+    return config, Game, network_path, visit_counts, phases, use_playout, cache_size, visit_modes, tree_reuse
 
 
 # --- Phase 2: Elo Tournament (Round-Robin) ---
@@ -378,25 +394,85 @@ def run_tournament(config, Game, network_path, visit_counts, use_playout=False, 
 
 # --- Phase 3: Policy & Value Analysis ---
 
-def run_analysis(config, Game, network_path, visit_counts, use_playout=False, cache_size=0, selfplay_mode=False):
+def _get_policy(mcts_obj, is_selfplay, config):
+    """Get policy from MCTS tree, using pruned policy for selfplay if configured."""
+    if is_selfplay and config.policy_target_pruning:
+        return np.array(mcts_obj.probs_pruned(1.0))
+    return np.array(mcts_obj.probs(1.0))
+
+
+def _evaluate_leaves(agent, items, game_states, num_players, num_moves, cache):
+    """Evaluate leaf nodes for MCTS. Handles random, playout, and NN agents.
+
+    items: list of (gid, key, mcts_obj, leaf, hash, is_sp, slot, gs) tuples.
+    Returns list of (v, pi) numpy arrays aligned with items.
+    """
+    if agent == "playout":
+        leaves = [item[3] for item in items]
+        v_np, pi_np = alphazero.playout_eval_batch(leaves)
+        return list(zip(v_np, pi_np))
+    elif agent == "random":
+        np_ = num_players
+        results = []
+        for _ in items:
+            v = np.full(np_ + 1, 1.0 / (np_ + 1), dtype=np.float32)
+            pi = np.full(num_moves, 1.0 / num_moves, dtype=np.float32)
+            results.append((v, pi))
+        return results
+    else:
+        # NN agent — batch GPU inference
+        canonicals = [np.array(item[3].canonicalized()) for item in items]
+        batch = torch.from_numpy(np.stack(canonicals))
+        v_batch, pi_batch = agent.process(batch)
+        v_np = v_batch.cpu().numpy()
+        pi_np = pi_batch.cpu().numpy()
+        # Insert into cache
+        if cache is not None:
+            for j, item in enumerate(items):
+                cache.insert(item[4], pi_np[j], v_np[j])
+        return list(zip(v_np, pi_np))
+
+
+def run_analysis(config, Game, network_path, visit_counts, use_playout=False,
+                 cache_size=0, visit_modes=None, tree_reuse=False):
     """Run policy & value convergence analysis with batched inference.
 
     Plays ANALYSIS_GAMES concurrently, batching all NN inference calls across
-    games for ~25x speedup over sequential single-sample inference.
+    games for maximum cache sharing.
 
-    When selfplay_mode=True, uses selfplay MCTS settings: Dirichlet noise,
-    tree reuse, and self_play_temp instead of eval_temp.
+    Per-VC modes: each visit count can be "base" (no noise, eval temp) or
+    "selfplay" (Dirichlet noise, root policy temp, selfplay temp).
+
+    Tree reuse OFF: VCs within the same mode share one fresh tree per position.
+    Tree reuse ON: each VC gets its own persistent tree across positions.
 
     Returns dict with all collected metrics.
     """
+    if visit_modes is None:
+        visit_modes = {vc: "base" for vc in visit_counts}
+
+    has_selfplay = any(m == "selfplay" for m in visit_modes.values())
+    has_base = any(m == "base" for m in visit_modes.values())
+
+    mode_str = []
+    if has_base and has_selfplay:
+        mode_str.append("mixed base/selfplay")
+    elif has_selfplay:
+        mode_str.append("selfplay")
+    else:
+        mode_str.append("base")
+    if tree_reuse:
+        mode_str.append("tree reuse")
+    header = f"Phase: Policy & Value Analysis ({', '.join(mode_str)})"
+
     print("=" * 60)
-    print(f"Phase: Policy & Value Analysis{' (selfplay mode)' if selfplay_mode else ''}")
+    print(header)
     print("=" * 60)
 
     if network_path is None and use_playout:
-        agent = "playout"  # Will use playout_eval per-leaf below
+        agent = "playout"
     elif network_path is None:
-        agent = "random"  # Will use dumb_eval per-leaf below
+        agent = "random"
     else:
         net_dir = os.path.dirname(network_path)
         net_file = os.path.basename(network_path)
@@ -407,29 +483,51 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
     num_moves = Game.NUM_MOVES()
     relative_values = Game().relative_values()
     max_visits = max(visit_counts)
-    target_vcs = sorted(vc for vc in visit_counts if vc > 1)
     has_vc1 = 1 in visit_counts
+
+    base_vcs = sorted(vc for vc in visit_counts if visit_modes[vc] == "base")
+    selfplay_vcs = sorted(vc for vc in visit_counts if visit_modes[vc] == "selfplay")
+
+    # The base reference tree always runs to max_visits for move selection + Q-values
+    # even if max_visits is a selfplay VC
+    base_ref_target = max_visits
 
     # Per-game state
     game_states = [Game() for _ in range(ANALYSIS_GAMES)]
-    # Per-game accumulated data: list of (current_player, {vc: value}, {vc: policy})
     game_positions = [[] for _ in range(ANALYSIS_GAMES)]
     active = list(range(ANALYSIS_GAMES))
-    game_scores = [None] * ANALYSIS_GAMES  # final scores per game
+    game_scores = [None] * ANALYSIS_GAMES
 
     cache = create_cache(Game, cache_size) if not isinstance(agent, str) else None
 
-    epsilon = 0.25 if selfplay_mode else 0.0
+    def _make_base_mcts():
+        return alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.0,
+                              config.fpu_reduction, relative_values,
+                              config.root_fpu_zero, config.shaped_dirichlet)
 
-    # For selfplay mode, create persistent MCTS objects for tree reuse
-    if selfplay_mode:
-        persistent_mcts = {
-            gid: alphazero.MCTS(config.cpuct, num_players, num_moves, epsilon,
-                                config.mcts_root_temp, config.fpu_reduction,
-                                relative_values, config.root_fpu_zero,
-                                config.shaped_dirichlet)
-            for gid in range(ANALYSIS_GAMES)
-        }
+    def _make_selfplay_mcts():
+        return alphazero.MCTS(config.cpuct, num_players, num_moves, 0.25,
+                              config.mcts_root_temp, config.fpu_reduction,
+                              relative_values, config.root_fpu_zero,
+                              config.shaped_dirichlet)
+
+    # Tree storage: trees[gid] = {key: (mcts_obj, target_vc, is_selfplay)}
+    # key is either a vc (int) for tree_reuse, or "base"/"selfplay" for shared trees,
+    # plus "base_ref" if needed
+    trees = {}
+
+    if tree_reuse:
+        # One persistent tree per VC per game
+        for gid in range(ANALYSIS_GAMES):
+            trees[gid] = {}
+            for vc in visit_counts:
+                is_sp = visit_modes[vc] == "selfplay"
+                mcts_obj = _make_selfplay_mcts() if is_sp else _make_base_mcts()
+                trees[gid][vc] = (mcts_obj, vc, is_sp)
+            # If max_visits is selfplay, we need a separate base ref tree
+            if visit_modes[max_visits] == "selfplay":
+                trees[gid]["base_ref"] = (_make_base_mcts(), max_visits, False)
+    # Shared trees created per-position below
 
     print(f"Playing {ANALYSIS_GAMES} games with max {max_visits} visits per position...")
 
@@ -439,108 +537,141 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
     while active:
         n = len(active)
 
-        if selfplay_mode:
-            # Reuse persistent MCTS objects
-            mcts_list = [persistent_mcts[active[i]] for i in range(n)]
-        else:
-            # Create fresh MCTS for each active game's current position
-            mcts_list = [
-                alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.0, config.fpu_reduction,
-                               relative_values)
-                for _ in range(n)
-            ]
-
-        # Per-position snapshot storage (indexed by slot in active list)
+        # Per-position snapshot storage
         pos_policies = [{} for _ in range(n)]
         pos_values = [{} for _ in range(n)]
         pos_q_values = [None] * n
 
-        # Helper to get policy: use pruned in selfplay mode if configured
-        def _get_policy(mcts_obj):
-            if selfplay_mode and config.policy_target_pruning:
-                return np.array(mcts_obj.probs_pruned(1.0))
-            return np.array(mcts_obj.probs(1.0))
+        if not tree_reuse:
+            # Create fresh shared trees per position
+            for slot, gid in enumerate(active):
+                trees[gid] = {}
+                # Base shared tree — runs to max of base VCs and base_ref_target
+                base_target = max(base_vcs + [base_ref_target]) if base_vcs else base_ref_target
+                trees[gid]["base"] = (_make_base_mcts(), base_target, False)
+                # Selfplay shared tree (if any selfplay VCs)
+                if selfplay_vcs:
+                    trees[gid]["selfplay"] = (_make_selfplay_mcts(), max(selfplay_vcs), True)
 
-        # Run MCTS simulations in lockstep
-        for sim in range(max_visits):
-            # find_leaf for each active game
-            leaves = [
-                mcts_list[i].find_leaf(game_states[active[i]])
-                for i in range(n)
-            ]
+        # Build the work list: (gid, key, tree, target_vc, is_selfplay)
+        # For tree_reuse, keys are individual VCs + optional "base_ref"
+        # For shared trees, keys are "base" and "selfplay"
+        work_items = []
+        for slot, gid in enumerate(active):
+            for key, (mcts_obj, target, is_sp) in trees[gid].items():
+                work_items.append((gid, key, mcts_obj, target, is_sp, slot))
 
-            # Evaluate leaves (with cache for NN agent)
-            if agent == "playout":
-                v_np, pi_np = alphazero.playout_eval_batch(leaves)
-                # process_result for all
-                for i in range(n):
-                    mcts_list[i].process_result(
-                        game_states[active[i]], v_np[i], pi_np[i], selfplay_mode
-                    )
-            elif agent == "random":
-                # Random evaluation: uniform policy, equal value
-                np_ = num_players
-                v_np = np.full((n, np_ + 1), 1.0 / (np_ + 1), dtype=np.float32)
-                pi_np = np.full((n, num_moves), 1.0 / num_moves, dtype=np.float32)
-                for i in range(n):
-                    mcts_list[i].process_result(
-                        game_states[active[i]], v_np[i], pi_np[i], selfplay_mode
-                    )
+        # Snapshot tracking: which VCs have been captured for each slot
+        # For shared trees, we snapshot intermediate VCs as root_n passes them
+        snapshotted = [set() for _ in range(n)]
+
+        def _snapshot(slot, vc, mcts_obj, is_sp):
+            """Capture policy and value snapshot for a VC."""
+            if vc in snapshotted[slot]:
+                return
+            snapshotted[slot].add(vc)
+            pos_policies[slot][vc] = _get_policy(mcts_obj, is_sp, config)
+            wld = np.array(mcts_obj.root_value())
+            pos_values[slot][vc] = float(wld[0])
+
+        def _check_snapshots(gid, key, mcts_obj, is_sp, slot):
+            """Check if root_n has reached any target VCs for this tree."""
+            rn = mcts_obj.root_n()
+            if tree_reuse:
+                # key is a vc int or "base_ref"
+                if isinstance(key, int) and rn >= key:
+                    _snapshot(slot, key, mcts_obj, is_sp)
             else:
-                # NN agent with cache support
-                # Check cache for each leaf
-                miss_indices = []
-                leaf_hashes = [None] * n
-                for i in range(n):
-                    h = alphazero.hash_game_state(leaves[i])
-                    leaf_hashes[i] = h
+                # Shared tree — check all VCs of matching mode
+                vcs_to_check = selfplay_vcs if is_sp else base_vcs
+                for vc in vcs_to_check:
+                    if vc <= rn:
+                        _snapshot(slot, vc, mcts_obj, is_sp)
+
+        # Check if any trees are already at their target (tree reuse: root_n > 0)
+        for gid, key, mcts_obj, target, is_sp, slot in work_items:
+            _check_snapshots(gid, key, mcts_obj, is_sp, slot)
+
+        # vc=1 is special: captured after 1 simulation from the appropriate tree
+        # For base vc=1: from base tree after 1 sim
+        # For selfplay vc=1: from selfplay tree after 1 sim
+        vc1_captured = [False] * n
+
+        # Main simulation loop — interleaved across all trees
+        while True:
+            miss_items = []  # (gid, key, mcts_obj, leaf, hash, is_sp, slot, gs)
+
+            for gid, key, mcts_obj, target, is_sp, slot in work_items:
+                if mcts_obj.root_n() >= target:
+                    continue  # this tree is done
+
+                gs = game_states[gid]
+
+                # Process cache hits inline until miss or target reached
+                while mcts_obj.root_n() < target:
+                    leaf = mcts_obj.find_leaf(gs)
+
+                    if isinstance(agent, str):
+                        # Random/playout: no caching, always a "miss"
+                        miss_items.append((gid, key, mcts_obj, leaf, None, is_sp, slot, gs))
+                        break
+
+                    h = alphazero.hash_game_state(leaf)
                     if cache is not None:
                         result = cache.find(h, num_moves, num_players + 1)
                         if result is not None:
                             pi_cached, v_cached = result
-                            mcts_list[i].process_result(
-                                game_states[active[i]], v_cached, pi_cached, selfplay_mode
-                            )
-                            continue
-                    miss_indices.append(i)
+                            mcts_obj.process_result(gs, v_cached, pi_cached, is_sp)
+                            _check_snapshots(gid, key, mcts_obj, is_sp, slot)
+                            # Check vc=1
+                            if has_vc1 and mcts_obj.root_n() >= 1 and not vc1_captured[slot]:
+                                if (is_sp and 1 in selfplay_vcs) or (not is_sp and 1 in base_vcs):
+                                    _snapshot(slot, 1, mcts_obj, is_sp)
+                            continue  # try next leaf
+                    miss_items.append((gid, key, mcts_obj, leaf, h, is_sp, slot, gs))
+                    break  # need eval, stop this tree
 
-                # Batch GPU inference for misses
-                if miss_indices:
-                    canonicals = [np.array(leaves[i].canonicalized()) for i in miss_indices]
-                    batch = torch.from_numpy(np.stack(canonicals))
-                    v_batch, pi_batch = agent.process(batch)
-                    v_miss = v_batch.cpu().numpy()
-                    pi_miss = pi_batch.cpu().numpy()
+            if not miss_items:
+                break  # all trees done
 
-                    for j, i in enumerate(miss_indices):
-                        if cache is not None:
-                            cache.insert(leaf_hashes[i], pi_miss[j], v_miss[j])
-                        mcts_list[i].process_result(
-                            game_states[active[i]], v_miss[j], pi_miss[j], selfplay_mode
-                        )
+            # Batch evaluate all misses
+            results = _evaluate_leaves(agent, miss_items, game_states,
+                                       num_players, num_moves, cache)
 
-            sims_done = sim + 1
+            for j, (gid, key, mcts_obj, leaf, h, is_sp, slot, gs) in enumerate(miss_items):
+                v, pi = results[j]
+                mcts_obj.process_result(gs, v, pi, is_sp)
+                _check_snapshots(gid, key, mcts_obj, is_sp, slot)
+                # Check vc=1 after first sim
+                if has_vc1 and mcts_obj.root_n() >= 1:
+                    if not vc1_captured[slot]:
+                        if (is_sp and 1 in selfplay_vcs) or (not is_sp and 1 in base_vcs):
+                            _snapshot(slot, 1, mcts_obj, is_sp)
+                            vc1_captured[slot] = True
 
-            # Capture vc=1 snapshot from the first simulation
-            if sims_done == 1 and has_vc1:
-                for i in range(n):
-                    # probs(1.0) after 1 sim returns the prior policy
-                    probs_arr = _get_policy(mcts_list[i])
-                    pos_policies[i][1] = probs_arr
-                    # Value from root after first simulation
-                    pos_values[i][1] = float(mcts_list[i].root_value()[0])
+        # Capture Q-values from the base reference tree at max_visits
+        for slot, gid in enumerate(active):
+            if tree_reuse:
+                if "base_ref" in trees[gid]:
+                    ref_tree = trees[gid]["base_ref"][0]
+                elif max_visits in trees[gid] and not trees[gid][max_visits][2]:
+                    # max_visits is a base VC
+                    ref_tree = trees[gid][max_visits][0]
+                else:
+                    # Shouldn't happen, but fallback to any base tree at max_visits
+                    ref_tree = trees[gid][max_visits][0]
+            else:
+                ref_tree = trees[gid]["base"][0]
+            pos_q_values[slot] = np.array(ref_tree.root_q_values())
 
-            # Check if we hit any target visit count
-            for vc in target_vcs:
-                if sims_done == vc:
-                    for i in range(n):
-                        pos_policies[i][vc] = _get_policy(mcts_list[i])
-                        wld = np.array(mcts_list[i].root_value())
-                        pos_values[i][vc] = float(wld[0])
-
-        # Capture Q-values from the max-visits MCTS tree
-        for i in range(n):
-            pos_q_values[i] = np.array(mcts_list[i].root_q_values())
+            # Always store base reference policy/value under "base_ref" key
+            # (separate from selfplay snapshots at the same VC)
+            pos_policies[slot]["base_ref"] = _get_policy(ref_tree, False, config)
+            pos_values[slot]["base_ref"] = float(np.array(ref_tree.root_value())[0])
+            # Also store at max_visits if no selfplay snapshot claimed it
+            if max_visits not in pos_policies[slot]:
+                pos_policies[slot][max_visits] = pos_policies[slot]["base_ref"]
+                pos_values[slot][max_visits] = pos_values[slot]["base_ref"]
 
         # Record position data and advance games
         next_active = []
@@ -552,39 +683,39 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
             total_positions += 1
             pbar.update(1)
 
-            # Select move from max-visits policy with temperature
-            if max_visits in pos_policies[slot]:
-                probs = pos_policies[slot][max_visits].copy()
-                if selfplay_mode:
-                    temp = calc_temp_selfplay(config, gs.current_turn())
+            # Select move from base ref tree's max-visits policy with temperature
+            if tree_reuse:
+                if "base_ref" in trees[gid]:
+                    ref_tree = trees[gid]["base_ref"][0]
                 else:
-                    temp = calc_temp(config, gs.current_turn())
-                if temp > 0 and temp != 1.0:
-                    probs = np.power(probs + 1e-10, 1.0 / temp)
-                    probs /= probs.sum()
-                move = np.random.choice(len(probs), p=probs)
+                    ref_tree = trees[gid][max_visits][0]
             else:
-                valids = np.array(gs.valid_moves())
-                valid_indices = np.where(valids == 1)[0]
-                move = np.random.choice(valid_indices)
+                ref_tree = trees[gid]["base"][0]
 
-            # Tree reuse: update root before playing the move
-            if selfplay_mode:
-                persistent_mcts[gid].update_root(gs, move)
+            probs = _get_policy(ref_tree, False, config)
+            temp = calc_temp(config, gs.current_turn())
+            if temp > 0 and temp != 1.0:
+                probs = np.power(probs + 1e-10, 1.0 / temp)
+                probs /= probs.sum()
+            move = np.random.choice(len(probs), p=probs)
+
+            if tree_reuse:
+                # Update root for all persistent trees
+                for key, (mcts_obj, target, is_sp) in trees[gid].items():
+                    mcts_obj.update_root(gs, move)
 
             gs.play_move(move)
-
-            # Re-apply noise/temp on the reused subtree (matches play_manager.cc:271-279)
-            if selfplay_mode and gs.scores() is None:
-                mcts_obj = persistent_mcts[gid]
-                if mcts_obj.root_n() > 0:
-                    mcts_obj.apply_root_policy_temp()
-                    mcts_obj.add_root_noise()
 
             if gs.scores() is not None:
                 game_scores[gid] = np.array(gs.scores())
             else:
                 next_active.append(gid)
+                # Re-apply noise/temp on reused subtrees for selfplay trees
+                if tree_reuse:
+                    for key, (mcts_obj, target, is_sp) in trees[gid].items():
+                        if is_sp and mcts_obj.root_n() > 0:
+                            mcts_obj.apply_root_policy_temp()
+                            mcts_obj.add_root_noise()
 
         active = next_active
 
@@ -604,6 +735,10 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
     # Expected reward: V(pi_vc) = sum(pi_vc * Q_max)
     expected_reward = {vc: [] for vc in visit_counts}
 
+    # Only skip max_visits from divergence if it's base mode (identical to reference)
+    # If max_visits is selfplay, include it (divergence from base ref is interesting)
+    skip_div_vc = max_visits if visit_modes.get(max_visits, "base") == "base" else None
+
     for gid in range(ANALYSIS_GAMES):
         scores = game_scores[gid]
         for current_player, values_at_pos, policies_at_pos, q_values in game_positions[gid]:
@@ -616,27 +751,29 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
                 outcome = 0.0
             position_outcomes.append(outcome)
 
-            # Policy divergence metrics vs max visits
-            if max_visits in policies_at_pos:
-                max_policy = policies_at_pos[max_visits]
+            # Policy divergence metrics vs base reference
+            if "base_ref" in policies_at_pos:
+                ref_policy = policies_at_pos["base_ref"]
                 for vc in visit_counts:
+                    if vc == skip_div_vc:
+                        continue  # skip base max_visits (identical to reference)
                     if vc in policies_at_pos:
                         q = policies_at_pos[vc]
-                        all_jsd[vc].append(jensen_shannon_divergence(max_policy, q))
-                        all_tv[vc].append(total_variation(max_policy, q))
-                        all_hellinger[vc].append(hellinger_distance(max_policy, q))
-                        all_top1[vc].append(top_k_agreement(max_policy, q, 1))
-                        all_top3[vc].append(top_k_agreement(max_policy, q, 3))
-                        all_top9[vc].append(top_k_agreement(max_policy, q, 9))
+                        all_jsd[vc].append(jensen_shannon_divergence(ref_policy, q))
+                        all_tv[vc].append(total_variation(ref_policy, q))
+                        all_hellinger[vc].append(hellinger_distance(ref_policy, q))
+                        all_top1[vc].append(top_k_agreement(ref_policy, q, 1))
+                        all_top3[vc].append(top_k_agreement(ref_policy, q, 3))
+                        all_top9[vc].append(top_k_agreement(ref_policy, q, 9))
 
             # Store values
             for vc in visit_counts:
                 if vc in values_at_pos:
                     position_values[vc].append(values_at_pos[vc])
-            if max_visits in values_at_pos:
-                position_max_values.append(values_at_pos[max_visits])
+            if "base_ref" in values_at_pos:
+                position_max_values.append(values_at_pos["base_ref"])
 
-            # Expected reward using Q-values from max-visits tree
+            # Expected reward using Q-values from max-visits base ref tree
             for vc in visit_counts:
                 if vc in policies_at_pos:
                     v_pi = float(np.sum(policies_at_pos[vc] * q_values))
@@ -663,7 +800,7 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
         all_vals = {}
         for vc in visit_counts:
             data = policy_metric_data[name]
-            if vc != max_visits and vc in data and len(data[vc]) > 0:
+            if vc != skip_div_vc and vc in data and len(data[vc]) > 0:
                 arr = np.array(data[vc])
                 means[vc] = float(np.mean(arr))
                 all_vals[vc] = arr
@@ -707,17 +844,25 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
     reward_all = {}
     regret_means = {}
     regret_all = {}
+    # Base ref expected reward (for regret computation)
+    base_ref_reward_list = []
+    for gid in range(ANALYSIS_GAMES):
+        for current_player, values_at_pos, policies_at_pos, q_values in game_positions[gid]:
+            if "base_ref" in policies_at_pos:
+                base_ref_reward_list.append(float(np.sum(policies_at_pos["base_ref"] * q_values)))
+    base_ref_reward = np.array(base_ref_reward_list) if base_ref_reward_list else None
+
     for vc in visit_counts:
         if vc in expected_reward and len(expected_reward[vc]) > 0:
             arr = np.array(expected_reward[vc])
             reward_means[vc] = float(np.mean(arr))
             reward_all[vc] = arr
-    # Regret = V(pi_max) - V(pi_vc)
-    if max_visits in reward_all:
-        max_reward = reward_all[max_visits]
+    # Regret = V(pi_base_ref) - V(pi_vc)
+    if base_ref_reward is not None:
         for vc in visit_counts:
             if vc in reward_all:
-                reg = max_reward[:len(reward_all[vc])] - reward_all[vc]
+                n_common = min(len(base_ref_reward), len(reward_all[vc]))
+                reg = base_ref_reward[:n_common] - reward_all[vc][:n_common]
                 regret_means[vc] = float(np.mean(reg))
                 regret_all[vc] = reg
     metrics["reward_means"] = reward_means
@@ -725,7 +870,11 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
     metrics["regret_means"] = regret_means
     metrics["regret_all"] = regret_all
 
-    # Print summary
+    # Print summary — show mode suffix for selfplay VCs
+    def _vc_label(vc):
+        suffix = "sp" if visit_modes.get(vc, "base") == "selfplay" else ""
+        return f"{vc}{suffix}"
+
     print("\n--- Policy Analysis (divergence from max-visits policy) ---")
     print(f"{'Visits':>8s} {'JSD':>10s} {'TV':>10s} {'Hellinger':>10s} {'Top-1':>10s} {'Top-3':>10s} {'Top-9':>10s}")
     all_policy_vcs = sorted(set().union(*(metrics[f"{n}_means"].keys() for n in policy_metric_names)))
@@ -734,29 +883,29 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
         for name in policy_metric_names:
             v = metrics[f"{name}_means"].get(vc)
             vals.append(f"{v:>10.4f}" if v is not None else f"{'N/A':>10s}")
-        print(f"{vc:>8d} {''.join(vals)}")
+        print(f"{_vc_label(vc):>8s} {''.join(vals)}")
 
     print("\n--- Value Analysis vs Max-Visits ---")
     print(f"{'Visits':>8s} {'Corr':>8s} {'MAE':>8s}")
     for vc in sorted(value_corr_vs_max.keys()):
-        print(f"{vc:>8d} {value_corr_vs_max[vc]:>8.4f} {value_mae_vs_max[vc]:>8.4f}")
+        print(f"{_vc_label(vc):>8s} {value_corr_vs_max[vc]:>8.4f} {value_mae_vs_max[vc]:>8.4f}")
 
     print("\n--- Value Analysis vs Game Outcome ---")
     print(f"{'Visits':>8s} {'Corr':>8s} {'MAE':>8s}")
     for vc in sorted(value_corr_vs_outcome.keys()):
-        print(f"{vc:>8d} {value_corr_vs_outcome[vc]:>8.4f} {value_mae_vs_outcome[vc]:>8.4f}")
+        print(f"{_vc_label(vc):>8s} {value_corr_vs_outcome[vc]:>8.4f} {value_mae_vs_outcome[vc]:>8.4f}")
 
     if reward_means:
         print("\n--- Expected Reward (V(pi) = sum(pi * Q_max)) ---")
         print(f"{'Visits':>8s} {'E[reward]':>10s}")
         for vc in sorted(reward_means.keys()):
-            print(f"{vc:>8d} {reward_means[vc]:>10.4f}")
+            print(f"{_vc_label(vc):>8s} {reward_means[vc]:>10.4f}")
 
     if regret_means:
         print("\n--- Policy Regret (V(pi_max) - V(pi_vc)) ---")
         print(f"{'Visits':>8s} {'Regret':>10s}")
         for vc in sorted(regret_means.keys()):
-            print(f"{vc:>8d} {regret_means[vc]:>10.4f}")
+            print(f"{_vc_label(vc):>8s} {regret_means[vc]:>10.4f}")
 
     print_cache_stats(cache)
     del agent
@@ -774,12 +923,31 @@ def _has_display():
     return matplotlib.get_backend().lower() != 'agg'
 
 
-def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
+def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None, visit_modes=None):
     """Generate plots and save raw data."""
     if not _has_display():
         import matplotlib
         matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+
+    if visit_modes is None:
+        visit_modes = {vc: "base" for vc in visit_counts}
+    has_mixed = len(set(visit_modes.values())) > 1
+
+    def _plot_by_mode(ax, vcs, values, base_color="tab:blue", sp_color="tab:orange", **kwargs):
+        """Plot values split by mode with appropriate markers/lines."""
+        base = [(vc, v) for vc, v in zip(vcs, values) if visit_modes.get(vc, "base") == "base"]
+        sp = [(vc, v) for vc, v in zip(vcs, values) if visit_modes.get(vc, "base") == "selfplay"]
+        if base:
+            bx, by = zip(*base)
+            ax.plot(bx, by, "o-", markersize=8, linewidth=2, color=base_color,
+                    label="base" if has_mixed else None, **kwargs)
+        if sp:
+            sx, sy = zip(*sp)
+            ax.plot(sx, sy, "^--", markersize=8, linewidth=2, color=sp_color,
+                    label="selfplay" if has_mixed else None, **kwargs)
+        if has_mixed:
+            ax.legend(fontsize=8)
 
     save_dir = os.path.join("data", "threshold_analysis")
     os.makedirs(save_dir, exist_ok=True)
@@ -875,7 +1043,7 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
         # Top-left: correlation vs max-visits
         if corr_max:
             vcs = sorted(corr_max.keys())
-            axes[0, 0].plot(vcs, [corr_max[vc] for vc in vcs], "o-", markersize=8, linewidth=2)
+            _plot_by_mode(axes[0, 0], vcs, [corr_max[vc] for vc in vcs])
             axes[0, 0].set_xscale("log")
             axes[0, 0].set_xticks(vcs)
             axes[0, 0].set_xticklabels([str(v) for v in vcs])
@@ -887,7 +1055,8 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
         # Top-right: MAE vs max-visits
         if mae_max:
             vcs = sorted(mae_max.keys())
-            axes[0, 1].plot(vcs, [mae_max[vc] for vc in vcs], "o-", markersize=8, linewidth=2, color="tab:orange")
+            _plot_by_mode(axes[0, 1], vcs, [mae_max[vc] for vc in vcs],
+                          base_color="tab:orange", sp_color="tab:red")
             axes[0, 1].set_xscale("log")
             axes[0, 1].set_xticks(vcs)
             axes[0, 1].set_xticklabels([str(v) for v in vcs])
@@ -899,7 +1068,8 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
         # Bottom-left: correlation vs game outcome
         if corr_out:
             vcs = sorted(corr_out.keys())
-            axes[1, 0].plot(vcs, [corr_out[vc] for vc in vcs], "o-", markersize=8, linewidth=2, color="tab:green")
+            _plot_by_mode(axes[1, 0], vcs, [corr_out[vc] for vc in vcs],
+                          base_color="tab:green", sp_color="tab:olive")
             axes[1, 0].set_xscale("log")
             axes[1, 0].set_xticks(vcs)
             axes[1, 0].set_xticklabels([str(v) for v in vcs])
@@ -911,7 +1081,8 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
         # Bottom-right: MAE vs game outcome
         if mae_out:
             vcs = sorted(mae_out.keys())
-            axes[1, 1].plot(vcs, [mae_out[vc] for vc in vcs], "o-", markersize=8, linewidth=2, color="tab:red")
+            _plot_by_mode(axes[1, 1], vcs, [mae_out[vc] for vc in vcs],
+                          base_color="tab:red", sp_color="tab:purple")
             axes[1, 1].set_xscale("log")
             axes[1, 1].set_xticks(vcs)
             axes[1, 1].set_xticklabels([str(v) for v in vcs])
@@ -941,8 +1112,7 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
 
         # Left: expected reward curve
         reward_vcs = sorted(reward_means.keys())
-        axes[panel].plot(reward_vcs, [reward_means[vc] for vc in reward_vcs],
-                         "o-", markersize=8, linewidth=2)
+        _plot_by_mode(axes[panel], reward_vcs, [reward_means[vc] for vc in reward_vcs])
         axes[panel].set_xscale("log")
         axes[panel].set_xlabel("MCTS Visit Count")
         axes[panel].set_ylabel("Expected Reward V(pi)")
@@ -955,8 +1125,8 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
         # Center: mean regret curve
         if regret_means:
             regret_vcs = sorted(regret_means.keys())
-            axes[panel].plot(regret_vcs, [regret_means[vc] for vc in regret_vcs],
-                             "o-", markersize=8, linewidth=2, color="tab:red")
+            _plot_by_mode(axes[panel], regret_vcs, [regret_means[vc] for vc in regret_vcs],
+                          base_color="tab:red", sp_color="tab:purple")
             axes[panel].set_xscale("log")
             axes[panel].set_xlabel("MCTS Visit Count")
             axes[panel].set_ylabel("Regret")
@@ -1029,7 +1199,7 @@ def visualize_and_save(visit_counts, elo=None, win_matrix=None, metrics=None):
 
 
 def main():
-    config, Game, network_path, visit_counts, phases, use_playout, cache_size, selfplay_mode = interactive_config()
+    config, Game, network_path, visit_counts, phases, use_playout, cache_size, visit_modes, tree_reuse = interactive_config()
 
     elo = None
     win_matrix = None
@@ -1041,9 +1211,11 @@ def main():
 
     if "analysis" in phases:
         metrics = run_analysis(config, Game, network_path, visit_counts, use_playout,
-                               cache_size=cache_size, selfplay_mode=selfplay_mode)
+                               cache_size=cache_size, visit_modes=visit_modes,
+                               tree_reuse=tree_reuse)
 
-    visualize_and_save(visit_counts, elo=elo, win_matrix=win_matrix, metrics=metrics)
+    visualize_and_save(visit_counts, elo=elo, win_matrix=win_matrix, metrics=metrics,
+                       visit_modes=visit_modes)
 
     print("\nDone!")
 

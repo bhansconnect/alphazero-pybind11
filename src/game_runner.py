@@ -1205,6 +1205,10 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     params.playout_cap_percent = 0.75
     params.resign_percent = config.resign_percent
     params.resign_playthrough_percent = config.resign_playthrough_percent
+    params.mcts_root_temp = config.mcts_root_temp
+    params.root_fpu_zero = config.root_fpu_zero
+    params.shaped_dirichlet = config.shaped_dirichlet
+    params.policy_target_pruning = config.policy_target_pruning
 
     use_rand = best == 0
 

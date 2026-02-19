@@ -69,11 +69,14 @@ struct PlayParams {
   bool tree_reuse = true;
   bool add_noise = false;
   float epsilon = 0.25;
-  float mcts_root_temp = 1.4;
+  float mcts_root_temp = 1.0;  // test-time default; self-play sets via config
   bool playout_cap_randomization = false;
   uint32_t playout_cap_depth = 25;
   float playout_cap_percent = 0.75;
   float fpu_reduction = 0.0;
+  bool root_fpu_zero = false;
+  bool shaped_dirichlet = false;
+  bool policy_target_pruning = false;
   float resign_percent = 0.0;
   float resign_playthrough_percent = 0.0;
   std::vector<EvalType> eval_type{};  // per player, empty = all NN

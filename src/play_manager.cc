@@ -80,7 +80,8 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
       gd.mcts.emplace_back(params_.cpuct, base_gs_->num_players(),
                            base_gs_->num_moves(), params_.epsilon,
                            params_.mcts_root_temp, params_.fpu_reduction,
-                           base_gs_->relative_values());
+                           base_gs_->relative_values(), params_.root_fpu_zero,
+                           params_.shaped_dirichlet);
     }
     gd.canonical = Tensor<float, 3>{base_gs_->canonicalized()};
     gd.v = Vector<float>{base_gs_->num_players() + 1};
@@ -167,7 +168,11 @@ void PlayManager::play() {
           PlayHistory ph{
               .canonical = Tensor<float, 3>{game.gs->canonicalized()},
               .v = Vector<float>{game.v.size()},
-              .pi = Vector<float>{mcts.probs(1.0)},
+              .pi = Vector<float>{
+                  (params_.policy_target_pruning && params_.add_noise)
+                      ? mcts.probs_pruned(1.0)
+                      : mcts.probs(1.0)
+              },
           };
           ph.v.setZero();
           game.partial_history.push_back(
@@ -254,7 +259,8 @@ void PlayManager::play() {
             m = MCTS{params_.cpuct,          base_gs_->num_players(),
                      base_gs_->num_moves(),  params_.epsilon,
                      params_.mcts_root_temp, params_.fpu_reduction,
-                     base_gs_->relative_values()};
+                     base_gs_->relative_values(), params_.root_fpu_zero,
+                     params_.shaped_dirichlet};
           }
         }
         // A move has been played, update playout cap.
@@ -266,7 +272,8 @@ void PlayManager::play() {
             m = MCTS{params_.cpuct,          base_gs_->num_players(),
                      base_gs_->num_moves(),  params_.epsilon,
                      params_.mcts_root_temp, params_.fpu_reduction,
-                     base_gs_->relative_values()};
+                     base_gs_->relative_values(), params_.root_fpu_zero,
+                     params_.shaped_dirichlet};
           }
         } else {
           // Re-apply root policy temperature and noise on the reused subtree.

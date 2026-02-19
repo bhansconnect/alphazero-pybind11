@@ -73,16 +73,46 @@ void MCTS::update_root(const GameState& gs, uint32_t move) {
 
 void MCTS::add_root_noise() {
   const auto legal_move_count = root_.children.size();
-  auto dist =
-      std::gamma_distribution<float>{NOISE_ALPHA_RATIO / legal_move_count, 1.0};
   auto noise = Vector<float>{num_moves_};
   auto sum = 0.0;
-  for (auto& c : root_.children) {
-    noise(c.move) = dist(re);
-    sum += noise(c.move);
+
+  if (shaped_dirichlet_ && legal_move_count > 1) {
+    auto N = static_cast<float>(legal_move_count);
+    auto log_sum = 0.0f;
+    for (const auto& c : root_.children) {
+      log_sum += std::log(std::min(c.policy, 0.01f) + 1e-20f);
+    }
+    auto log_mean = log_sum / N;
+
+    auto shaped_sum = 0.0f;
+    for (const auto& c : root_.children) {
+      auto lp = std::log(std::min(c.policy, 0.01f) + 1e-20f);
+      shaped_sum += std::max(0.0f, lp - log_mean);
+    }
+
+    auto uniform = 1.0f / N;
+    for (auto& c : root_.children) {
+      auto lp = std::log(std::min(c.policy, 0.01f) + 1e-20f);
+      auto shaped = std::max(0.0f, lp - log_mean);
+      auto alpha_prop = (shaped_sum > 0)
+          ? 0.5f * (shaped / shaped_sum + uniform)
+          : uniform;
+      alpha_prop = std::max(alpha_prop, 1e-6f);
+      auto dist = std::gamma_distribution<float>{NOISE_ALPHA_RATIO * alpha_prop, 1.0f};
+      noise(c.move) = dist(re);
+      sum += noise(c.move);
+    }
+  } else {
+    auto dist = std::gamma_distribution<float>{
+        NOISE_ALPHA_RATIO / static_cast<float>(legal_move_count), 1.0};
+    for (auto& c : root_.children) {
+      noise(c.move) = dist(re);
+      sum += noise(c.move);
+    }
   }
+
   for (auto& c : root_.children) {
-    c.policy = c.policy * (1 - epsilon_) + epsilon_ * noise(c.move) / sum;
+    c.policy = c.policy * (1 - epsilon_) + epsilon_ * noise(c.move) / static_cast<float>(sum);
   }
 }
 
@@ -105,7 +135,9 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
   auto leaf = gs.copy();
   while (current_->n > 0 && !current_->scores.has_value()) {
     path_.push_back(current_);
-    current_ = current_->best_child(cpuct_, fpu_reduction_);
+
+    float fpu = (current_ == &root_ && root_fpu_zero_) ? 0.0f : fpu_reduction_;
+    current_ = current_->best_child(cpuct_, fpu);
     leaf->play_move(current_->move);
   }
   total_leaf_depth_ += path_.size();
@@ -236,6 +268,62 @@ Vector<float> MCTS::probs(const float temp) const noexcept {
   probs = probs.array().pow(1 / temp);
   probs /= probs.sum();
   return probs;
+}
+
+Vector<float> MCTS::probs_pruned(float temp) const noexcept {
+  if (root_.n <= 1) return probs(temp);
+
+  // PUCT inversion: compute the desired visit count for each child based on
+  // what PUCT would select given the current Q values and noised policy.
+  auto explore_scaling = cpuct_ * std::sqrt(static_cast<float>(root_.n));
+
+  // Find best selection value among visited children.
+  auto best_sel = -1e30f;
+  for (const auto& c : root_.children) {
+    if (c.n == 0) continue;
+    auto sel = c.q + explore_scaling * c.policy / static_cast<float>(c.n + 1);
+    if (sel > best_sel) best_sel = sel;
+  }
+
+  // Compute reduced visit counts via PUCT inversion.
+  auto pruned = Vector<float>{num_moves_};
+  pruned.setZero();
+  for (const auto& c : root_.children) {
+    if (c.n == 0) continue;
+    auto explore_gap = best_sel - c.q;
+    float desired;
+    if (explore_gap <= 0) {
+      // Q alone beats the best selection value — keep all visits.
+      desired = static_cast<float>(c.n);
+    } else {
+      desired = explore_scaling * c.policy / explore_gap - 1.0f;
+    }
+    pruned(c.move) = std::min(static_cast<float>(c.n),
+                               std::max(0.0f, desired));
+  }
+
+  // Handle temp==0 on raw counts before normalization.
+  auto total = pruned.sum();
+  if (total == 0) return probs(temp);
+  if (temp == 0) {
+    auto best_val = pruned.maxCoeff();
+    auto result = Vector<float>{num_moves_};
+    result.setZero();
+    auto count = 0;
+    for (auto m = 0; m < num_moves_; ++m) {
+      if (pruned(m) == best_val) ++count;
+    }
+    for (auto m = 0; m < num_moves_; ++m) {
+      if (pruned(m) == best_val) result(m) = 1.0f / count;
+    }
+    return result;
+  }
+  pruned /= total;
+  if (temp != 1.0f) {
+    pruned = pruned.array().pow(1.0f / temp);
+    pruned /= pruned.sum();
+  }
+  return pruned;
 }
 
 uint32_t MCTS::pick_move(const Vector<float>& p) {

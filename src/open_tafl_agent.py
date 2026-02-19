@@ -185,7 +185,7 @@ if __name__ == "__main__":
     height = gs.CANONICAL_SHAPE()[1]
     width = gs.CANONICAL_SHAPE()[2]
     mcts = alphazero.MCTS(
-        args.cpuct, gs.num_players(), gs.num_moves(), 0, 1.4, args.fpu_redux
+        args.cpuct, gs.num_players(), gs.num_moves(), 0, 1.0, args.fpu_redux
     )
 
     time_limit = args.time
@@ -210,7 +210,7 @@ if __name__ == "__main__":
             elif command.startswith("finish"):
                 gs = Game()
                 mcts = alphazero.MCTS(
-                    args.cpuct, gs.num_players(), gs.num_moves(), 0, 1.4, args.fpu_redux
+                    args.cpuct, gs.num_players(), gs.num_moves(), 0, 1.0, args.fpu_redux
                 )
             elif command.startswith("clock"):
                 # Grab the over time length.

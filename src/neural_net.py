@@ -447,13 +447,11 @@ class NNWrapper:
             for batch in tqdm(dataset, desc="Calculating Sample Loss", leave=False):
                 canonical, target_vs, target_pis = batch
                 canonical = canonical.float().contiguous().to(self.device, non_blocking=self._non_blocking)
-                target_vs = target_vs.float().contiguous().to(self.device, non_blocking=self._non_blocking)
                 target_pis = target_pis.float().contiguous().to(self.device, non_blocking=self._non_blocking)
 
                 out_v, out_pi = self.nnet(canonical)
-                l_v = self.sample_loss_v(target_vs, out_v)
                 l_pi = self.sample_loss_pi(target_pis, out_pi)
-                losses_gpu.append(l_pi + l_v)
+                losses_gpu.append(l_pi)
         return torch.cat(losses_gpu).cpu().numpy()
 
     @tracy_zone

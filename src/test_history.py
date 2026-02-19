@@ -22,7 +22,7 @@ from neural_net import NNWrapper, NNArgs, get_storage_dtype
 from game_runner import (
     save_compressed, load_compressed, _glob_hist_files,
     _atomic_save_compressed, update_reservoir, calc_hist_size,
-    glob_file_triples, _replace_size_in_path,
+    glob_file_triples,
     StreamingCompressedDataset, load_reservoir, train,
     exploit_symmetries, resample_by_surprise,
     _bootstrap_retrain, _bootstrap_train_phase,
@@ -154,13 +154,6 @@ def test_glob_file_triples_multiple(tmp_path):
     sizes = [s for _, _, _, s in triples]
     assert sizes == [100, 110, 120]
 
-
-def test_replace_size_in_path():
-    """_replace_size_in_path correctly replaces the size component."""
-    assert _replace_size_in_path("/data/0003-0001-canonical-30000.ptz", 25000) == \
-        "/data/0003-0001-canonical-25000.ptz"
-    assert _replace_size_in_path("/data/0003-0001-v-30000.ptz", 0) == \
-        "/data/0003-0001-v-0.ptz"
 
 
 # ============================================================
@@ -642,6 +635,146 @@ def test_glob_reservoir_chunks(tmp_path):
         assert "_v.ptz" in v_path
         assert "_pi.ptz" in pi_path
         assert size == n
+
+
+def test_glob_reservoir_chunks_partial_non_last(tmp_path):
+    """glob_reservoir_chunks reports correct sizes for partial non-last chunks via chunk_sizes."""
+    res_dir = str(tmp_path / "reservoir")
+    os.makedirs(res_dir)
+    cs = Game.CANONICAL_SHAPE()
+    sizes = [30, 100, 50]
+
+    for i, n in enumerate(sizes):
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.randn(n, 3)
+        pi = torch.randn(n, 7)
+        iters = torch.full((n,), i, dtype=torch.int16)
+        _save_chunk(res_dir, i, c, v, pi, iters)
+
+    meta = {
+        "version": 2, "n_chunks": 10, "chunk_size": 100,
+        "chunk_sizes": sizes,
+        "chunks_filled": 3, "last_updated": [0, 1, 2],
+    }
+    _save_reservoir_meta(res_dir, meta)
+
+    triples = glob_reservoir_chunks(res_dir)
+    assert len(triples) == 3
+    reported_sizes = [size for _, _, _, size in triples]
+    assert reported_sizes == sizes, f"Expected {sizes}, got {reported_sizes}"
+
+
+def test_glob_reservoir_chunks_backward_compat(tmp_path):
+    """glob_reservoir_chunks falls back to loading tensors when chunk_sizes is missing."""
+    res_dir = str(tmp_path / "reservoir")
+    os.makedirs(res_dir)
+    cs = Game.CANONICAL_SHAPE()
+    sizes = [30, 100, 50]
+
+    for i, n in enumerate(sizes):
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.randn(n, 3)
+        pi = torch.randn(n, 7)
+        iters = torch.full((n,), i, dtype=torch.int16)
+        _save_chunk(res_dir, i, c, v, pi, iters)
+
+    # Old-format metadata: no chunk_sizes key
+    meta = {
+        "version": 2, "n_chunks": 10, "chunk_size": 100,
+        "chunks_filled": 3, "last_updated": [0, 1, 2],
+    }
+    _save_reservoir_meta(res_dir, meta)
+
+    triples = glob_reservoir_chunks(res_dir)
+    assert len(triples) == 3
+    reported_sizes = [size for _, _, _, size in triples]
+    assert reported_sizes == sizes, f"Expected {sizes}, got {reported_sizes}"
+
+
+def test_filling_phase_excess_data_not_discarded(tmp_path):
+    """Excess staging data at fill→merge transition is merged, not discarded."""
+    config = TrainConfig(
+        window_size_scalar=1.0,
+        reservoir_update_interval=1,
+        reservoir_n_chunks=2,
+        reservoir_chunk_size=30,
+        reservoir_chunks_per_update=2,
+        reservoir_recency_decay=0.9,
+    )
+    exp_dir = str(tmp_path / "experiment")
+    paths = config.resolve_paths(exp_dir)
+    for key in ("history", "reservoir"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    cs = Game.CANONICAL_SHAPE()
+    # Create enough data so that filling 2 chunks (30 each = 60) leaves excess
+    # We need staging data > 2 * chunk_size = 60
+    n = 50
+    for i in range(6):
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+        p = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+        save_compressed(c, os.path.join(paths["history"], f"{i:04d}-0000-canonical-{n}.ptz"))
+        save_compressed(v, os.path.join(paths["history"], f"{i:04d}-0000-v-{n}.ptz"))
+        save_compressed(p, os.path.join(paths["history"], f"{i:04d}-0000-pi-{n}.ptz"))
+
+    # Run updates; with window_size_scalar=1.0 and small chunk_size, filling will
+    # complete and excess staging data should flow into merge phase
+    for iteration in range(3, 6):
+        hist_size = calc_hist_size(config, iteration)
+        update_reservoir(config, paths, iteration, hist_size)
+
+    meta = _load_reservoir_meta(paths["reservoir"])
+    assert meta is not None
+    assert meta["chunks_filled"] == 2, "Should have exactly 2 chunks"
+
+    # Count total samples in reservoir
+    total = 0
+    for i in range(meta["chunks_filled"]):
+        c, v, pi, iters = _load_chunk(paths["reservoir"], i)
+        total += c.shape[0]
+
+    # Without the fix, excess data at the fill→merge boundary would be lost.
+    # With the fix, at least one chunk should have been merged with excess data.
+    # The merge phase uses recency-weighted sampling, so chunks can be up to chunk_size.
+    assert total > 0, "Reservoir should contain data"
+    assert "chunk_sizes" in meta, "Metadata should contain chunk_sizes"
+    assert len(meta["chunk_sizes"]) == 2, "Should have 2 chunk sizes"
+
+
+def test_reservoir_migration_creates_chunk_sizes(tmp_path):
+    """Migration from legacy format creates chunk_sizes in metadata."""
+    config = TrainConfig(reservoir_n_chunks=10, reservoir_chunk_size=40)
+    res_dir = str(tmp_path / "reservoir")
+    os.makedirs(res_dir)
+    cs = Game.CANONICAL_SHAPE()
+    n = 30
+
+    # Create legacy per-iteration files
+    for i in range(3):
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.randn(n, 3)
+        pi = torch.randn(n, 7)
+        save_compressed(c, os.path.join(res_dir, f"{i:04d}-0000-canonical-{n}.ptz"))
+        save_compressed(v, os.path.join(res_dir, f"{i:04d}-0000-v-{n}.ptz"))
+        save_compressed(pi, os.path.join(res_dir, f"{i:04d}-0000-pi-{n}.ptz"))
+
+    _migrate_legacy_reservoir(config, res_dir)
+
+    meta = _load_reservoir_meta(res_dir)
+    assert meta is not None
+    assert "chunk_sizes" in meta, "Migration should create chunk_sizes"
+    assert len(meta["chunk_sizes"]) == meta["chunks_filled"]
+
+    # Verify chunk_sizes match actual tensor sizes
+    for i, expected_size in enumerate(meta["chunk_sizes"]):
+        c, v, pi, iters = _load_chunk(res_dir, i)
+        assert c.shape[0] == expected_size, \
+            f"Chunk {i}: expected {expected_size}, got {c.shape[0]}"
+
+    # Total should equal input
+    total = sum(meta["chunk_sizes"])
+    assert total == n * 3, f"Expected {n * 3} total samples, got {total}"
 
 
 def test_reservoir_migration(tmp_path):

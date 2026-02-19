@@ -74,7 +74,7 @@ class TrainConfig:
     lr_schedule: str = "constant"
     lr_steps: list = field(default_factory=list)  # for step mode: [[0, 0.01], [250, 0.003]]
     lr_drop_factor: float = 0.3
-    lr_patience: int = 5
+    lr_patience: int = 8
     lr_min_iter: int = 50
     lr_min_between_drops: int = 30
     lr_max_drops: int = 3

@@ -880,6 +880,119 @@ def test_bootstrap_train_phase_early_stop(tmp_path):
     assert steps > 0
 
 
+def test_ema_smoothing_prevents_oscillation_from_resetting_patience():
+    """EMA smoothing detects plateau in oscillating losses but not in genuinely improving ones."""
+    patience = 4
+    threshold = 0.005
+    beta = 1 - 1 / max(patience, 1)  # 0.75
+
+    # --- Oscillating losses (flat around 1.0, noisy) should trigger patience ---
+    oscillating = [1.0, 0.98, 1.01, 0.97, 1.02, 0.96, 1.01, 0.97, 1.02, 0.98, 1.01, 0.99]
+    ema = None
+    best_ema = None
+    lr_patience_counter = 0
+
+    for loss in oscillating:
+        if ema is None:
+            ema = loss
+        else:
+            ema = beta * ema + (1 - beta) * loss
+
+        if best_ema is None:
+            best_ema = ema
+            continue
+
+        rel_improvement = (best_ema - ema) / (best_ema + 1e-8)
+        plateaued = rel_improvement < threshold
+
+        if plateaued:
+            lr_patience_counter += 1
+        else:
+            lr_patience_counter = 0
+            best_ema = ema
+
+    assert lr_patience_counter >= patience, (
+        f"Oscillating losses should trigger patience, but counter={lr_patience_counter}"
+    )
+
+    # --- Genuinely improving losses should NOT accumulate patience ---
+    improving = [1.0, 0.97, 0.94, 0.91, 0.88, 0.85, 0.82, 0.79, 0.76, 0.73]
+    ema = None
+    best_ema = None
+    lr_patience_counter = 0
+
+    for loss in improving:
+        if ema is None:
+            ema = loss
+        else:
+            ema = beta * ema + (1 - beta) * loss
+
+        if best_ema is None:
+            best_ema = ema
+            continue
+
+        rel_improvement = (best_ema - ema) / (best_ema + 1e-8)
+        plateaued = rel_improvement < threshold
+
+        if plateaued:
+            lr_patience_counter += 1
+        else:
+            lr_patience_counter = 0
+            best_ema = ema
+
+    assert lr_patience_counter == 0, (
+        f"Improving losses should not accumulate patience, but counter={lr_patience_counter}"
+    )
+
+
+def test_bootstrap_lr_drops_with_default_patience(tmp_path):
+    """With patience=4 (default), LR should still drop on random data."""
+    cs = Game.CANONICAL_SHAPE()
+
+    # Create enough samples so that with batch_size=32 and eval_interval=10,
+    # we get many eval chunks (need > patience + 1 chunks for LR to drop)
+    file_triples = []
+    for i in range(4):
+        n = 500
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+        pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+        c_path = str(tmp_path / f"{i:04d}-0000-canonical-{n}.ptz")
+        v_path = str(tmp_path / f"{i:04d}-0000-v-{n}.ptz")
+        pi_path = str(tmp_path / f"{i:04d}-0000-pi-{n}.ptz")
+        save_compressed(c, c_path)
+        save_compressed(v, v_path)
+        save_compressed(pi, pi_path)
+        file_triples.append((c_path, v_path, pi_path, n))
+
+    config = TrainConfig(
+        game="connect4",
+        train_batch_size=32,
+        bootstrap_eval_interval=10,
+        bootstrap_lr_patience=4,
+        bootstrap_lr_max_drops=3,
+        bootstrap_convergence_patience=3,
+    )
+
+    nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
+    nn = NNWrapper(Game, nnargs)
+
+    class DummyRun:
+        def track(*a, **kw):
+            pass
+
+    initial_lr = config.bootstrap_lr
+    steps, early_stopped = _bootstrap_train_phase(
+        nn, file_triples, config, DummyRun(), source_n=0,
+        total_train_steps=0, phase_name="test",
+    )
+    assert steps > 0
+    final_lr = nn.optimizer.param_groups[0]["lr"]
+    assert final_lr < initial_lr, (
+        f"Expected at least one LR drop, but lr stayed at {final_lr}"
+    )
+
+
 # ============================================================
 # Disk-based exploit_symmetries
 # ============================================================

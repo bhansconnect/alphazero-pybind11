@@ -1493,7 +1493,9 @@ def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, 
     lr_patience_counter = 0
     convergence_patience_counter = 0
     final_lr_dropped = False
-    best_chunk_loss = None
+    ema_beta = 1 - 1 / max(config.bootstrap_lr_patience, 1)
+    ema_loss = None
+    best_ema_loss = None
 
     streaming_ds = StreamingCompressedDataset(files, bbs, passes=1)
     dl = DataLoader(streaming_ds, batch_size=None, num_workers=0)
@@ -1536,8 +1538,13 @@ def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, 
                   step=total_train_steps + current_step, context={"type": "total"})
 
         pbar.update()
-        pbar.set_postfix(loss=f"{(chunk_v_loss + chunk_pi_loss) / chunk_steps:.4f}",
-                         lr=f"{lr:.6f}")
+        pbar.set_postfix(
+            loss=f"{(chunk_v_loss + chunk_pi_loss) / chunk_steps:.4f}",
+            ema=f"{ema_loss:.4f}" if ema_loss is not None else "—",
+            pat=f"{lr_patience_counter}/{config.bootstrap_lr_patience}" if not final_lr_dropped
+                else f"{convergence_patience_counter}/{config.bootstrap_convergence_patience}",
+            lr=f"{lr:.6f}",
+        )
 
         # Evaluate at interval boundaries or end of epoch
         if chunk_steps >= eval_interval or current_step == total_steps:
@@ -1546,11 +1553,16 @@ def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, 
             chunk_pi_loss = 0.0
             chunk_steps = 0
 
-            if best_chunk_loss is None:
-                best_chunk_loss = avg_loss
+            if ema_loss is None:
+                ema_loss = avg_loss
+            else:
+                ema_loss = ema_beta * ema_loss + (1 - ema_beta) * avg_loss
+
+            if best_ema_loss is None:
+                best_ema_loss = ema_loss
                 continue
 
-            rel_improvement = (best_chunk_loss - avg_loss) / (best_chunk_loss + 1e-8)
+            rel_improvement = (best_ema_loss - ema_loss) / (best_ema_loss + 1e-8)
             plateaued = rel_improvement < config.bootstrap_convergence_threshold
 
             if final_lr_dropped:
@@ -1561,7 +1573,7 @@ def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, 
                     lr_patience_counter += 1
                 else:
                     lr_patience_counter = 0
-                    best_chunk_loss = avg_loss
+                    best_ema_loss = ema_loss
 
             # LR drop
             if lr_patience_counter >= config.bootstrap_lr_patience and lr_drops < config.bootstrap_lr_max_drops:
@@ -1569,7 +1581,7 @@ def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, 
                 lr_drops += 1
                 nn.set_lr(lr)
                 lr_patience_counter = 0
-                pbar.write(f"  LR drop #{lr_drops}: lr={lr:.6f} (loss={avg_loss:.4f})")
+                pbar.write(f"  LR drop #{lr_drops}: lr={lr:.6f} (loss={avg_loss:.4f}, ema={ema_loss:.4f})")
                 if lr_drops >= config.bootstrap_lr_max_drops:
                     final_lr_dropped = True
                     convergence_patience_counter = 0

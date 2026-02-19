@@ -45,6 +45,10 @@ class TrainConfig:
     # MCTS
     cpuct: float = 1.25
     fpu_reduction: float = 0.25
+    mcts_root_temp: float = 1.25
+    root_fpu_zero: bool = True
+    shaped_dirichlet: bool = True
+    policy_target_pruning: bool = True
     selfplay_mcts_visits: int = 100
     fast_mcts_visits: int = 25
     compare_mcts_visits: int = 50

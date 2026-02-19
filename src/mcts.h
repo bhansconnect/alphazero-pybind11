@@ -35,8 +35,9 @@ struct DLLEXPORT Node {
 class DLLEXPORT MCTS {
  public:
   MCTS(float cpuct, uint32_t num_players, uint32_t num_moves, float epsilon = 0,
-       float root_policy_temp = 1.4, float fpu_reduction = 0,
-       bool relative_values = false)
+       float root_policy_temp = 1.0, float fpu_reduction = 0,
+       bool relative_values = false, bool root_fpu_zero = false,
+       bool shaped_dirichlet = false)
       : cpuct_(cpuct),
         num_players_(num_players),
         num_moves_(num_moves),
@@ -44,7 +45,9 @@ class DLLEXPORT MCTS {
         epsilon_(epsilon),
         root_policy_temp_(root_policy_temp),
         fpu_reduction_(fpu_reduction),
-        relative_values_(relative_values) {}
+        relative_values_(relative_values),
+        root_fpu_zero_(root_fpu_zero),
+        shaped_dirichlet_(shaped_dirichlet) {}
   void update_root(const GameState& gs, uint32_t move);
   [[nodiscard]] std::unique_ptr<GameState> find_leaf(const GameState& gs);
   void process_result(const GameState& gs, Vector<float>& value,
@@ -76,6 +79,7 @@ class DLLEXPORT MCTS {
   [[nodiscard]] Vector<uint32_t> counts() const noexcept;
   [[nodiscard]] Vector<float> root_q_values() const noexcept;
   [[nodiscard]] Vector<float> probs(float temp) const noexcept;
+  [[nodiscard]] Vector<float> probs_pruned(float temp) const noexcept;
   [[nodiscard]] uint32_t depth() const noexcept { return depth_; };
   [[nodiscard]] float avg_leaf_depth() const noexcept {
       return depth_ == 0 ? 0.0f : static_cast<float>(total_leaf_depth_) / static_cast<float>(depth_);
@@ -101,6 +105,8 @@ class DLLEXPORT MCTS {
   float root_policy_temp_;
   float fpu_reduction_;
   bool relative_values_;
+  bool root_fpu_zero_;
+  bool shaped_dirichlet_;
 };
 
 }  // namespace alphazero

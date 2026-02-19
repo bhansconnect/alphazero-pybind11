@@ -424,8 +424,10 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
     # For selfplay mode, create persistent MCTS objects for tree reuse
     if selfplay_mode:
         persistent_mcts = {
-            gid: alphazero.MCTS(config.cpuct, num_players, num_moves, epsilon, 1.4, config.fpu_reduction,
-                                relative_values)
+            gid: alphazero.MCTS(config.cpuct, num_players, num_moves, epsilon,
+                                config.mcts_root_temp, config.fpu_reduction,
+                                relative_values, config.root_fpu_zero,
+                                config.shaped_dirichlet)
             for gid in range(ANALYSIS_GAMES)
         }
 
@@ -443,7 +445,7 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
         else:
             # Create fresh MCTS for each active game's current position
             mcts_list = [
-                alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.4, config.fpu_reduction,
+                alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.0, config.fpu_reduction,
                                relative_values)
                 for _ in range(n)
             ]
@@ -452,6 +454,12 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
         pos_policies = [{} for _ in range(n)]
         pos_values = [{} for _ in range(n)]
         pos_q_values = [None] * n
+
+        # Helper to get policy: use pruned in selfplay mode if configured
+        def _get_policy(mcts_obj):
+            if selfplay_mode and config.policy_target_pruning:
+                return np.array(mcts_obj.probs_pruned(1.0))
+            return np.array(mcts_obj.probs(1.0))
 
         # Run MCTS simulations in lockstep
         for sim in range(max_visits):
@@ -517,7 +525,7 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
             if sims_done == 1 and has_vc1:
                 for i in range(n):
                     # probs(1.0) after 1 sim returns the prior policy
-                    probs_arr = np.array(mcts_list[i].probs(1.0))
+                    probs_arr = _get_policy(mcts_list[i])
                     pos_policies[i][1] = probs_arr
                     # Value from root after first simulation
                     pos_values[i][1] = float(mcts_list[i].root_value()[0])
@@ -526,7 +534,7 @@ def run_analysis(config, Game, network_path, visit_counts, use_playout=False, ca
             for vc in target_vcs:
                 if sims_done == vc:
                     for i in range(n):
-                        pos_policies[i][vc] = np.array(mcts_list[i].probs(1.0))
+                        pos_policies[i][vc] = _get_policy(mcts_list[i])
                         wld = np.array(mcts_list[i].root_value())
                         pos_values[i][vc] = float(wld[0])
 

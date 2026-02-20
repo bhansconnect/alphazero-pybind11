@@ -1068,7 +1068,18 @@ def main():
                 while True:
                     cmd = input(f"\nPlayer {current} (AI-assisted) move: ").strip()
                     if not cmd:
-                        continue
+                        # Play the AI-suggested move
+                        if pcfg.greedy:
+                            action = np.argmax(probs)
+                        else:
+                            action = np.random.choice(len(probs), p=probs)
+                        print(
+                            f"\n>>> Plays: {ui.format_move(ctx.game, action)}  [{probs[action]*100:.1f}%]"
+                        )
+                        advance_mcts_trees(ctx, action)
+                        history.append(ctx.game.copy())
+                        ctx.game.play_move(action)
+                        break
 
                     meta = parse_meta_command(cmd, ctx, game_name, args.base_dir)
                     if meta == "quit":
@@ -1112,7 +1123,7 @@ def main():
                         ctx.game.play_move(action)
                         break
                     print(
-                        "Invalid move. Type 'help' for commands, 'valid' for valid moves."
+                        "Invalid move. Enter=play AI move, 'help' for commands."
                     )
         else:
             # Human turn
@@ -1124,6 +1135,8 @@ def main():
                 probs, source, _, wld = get_ai_probs(ctx, current, valids)
                 print(f"\nHints [{source}]:")
                 ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
+            else:
+                ui.display_actions_menu(ctx.game, None, valids)
 
             while True:
                 cmd = input(f"\nPlayer {current} move: ").strip()

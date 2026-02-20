@@ -57,6 +57,7 @@ class PlayerConfig:
         self.temperature = DEFAULT_TEMPERATURE
         self.mcts = None
         self.show_hints = False
+        self.greedy = False
 
     def __str__(self):
         if not self.is_ai:
@@ -70,7 +71,8 @@ class PlayerConfig:
             net_str = "random"
         time_str = f"{self.think_time}s" if self.think_time else "none"
         node_str = str(self.node_limit) if self.node_limit else "none"
-        return f"AI(net={net_str}, nodes={node_str}, time={time_str}, temp={self.temperature})"
+        greedy_str = ", greedy" if self.greedy else ""
+        return f"AI(net={net_str}, nodes={node_str}, time={time_str}, temp={self.temperature}{greedy_str})"
 
 
 class PlayContext:
@@ -86,6 +88,7 @@ class PlayContext:
         self.fpu_reduction = DEFAULT_FPU_REDUCTION
         self.cache = create_cache(game_class, cache_size)
         self.tree_reuse = True
+        self.auto_delay = 0.0
 
 
 def create_mcts(game_class, cpuct=DEFAULT_CPUCT, fpu_reduction=DEFAULT_FPU_REDUCTION):
@@ -218,10 +221,13 @@ def get_ai_probs(ctx, player_idx, valids):
     return probs, source, sims, wld
 
 
-def get_ai_move(ctx, player_idx, valids):
+def get_ai_move(ctx, player_idx, valids, greedy=False):
     """Get AI move. Returns (action, probs, source, sims, wld)."""
     probs, source, sims, wld = get_ai_probs(ctx, player_idx, valids)
-    action = np.random.choice(len(probs), p=probs)
+    if greedy:
+        action = np.argmax(probs)
+    else:
+        action = np.random.choice(len(probs), p=probs)
     return action, probs, source, sims, wld
 
 
@@ -543,7 +549,8 @@ def print_status(ctx):
         print(f"  Player {i}: {ctx.players[i]}")
     reuse_str = "on" if ctx.tree_reuse else "off"
     cache_str = str(ctx.cache.max_size()) if ctx.cache is not None else "off"
-    print(f"  Tree reuse: {reuse_str}, Cache: {cache_str}")
+    delay_str = f", Delay: {ctx.auto_delay}s" if ctx.auto_delay > 0 else ""
+    print(f"  Tree reuse: {reuse_str}, Cache: {cache_str}{delay_str}")
 
 
 def handle_config_command(parts, ctx, game_name, base_dir):
@@ -609,6 +616,19 @@ def handle_config_command(parts, ctx, game_name, base_dir):
             for p in targets:
                 ctx.players[p].show_hints = val in ["on", "true", "1", "yes"]
             print_status(ctx)
+    elif cmd == "greedy":
+        if len(parts) >= (3 if player is not None else 2):
+            val = parts[-1]
+            for p in targets:
+                ctx.players[p].greedy = val in ["on", "true", "1", "yes"]
+            print_status(ctx)
+    elif cmd == "delay":
+        if len(parts) >= 2:
+            try:
+                ctx.auto_delay = float(parts[1])
+                print_status(ctx)
+            except ValueError:
+                print(f"Invalid delay: {parts[1]}")
 
     return "config"
 
@@ -642,7 +662,7 @@ def parse_meta_command(cmd, ctx, game_name="", base_dir="data"):
     if lower == "manual":
         return "manual"
     parts = lower.split()
-    if parts and parts[0] in ["net", "nodes", "time", "temp", "hints"]:
+    if parts and parts[0] in ["net", "nodes", "time", "temp", "hints", "greedy", "delay"]:
         return handle_config_command(parts, ctx, game_name, base_dir)
     return None
 
@@ -664,6 +684,8 @@ def print_generic_help():
     print("  time <0|1> <secs|off>    - Time limit")
     print("  temp <0|1> <value>       - Temperature")
     print("  hints <0|1> <on|off>     - AI hints for human player")
+    print("  greedy <0|1> <on|off>    - Always play best move")
+    print("  delay <seconds>          - Turn delay for auto-full mode")
 
 
 # ---------------------------------------------------------------------------
@@ -795,6 +817,18 @@ def prompt_ai_config(ctx, args):
             if think_time is not None:
                 p.node_limit = None
 
+    # Temperature
+    temp = _prompt_value("Temperature", DEFAULT_TEMPERATURE, float)
+    for p in ctx.players:
+        if p.is_ai:
+            p.temperature = temp
+
+    # Greedy
+    greedy = _prompt_bool("Greedy (always play best move)", False)
+    for p in ctx.players:
+        if p.is_ai:
+            p.greedy = greedy
+
     # Tree reuse
     ctx.tree_reuse = _prompt_bool("Tree reuse", ctx.tree_reuse)
 
@@ -864,6 +898,9 @@ def main():
         ctx.auto_play = True
         full = input("Fully automatic (no pauses)? [y]/n: ").strip().lower()
         ctx.auto_full = full not in ("n", "no")
+        if ctx.auto_full:
+            ctx.auto_delay = _prompt_value(
+                "Turn delay in seconds (0=no pause)", 0.0, float)
     else:  # Default: mode 2
         ctx.players[0].is_ai = False
         ctx.players[1].is_ai = True
@@ -918,24 +955,110 @@ def main():
 
         if pcfg.is_ai:
             if ctx.auto_play:
-                action, probs, source, sims, wld = get_ai_move(ctx, current, valids)
-                if action is None:
-                    print("No valid moves!")
-                    break
+                if ctx.auto_full:
+                    # Fully automatic: play with optional delay
+                    start = time.time()
+                    action, probs, source, sims, wld = get_ai_move(
+                        ctx, current, valids, greedy=pcfg.greedy)
+                    if action is None:
+                        print("No valid moves!")
+                        break
 
-                print(f"\nAI (P{current}) [{source}]")
-                ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
+                    print(f"\nAI (P{current}) [{source}]")
+                    ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
 
-                # Pause in AI vs AI to let user watch (unless fully auto)
-                if ctx.players[0].is_ai and ctx.players[1].is_ai and not ctx.auto_full:
-                    input("Press Enter to see move...")
+                    elapsed = time.time() - start
+                    if ctx.auto_delay > 0 and elapsed < ctx.auto_delay:
+                        time.sleep(ctx.auto_delay - elapsed)
 
-                print(
-                    f"\n>>> Plays: {ui.format_move(ctx.game, action)}  [{probs[action]*100:.1f}%]"
-                )
-                advance_mcts_trees(ctx, action)
-                history.append(ctx.game.copy())
-                ctx.game.play_move(action)
+                    print(
+                        f"\n>>> Plays: {ui.format_move(ctx.game, action)}  [{probs[action]*100:.1f}%]"
+                    )
+                    advance_mcts_trees(ctx, action)
+                    history.append(ctx.game.copy())
+                    ctx.game.play_move(action)
+                else:
+                    # Step mode: run MCTS, show probs, interactive prompt
+                    probs, source, sims, wld = get_ai_probs(ctx, current, valids)
+                    print(f"\nAI (P{current}) [{source}]")
+                    ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
+
+                    while True:
+                        cmd = input(f"\nAuto-step P{current} (Enter=play AI move): ").strip()
+                        if not cmd:
+                            # Sample and play the AI move
+                            if pcfg.greedy:
+                                action = np.argmax(probs)
+                            else:
+                                action = np.random.choice(len(probs), p=probs)
+                            print(
+                                f"\n>>> Plays: {ui.format_move(ctx.game, action)}  [{probs[action]*100:.1f}%]"
+                            )
+                            advance_mcts_trees(ctx, action)
+                            history.append(ctx.game.copy())
+                            ctx.game.play_move(action)
+                            break
+
+                        meta = parse_meta_command(cmd, ctx, game_name, args.base_dir)
+                        if meta == "quit":
+                            return
+                        if meta == "help":
+                            print_generic_help()
+                            ui.show_help(ctx.game)
+                            continue
+                        if meta == "undo":
+                            if history:
+                                ctx.game = history.pop()
+                                for p in ctx.players:
+                                    p.mcts = None
+                                print("Move undone")
+                                break
+                            print("No moves to undo")
+                            continue
+                        if meta == "status":
+                            print_status(ctx)
+                            continue
+                        if meta == "valid":
+                            descs = ui.get_valid_move_descriptions(ctx.game, valids)
+                            for aid, desc in descs:
+                                prob_str = f"  [{probs[aid]*100:5.1f}%]"
+                                print(f"  {aid:4d}: {desc}{prob_str}")
+                            continue
+                        if meta == "auto-full":
+                            ctx.auto_full = True
+                            print("Switched to full auto")
+                            # Play this move and continue
+                            if pcfg.greedy:
+                                action = np.argmax(probs)
+                            else:
+                                action = np.random.choice(len(probs), p=probs)
+                            print(
+                                f"\n>>> Plays: {ui.format_move(ctx.game, action)}  [{probs[action]*100:.1f}%]"
+                            )
+                            advance_mcts_trees(ctx, action)
+                            history.append(ctx.game.copy())
+                            ctx.game.play_move(action)
+                            break
+                        if meta == "auto-step":
+                            continue  # Already in step mode
+                        if meta == "manual":
+                            ctx.auto_play = False
+                            print("Auto-play disabled")
+                            break
+                        if meta == "config":
+                            continue
+
+                        # Try game-specific move parse
+                        action = ui.parse_move(ctx.game, cmd, valids)
+                        if action is not None:
+                            print(f"Playing: {ui.format_move(ctx.game, action)}")
+                            advance_mcts_trees(ctx, action)
+                            history.append(ctx.game.copy())
+                            ctx.game.play_move(action)
+                            break
+                        print(
+                            "Invalid command. Enter=play AI move, 'help' for commands."
+                        )
             else:
                 # Manual mode: show AI suggestions, human picks
                 probs, source, sims, wld = get_ai_probs(ctx, current, valids)

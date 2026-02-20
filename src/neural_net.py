@@ -219,7 +219,7 @@ class NNArch(nn.Module):
             # Star Gambit spatial policy head:
             # - Spatial actions: BOARD_DIM x BOARD_DIM x 10 action types per position
             # - Global actions: 18 deploy + 1 end_turn = 19
-            self.sg_board_dim = in_x  # 9 for Skirmish/Clash, 11 for Battle
+            self.sg_board_dim = in_x  # 11 for Skirmish/Clash, 13 for Battle
             self.sg_spatial_actions = in_x * in_y * 10
             self.sg_global_actions = 19  # deploy (18) + end_turn (1)
 

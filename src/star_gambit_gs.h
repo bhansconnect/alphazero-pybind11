@@ -129,11 +129,11 @@ struct Hex {
 
 template<int BoardSide>
 struct HexLookupTables {
-  static constexpr int NUM_HEXES = 3 * BoardSide * BoardSide - 3 * BoardSide + 1;
-  static constexpr int COORD_RANGE = 2 * BoardSide - 1;
+  static constexpr int NUM_HEXES = 3 * BoardSide * BoardSide + 3 * BoardSide + 1;
+  static constexpr int COORD_RANGE = 2 * BoardSide + 1;
 
   std::array<Hex, NUM_HEXES> index_to_hex;
-  // 2D array indexed by (q + BoardSide-1, r + BoardSide-1) to handle negative coords
+  // 2D array indexed by (q + BoardSide, r + BoardSide) to handle negative coords
   // Invalid entries are set to -1
   std::array<std::array<int, COORD_RANGE>, COORD_RANGE> hex_to_index;
 
@@ -145,13 +145,13 @@ struct HexLookupTables {
 
     // Build tables using same iteration order as original functions
     int idx = 0;
-    for (int r = -(BoardSide - 1); r < BoardSide; ++r) {
-      for (int q = -(BoardSide - 1); q < BoardSide; ++q) {
+    for (int r = -BoardSide; r <= BoardSide; ++r) {
+      for (int q = -BoardSide; q <= BoardSide; ++q) {
         int s = -q - r;
-        if (std::abs(q) < BoardSide && std::abs(r) < BoardSide &&
-            std::abs(s) < BoardSide) {
+        if (std::abs(q) <= BoardSide && std::abs(r) <= BoardSide &&
+            std::abs(s) <= BoardSide) {
           index_to_hex[idx] = {static_cast<int8_t>(q), static_cast<int8_t>(r)};
-          hex_to_index[q + BoardSide - 1][r + BoardSide - 1] = idx;
+          hex_to_index[q + BoardSide][r + BoardSide] = idx;
           ++idx;
         }
       }
@@ -167,9 +167,9 @@ inline const HexLookupTables<6> HEX_TABLES_6{};
 template<int BoardSide>
 inline int hex_to_index_fast(const Hex& h) {
   if constexpr (BoardSide == 5) {
-    return HEX_TABLES_5.hex_to_index[h.q + BoardSide - 1][h.r + BoardSide - 1];
+    return HEX_TABLES_5.hex_to_index[h.q + BoardSide][h.r + BoardSide];
   } else {
-    return HEX_TABLES_6.hex_to_index[h.q + BoardSide - 1][h.r + BoardSide - 1];
+    return HEX_TABLES_6.hex_to_index[h.q + BoardSide][h.r + BoardSide];
   }
 }
 
@@ -211,20 +211,20 @@ inline int rotate_direction(int dir, int steps) {
 // Convert hex (q, r) to 2D array position (row, col) for observation tensor
 template<int BoardSide>
 inline std::pair<int, int> hex_to_2d(const Hex& h) {
-  return {h.q + BoardSide - 1, h.r + BoardSide - 1};
+  return {h.q + BoardSide, h.r + BoardSide};
 }
 
 // Check if a 2D position is valid (corresponds to a valid hex)
 template<int BoardSide>
 inline bool is_valid_2d_pos(int row, int col) {
-  if (row < 0 || row >= 2 * BoardSide - 1 || col < 0 || col >= 2 * BoardSide - 1) {
+  if (row < 0 || row >= 2 * BoardSide + 1 || col < 0 || col >= 2 * BoardSide + 1) {
     return false;
   }
   // Convert back to hex and check if valid
-  int q = row - (BoardSide - 1);
-  int r = col - (BoardSide - 1);
+  int q = row - BoardSide;
+  int r = col - BoardSide;
   int s = -q - r;
-  return std::abs(q) < BoardSide && std::abs(r) < BoardSide && std::abs(s) < BoardSide;
+  return std::abs(q) <= BoardSide && std::abs(r) <= BoardSide && std::abs(s) <= BoardSide;
 }
 
 // ============================================================================
@@ -419,11 +419,11 @@ constexpr int DEPLOY_MIRROR_D[6] = {3, 2, 1, 0, 5, 4};
 template<typename Config>
 struct ActionSpace {
   // Board dimensions for 2D spatial representation
-  static constexpr int BOARD_DIM = 2 * Config::BOARD_SIDE - 1;
+  static constexpr int BOARD_DIM = 2 * Config::BOARD_SIDE + 1;
 
   // Hex count for this board size (for reference)
   static constexpr int NUM_HEXES = 3 * Config::BOARD_SIDE * Config::BOARD_SIDE
-                                   - 3 * Config::BOARD_SIDE + 1;
+                                   + 3 * Config::BOARD_SIDE + 1;
 
   // Spatial actions: full BOARD_DIM x BOARD_DIM x 10 grid
   // Invalid positions (non-hex cells) are simply never marked valid
@@ -458,12 +458,12 @@ struct ActionSpace {
 
   // Helper: check if (row, col) corresponds to a valid hex position
   static bool is_valid_hex_pos(int row, int col) {
-    int q = row - (Config::BOARD_SIDE - 1);
-    int r = col - (Config::BOARD_SIDE - 1);
+    int q = row - Config::BOARD_SIDE;
+    int r = col - Config::BOARD_SIDE;
     int s = -q - r;
-    return std::abs(q) < Config::BOARD_SIDE &&
-           std::abs(r) < Config::BOARD_SIDE &&
-           std::abs(s) < Config::BOARD_SIDE;
+    return std::abs(q) <= Config::BOARD_SIDE &&
+           std::abs(r) <= Config::BOARD_SIDE &&
+           std::abs(s) <= Config::BOARD_SIDE;
   }
 
   // Helper: encode deploy action

@@ -1061,6 +1061,85 @@ def _has_display():
     return matplotlib.get_backend().lower() != 'agg'
 
 
+# Metrics that are binary or discrete rates — bar charts with Wilson CI instead of boxplots
+_rate_metrics = {"top1", "top3", "top9",
+                 "pio_top1_flip", "pio_value_sign_flip", "pio_correction_quality"}
+
+
+def _wilson_ci(k, n, z=1.96):
+    """Wilson score interval for a proportion. Returns (lower, upper)."""
+    if n == 0:
+        return 0.0, 0.0
+    p = k / n
+    denom = 1 + z**2 / n
+    centre = (p + z**2 / (2 * n)) / denom
+    margin = z * math.sqrt((p * (1 - p) + z**2 / (4 * n)) / n) / denom
+    return max(0.0, centre - margin), min(1.0, centre + margin)
+
+
+def _plot_metric_panel(ax, metric_name, title, base_color, sorted_entries, means, all_data):
+    """Plot a single metric panel as either a bar+CI chart (rate metrics) or boxplot.
+
+    Rate/binary metrics get bar charts with Wilson 95% CI error bars.
+    Continuous metrics keep the existing boxplot + mean overlay.
+    """
+    labels = [entry_label(e) for e in sorted_entries]
+
+    if metric_name in _rate_metrics and all_data:
+        # Bar chart with Wilson CI
+        positions = range(len(sorted_entries))
+        bar_means = []
+        ci_lo = []
+        ci_hi = []
+        bar_colors = []
+        for entry in sorted_entries:
+            arr = all_data[entry]
+            n = len(arr)
+            k = float(np.sum(arr))
+            p = k / n if n > 0 else 0.0
+            lo, hi = _wilson_ci(k, n)
+            bar_means.append(p)
+            ci_lo.append(max(0.0, p - lo))
+            ci_hi.append(max(0.0, hi - p))
+            bar_colors.append("lightyellow" if entry[1] == "selfplay" else base_color)
+
+        bars = ax.bar(positions, bar_means, color=bar_colors, edgecolor="gray",
+                       linewidth=0.8, zorder=2)
+        ax.errorbar(positions, bar_means, yerr=[ci_lo, ci_hi],
+                     fmt="none", ecolor="black", capsize=4, linewidth=1.5, zorder=3)
+        # Annotate mean values
+        for i, m in enumerate(bar_means):
+            ax.annotate(f"{m:.2f}", (i, m), textcoords="offset points",
+                        xytext=(0, 8), ha="center", fontsize=8)
+        ax.set_xticks(positions)
+        ax.set_xticklabels(labels)
+        ax.set_ylim(0, min(1.05, max(bar_means) + 0.15) if bar_means else 1.05)
+    elif all_data:
+        # Boxplot with mean overlay (existing logic)
+        bp_data = [all_data[e] for e in sorted_entries]
+        bp = ax.boxplot(bp_data, tick_labels=labels,
+                        showfliers=False, patch_artist=True)
+        for i, entry in enumerate(sorted_entries):
+            if entry[1] == "selfplay":
+                bp["boxes"][i].set_facecolor("lightyellow" if base_color != "lightyellow" else "lightblue")
+            else:
+                bp["boxes"][i].set_facecolor(base_color)
+        ax.plot(range(1, len(sorted_entries) + 1), [means[e] for e in sorted_entries],
+                "D-", markersize=6, linewidth=2, color="tab:blue",
+                zorder=3, label="mean")
+        ax.legend(fontsize=8)
+    else:
+        ax.plot(range(1, len(sorted_entries) + 1), [means[e] for e in sorted_entries],
+                "o-", markersize=8, linewidth=2)
+        ax.set_xticks(range(1, len(sorted_entries) + 1))
+        ax.set_xticklabels(labels)
+
+    ax.set_xlabel("MCTS Visit Count")
+    ax.set_ylabel(title)
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+
+
 def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None):
     """Generate plots and save raw data."""
     if not _has_display():
@@ -1139,33 +1218,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
                 continue
 
             sorted_entries = sorted(means.keys(), key=entry_sort_key)
-            labels = [entry_label(e) for e in sorted_entries]
-
-            # Box plot with mean overlay
-            if all_data:
-                bp_data = [all_data[e] for e in sorted_entries]
-                bp = ax.boxplot(bp_data, tick_labels=labels,
-                                showfliers=False, patch_artist=True)
-                for i, entry in enumerate(sorted_entries):
-                    if entry[1] == "selfplay":
-                        bp["boxes"][i].set_facecolor("lightyellow" if base_color != "lightyellow" else "lightblue")
-                    else:
-                        bp["boxes"][i].set_facecolor(base_color)
-                # Overlay mean line
-                ax.plot(range(1, len(sorted_entries) + 1), [means[e] for e in sorted_entries],
-                        "D-", markersize=6, linewidth=2, color="tab:blue",
-                        zorder=3, label="mean")
-                ax.legend(fontsize=8)
-            else:
-                ax.plot(range(1, len(sorted_entries) + 1), [means[e] for e in sorted_entries],
-                        "o-", markersize=8, linewidth=2)
-                ax.set_xticks(range(1, len(sorted_entries) + 1))
-                ax.set_xticklabels(labels)
-
-            ax.set_xlabel("MCTS Visit Count")
-            ax.set_ylabel(title)
-            ax.set_title(title)
-            ax.grid(True, alpha=0.3)
+            _plot_metric_panel(ax, name, title, base_color, sorted_entries, means, all_data)
 
         fig.tight_layout()
         path = os.path.join(save_dir, "policy_metrics.png")
@@ -1320,26 +1373,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
                 continue
 
             sorted_entries = sorted(means.keys(), key=entry_sort_key)
-            labels = [entry_label(e) for e in sorted_entries]
-
-            if all_data:
-                bp_data = [all_data[e] for e in sorted_entries]
-                bp = ax.boxplot(bp_data, tick_labels=labels,
-                                showfliers=False, patch_artist=True)
-                for i, entry in enumerate(sorted_entries):
-                    if entry[1] == "selfplay":
-                        bp["boxes"][i].set_facecolor("lightyellow" if base_color != "lightyellow" else "lightblue")
-                    else:
-                        bp["boxes"][i].set_facecolor(base_color)
-                ax.plot(range(1, len(sorted_entries) + 1), [means[e] for e in sorted_entries],
-                        "D-", markersize=6, linewidth=2, color="tab:blue",
-                        zorder=3, label="mean")
-                ax.legend(fontsize=8)
-
-            ax.set_xlabel("MCTS Visit Count")
-            ax.set_ylabel(title)
-            ax.set_title(title)
-            ax.grid(True, alpha=0.3)
+            _plot_metric_panel(ax, name, title, base_color, sorted_entries, means, all_data)
 
         fig.suptitle("PIO Gap Analysis (MCTS vs Raw Network)", fontsize=14, y=1.02)
         fig.tight_layout()

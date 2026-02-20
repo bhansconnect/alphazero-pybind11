@@ -106,6 +106,18 @@ def top_k_agreement(p, q, k):
     return len(top_p & top_q) / k
 
 
+def kl_divergence(p, q, epsilon=1e-10):
+    """KL(p || q). Skip terms where p=0. Epsilon-smooth q to avoid log(0)."""
+    mask = p > 0
+    return float(np.sum(p[mask] * np.log(p[mask] / (q[mask] + epsilon))))
+
+
+def policy_entropy(p, epsilon=1e-10):
+    """Shannon entropy H(p) = -sum(p * log(p)). Skip zeros."""
+    mask = p > 0
+    return float(-np.sum(p[mask] * np.log(p[mask])))
+
+
 # --- Game discovery ---
 
 def get_available_games():
@@ -504,6 +516,12 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     has_vc1_base = (1, "base") in entries
     has_vc1_selfplay = (1, "selfplay") in entries
 
+    # PIO: always capture vc=1 for gap analysis
+    _pio_inject_base = not has_vc1_base  # Always needed as PIO baseline
+    _pio_inject_selfplay = not has_vc1_selfplay and has_selfplay
+    has_vc1_base = has_vc1_base or _pio_inject_base
+    has_vc1_selfplay = has_vc1_selfplay or _pio_inject_selfplay
+
     base_vcs = sorted(set(e[0] for e in base_entries))
     selfplay_vcs = sorted(set(e[0] for e in selfplay_entries))
 
@@ -752,6 +770,17 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     # Expected reward: V(pi_entry) = sum(pi_entry * Q_base_ref)
     expected_reward = {e: [] for e in entries}
 
+    # PIO gap accumulators (only for entries with vc > 1)
+    pio_entries = [e for e in entries if e[0] > 1]
+    pio_kl = {e: [] for e in pio_entries}
+    pio_top1_flip = {e: [] for e in pio_entries}
+    pio_entropy_raw = {e: [] for e in pio_entries}
+    pio_entropy_mcts = {e: [] for e in pio_entries}
+    pio_entropy_reduction = {e: [] for e in pio_entries}
+    pio_value_correction = {e: [] for e in pio_entries}
+    pio_value_sign_flip = {e: [] for e in pio_entries}
+    pio_correction_quality = {e: [] for e in pio_entries}
+
     for gid in range(ANALYSIS_GAMES):
         scores = game_scores[gid]
         for current_player, values_at_pos, policies_at_pos, q_values in game_positions[gid]:
@@ -789,6 +818,41 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
                 if entry in policies_at_pos:
                     v_pi = float(np.sum(policies_at_pos[entry] * q_values))
                     expected_reward[entry].append(v_pi)
+
+            # PIO gap metrics: compare each entry (vc > 1) against vc=1 baseline
+            for entry in pio_entries:
+                baseline_entry = (1, "base")
+                if entry not in policies_at_pos or baseline_entry not in policies_at_pos:
+                    continue
+                pi_mcts = policies_at_pos[entry]
+                pi_raw = policies_at_pos[baseline_entry]
+
+                # KL(pi_mcts || pi_raw)
+                pio_kl[entry].append(kl_divergence(pi_mcts, pi_raw))
+
+                # Top-1 flip
+                move_mcts = int(np.argmax(pi_mcts))
+                move_raw = int(np.argmax(pi_raw))
+                flipped = move_mcts != move_raw
+                pio_top1_flip[entry].append(float(flipped))
+
+                # Entropy
+                h_raw = policy_entropy(pi_raw)
+                h_mcts = policy_entropy(pi_mcts)
+                pio_entropy_raw[entry].append(h_raw)
+                pio_entropy_mcts[entry].append(h_mcts)
+                pio_entropy_reduction[entry].append(h_raw - h_mcts)
+
+                # Value correction
+                if entry in values_at_pos and baseline_entry in values_at_pos:
+                    v_mcts = values_at_pos[entry]
+                    v_raw = values_at_pos[baseline_entry]
+                    pio_value_correction[entry].append(abs(v_mcts - v_raw))
+                    pio_value_sign_flip[entry].append(float((v_raw - 0.5) * (v_mcts - 0.5) < 0))
+
+                # Correction quality: when top-1 flips, is Q[move_mcts] > Q[move_raw]?
+                if flipped:
+                    pio_correction_quality[entry].append(float(q_values[move_mcts] > q_values[move_raw]))
 
     position_outcomes = np.array(position_outcomes)
     position_max_values = np.array(position_max_values)
@@ -882,6 +946,51 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     metrics["regret_means"] = regret_means
     metrics["regret_all"] = regret_all
 
+    # PIO gap metrics aggregation
+    pio_metric_names = ["pio_kl", "pio_top1_flip", "pio_entropy_raw", "pio_entropy_mcts",
+                        "pio_entropy_reduction", "pio_value_correction",
+                        "pio_value_sign_flip", "pio_correction_quality"]
+    pio_metric_data = {
+        "pio_kl": pio_kl, "pio_top1_flip": pio_top1_flip,
+        "pio_entropy_raw": pio_entropy_raw, "pio_entropy_mcts": pio_entropy_mcts,
+        "pio_entropy_reduction": pio_entropy_reduction,
+        "pio_value_correction": pio_value_correction,
+        "pio_value_sign_flip": pio_value_sign_flip,
+        "pio_correction_quality": pio_correction_quality,
+    }
+    for name in pio_metric_names:
+        means = {}
+        all_vals = {}
+        for entry in pio_entries:
+            data = pio_metric_data[name]
+            if entry in data and len(data[entry]) > 0:
+                arr = np.array(data[entry])
+                means[entry] = float(np.mean(arr))
+                all_vals[entry] = arr
+        metrics[f"{name}_means"] = means
+        metrics[f"{name}_all"] = all_vals
+
+    # Marginal KL: KL(pi_N2 || pi_N1) for consecutive visit-count pairs within each mode
+    pio_marginal_kl = {}
+    for mode in ("base", "selfplay"):
+        mode_entries = sorted([e for e in entries if e[1] == mode], key=entry_sort_key)
+        if not mode_entries:
+            continue
+        # Always use base vc=1 as chain start (universal PIO baseline)
+        if mode_entries[0][0] > 1 and (1, "base") not in set(mode_entries):
+            mode_entries = [(1, "base")] + mode_entries
+        for i in range(1, len(mode_entries)):
+            e_prev, e_curr = mode_entries[i-1], mode_entries[i]
+            vals = []
+            for gid in range(ANALYSIS_GAMES):
+                for _, _, policies_at_pos, _ in game_positions[gid]:
+                    if e_prev in policies_at_pos and e_curr in policies_at_pos:
+                        vals.append(kl_divergence(policies_at_pos[e_curr], policies_at_pos[e_prev]))
+            if vals:
+                pio_marginal_kl[e_curr] = np.array(vals)
+    metrics["pio_marginal_kl_means"] = {e: float(np.mean(v)) for e, v in pio_marginal_kl.items()}
+    metrics["pio_marginal_kl_all"] = pio_marginal_kl
+
     # Print summary
     print(f"\n--- Policy Analysis (divergence from {entry_label(anchor)}) ---")
     print(f"{'Visits':>8s} {'JSD':>10s} {'TV':>10s} {'Hellinger':>10s} {'Top-1':>10s} {'Top-3':>10s} {'Top-9':>10s}")
@@ -917,6 +1026,24 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
         print(f"{'Visits':>8s} {'Regret':>10s}")
         for entry in sorted(regret_means.keys(), key=entry_sort_key):
             print(f"{entry_label(entry):>8s} {regret_means[entry]:>10.4f}")
+
+    # PIO gap summary
+    pio_kl_means = metrics.get("pio_kl_means", {})
+    if pio_kl_means:
+        print(f"\n--- PIO Gap Analysis (vs raw network, vc=1 base) ---")
+        print(f"{'Visits':>8s} {'KL':>10s} {'Top1Flip':>10s} {'EntReduc':>10s} {'ValCorr':>10s} {'ValFlip':>10s} {'CorrQual':>10s}")
+        for entry in sorted(pio_kl_means.keys(), key=entry_sort_key):
+            def _fmt(name):
+                v = metrics.get(f"{name}_means", {}).get(entry)
+                return f"{v:>10.4f}" if v is not None else f"{'N/A':>10s}"
+            print(f"{entry_label(entry):>8s} {_fmt('pio_kl')}{_fmt('pio_top1_flip')}{_fmt('pio_entropy_reduction')}{_fmt('pio_value_correction')}{_fmt('pio_value_sign_flip')}{_fmt('pio_correction_quality')}")
+
+    marginal_kl_means = metrics.get("pio_marginal_kl_means", {})
+    if marginal_kl_means:
+        print(f"\n--- Marginal KL (KL between consecutive visit counts) ---")
+        print(f"{'Visits':>8s} {'MargKL':>10s}")
+        for entry in sorted(marginal_kl_means.keys(), key=entry_sort_key):
+            print(f"{entry_label(entry):>8s} {marginal_kl_means[entry]:>10.4f}")
 
     print_cache_stats(cache)
     del agent
@@ -1170,6 +1297,108 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         fig.savefig(path, dpi=150)
         print(f"Saved: {path}")
 
+    # Figure 5: PIO Gap Summary (2x3 grid)
+    has_pio = metrics and metrics.get("pio_kl_means")
+    if has_pio:
+        pio_panel_info = [
+            ("pio_kl", "KL(pi_mcts || pi_raw)", "lightblue"),
+            ("pio_top1_flip", "Top-1 Flip Rate", "lightgreen"),
+            ("pio_entropy_reduction", "Entropy Reduction", "lightyellow"),
+            ("pio_value_correction", "|V_mcts - V_raw|", "lightsalmon"),
+            ("pio_value_sign_flip", "Value Sign Flip Rate", "plum"),
+            ("pio_correction_quality", "Correction Quality", "lightskyblue"),
+        ]
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+        axes = axes.flatten()
+
+        for idx, (name, title, base_color) in enumerate(pio_panel_info):
+            ax = axes[idx]
+            means = metrics.get(f"{name}_means", {})
+            all_data = metrics.get(f"{name}_all", {})
+            if not means:
+                ax.set_visible(False)
+                continue
+
+            sorted_entries = sorted(means.keys(), key=entry_sort_key)
+            labels = [entry_label(e) for e in sorted_entries]
+
+            if all_data:
+                bp_data = [all_data[e] for e in sorted_entries]
+                bp = ax.boxplot(bp_data, tick_labels=labels,
+                                showfliers=False, patch_artist=True)
+                for i, entry in enumerate(sorted_entries):
+                    if entry[1] == "selfplay":
+                        bp["boxes"][i].set_facecolor("lightyellow" if base_color != "lightyellow" else "lightblue")
+                    else:
+                        bp["boxes"][i].set_facecolor(base_color)
+                ax.plot(range(1, len(sorted_entries) + 1), [means[e] for e in sorted_entries],
+                        "D-", markersize=6, linewidth=2, color="tab:blue",
+                        zorder=3, label="mean")
+                ax.legend(fontsize=8)
+
+            ax.set_xlabel("MCTS Visit Count")
+            ax.set_ylabel(title)
+            ax.set_title(title)
+            ax.grid(True, alpha=0.3)
+
+        fig.suptitle("PIO Gap Analysis (MCTS vs Raw Network)", fontsize=14, y=1.02)
+        fig.tight_layout()
+        path = os.path.join(save_dir, "pio_gap_summary.png")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        print(f"Saved: {path}")
+
+    # Figure 6: Marginal Returns
+    has_marginal = metrics and metrics.get("pio_marginal_kl_means")
+    has_reward = metrics and metrics.get("reward_means")
+    if has_marginal or has_reward:
+        n_panels = (1 if has_marginal else 0) + (1 if has_reward else 0)
+        fig, axes = plt.subplots(1, n_panels, figsize=(6 * n_panels, 5))
+        if n_panels == 1:
+            axes = [axes]
+        panel = 0
+
+        if has_marginal:
+            marginal_means = metrics["pio_marginal_kl_means"]
+            marginal_es = sorted(marginal_means.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[panel], marginal_es, [marginal_means[e] for e in marginal_es])
+            marginal_vcs = sorted(set(e[0] for e in marginal_es))
+            axes[panel].set_xscale("log")
+            axes[panel].set_xlabel("MCTS Visit Count")
+            axes[panel].set_ylabel("Marginal KL")
+            axes[panel].set_title("Marginal KL Between Consecutive Visit Counts")
+            axes[panel].set_xticks(marginal_vcs)
+            axes[panel].set_xticklabels([str(v) for v in marginal_vcs])
+            axes[panel].grid(True, alpha=0.3)
+            panel += 1
+
+        if has_reward:
+            reward_means = metrics["reward_means"]
+            reward_es = sorted(reward_means.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[panel], reward_es, [reward_means[e] for e in reward_es])
+
+            # Horizontal dashed lines for vc=1 baselines
+            for mode, color in [("base", "tab:blue"), ("selfplay", "tab:orange")]:
+                baseline = (1, mode)
+                if baseline in reward_means:
+                    axes[panel].axhline(y=reward_means[baseline], color=color,
+                                        linestyle="--", alpha=0.5,
+                                        label=f"vc=1 {mode}")
+            axes[panel].legend(fontsize=8)
+
+            reward_vcs = sorted(set(e[0] for e in reward_es))
+            axes[panel].set_xscale("log")
+            axes[panel].set_xlabel("MCTS Visit Count")
+            axes[panel].set_ylabel("Expected Reward V(pi)")
+            axes[panel].set_title("Expected Reward vs Visit Count")
+            axes[panel].set_xticks(reward_vcs)
+            axes[panel].set_xticklabels([str(v) for v in reward_vcs])
+            axes[panel].grid(True, alpha=0.3)
+
+        fig.tight_layout()
+        path = os.path.join(save_dir, "pio_marginal_returns.png")
+        fig.savefig(path, dpi=150)
+        print(f"Saved: {path}")
+
     # Save raw data
     save_data = {
         "visit_counts": np.array(tournament_vcs),
@@ -1207,6 +1436,24 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
             if prefix in metrics:
                 for entry, arr in metrics[prefix].items():
                     save_data[f"{prefix}_{entry_label(entry)}"] = arr
+        # PIO gap metrics
+        pio_prefixes = ["pio_kl", "pio_top1_flip", "pio_entropy_raw", "pio_entropy_mcts",
+                        "pio_entropy_reduction", "pio_value_correction",
+                        "pio_value_sign_flip", "pio_correction_quality"]
+        for prefix in pio_prefixes:
+            if f"{prefix}_means" in metrics:
+                for entry, val in metrics[f"{prefix}_means"].items():
+                    save_data[f"{prefix}_mean_{entry_label(entry)}"] = np.array(val)
+            if f"{prefix}_all" in metrics:
+                for entry, arr in metrics[f"{prefix}_all"].items():
+                    save_data[f"{prefix}_all_{entry_label(entry)}"] = arr
+        # Marginal KL
+        if "pio_marginal_kl_means" in metrics:
+            for entry, val in metrics["pio_marginal_kl_means"].items():
+                save_data[f"pio_marginal_kl_mean_{entry_label(entry)}"] = np.array(val)
+        if "pio_marginal_kl_all" in metrics:
+            for entry, arr in metrics["pio_marginal_kl_all"].items():
+                save_data[f"pio_marginal_kl_all_{entry_label(entry)}"] = arr
 
     npz_path = os.path.join(save_dir, "threshold_data.npz")
     np.savez(npz_path, **save_data)

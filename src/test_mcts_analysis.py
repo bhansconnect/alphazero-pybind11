@@ -1,4 +1,4 @@
-"""Tests for mcts_analysis.py -- statistical functions, calc_temp, imports."""
+"""Tests for mcts_analysis.py -- statistical functions, calc_temp, imports, PIO gap."""
 
 import math
 import os
@@ -15,6 +15,8 @@ from mcts_analysis import (
     total_variation,
     hellinger_distance,
     top_k_agreement,
+    kl_divergence,
+    policy_entropy,
     calc_temp,
     calc_temp_selfplay,
     get_available_games,
@@ -249,3 +251,159 @@ def test_anchor_base_is_reference(monkeypatch):
     sp_entry = (10, "selfplay")
     assert sp_entry in jsd_means
     assert jsd_means[sp_entry] > 0.0
+
+
+# --- kl_divergence tests ---
+
+
+def test_kl_divergence_identical():
+    """KL divergence of identical distributions is ~0 (epsilon smoothing causes tiny offset)."""
+    p = np.array([0.5, 0.3, 0.2])
+    assert kl_divergence(p, p) == pytest.approx(0.0, abs=1e-8)
+
+
+def test_kl_divergence_nonnegative():
+    """KL divergence is always >= 0."""
+    p = np.array([0.7, 0.2, 0.1])
+    q = np.array([0.3, 0.4, 0.3])
+    assert kl_divergence(p, q) >= 0.0
+
+
+def test_kl_divergence_asymmetric():
+    """KL(p||q) != KL(q||p) in general."""
+    p = np.array([0.8, 0.15, 0.05])
+    q = np.array([0.2, 0.3, 0.5])
+    assert kl_divergence(p, q) != pytest.approx(kl_divergence(q, p), abs=1e-4)
+
+
+def test_kl_divergence_zeros_in_p():
+    """Zeros in p are skipped (0 * log(0/q) = 0 by convention)."""
+    p = np.array([0.0, 1.0])
+    q = np.array([0.5, 0.5])
+    result = kl_divergence(p, q)
+    # KL = 1.0 * log(1.0/0.5) = log(2)
+    assert result == pytest.approx(math.log(2), abs=1e-6)
+
+
+# --- policy_entropy tests ---
+
+
+def test_policy_entropy_uniform():
+    """Entropy of uniform distribution = log(n)."""
+    n = 5
+    p = np.full(n, 1.0 / n)
+    assert policy_entropy(p) == pytest.approx(math.log(n), abs=1e-6)
+
+
+def test_policy_entropy_deterministic():
+    """Entropy of deterministic distribution is 0."""
+    p = np.array([0.0, 0.0, 1.0, 0.0])
+    assert policy_entropy(p) == pytest.approx(0.0, abs=1e-10)
+
+
+def test_policy_entropy_nonnegative():
+    """Entropy is always >= 0."""
+    p = np.array([0.6, 0.3, 0.1])
+    assert policy_entropy(p) >= 0.0
+
+
+# --- PIO integration tests ---
+
+
+def test_pio_metrics_present(monkeypatch):
+    """All PIO metric keys exist in returned metrics dict with correct types."""
+    import mcts_analysis
+    monkeypatch.setattr(mcts_analysis, "ANALYSIS_GAMES", 4)
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [(1, "base"), (10, "base"), (25, "base")]
+    anchor = (25, "base")
+
+    metrics = mcts_analysis.run_analysis(
+        config, Game, network_path=None, entries=entries, anchor=anchor,
+        use_playout=False, cache_size=0, tree_reuse=False,
+    )
+
+    pio_metric_names = ["pio_kl", "pio_top1_flip", "pio_entropy_raw", "pio_entropy_mcts",
+                        "pio_entropy_reduction", "pio_value_correction",
+                        "pio_value_sign_flip", "pio_correction_quality"]
+
+    for name in pio_metric_names:
+        assert f"{name}_means" in metrics, f"missing {name}_means"
+        assert f"{name}_all" in metrics, f"missing {name}_all"
+        means = metrics[f"{name}_means"]
+        all_vals = metrics[f"{name}_all"]
+        assert isinstance(means, dict)
+        assert isinstance(all_vals, dict)
+        # vc=1 should NOT be in PIO metrics (it IS the baseline)
+        assert (1, "base") not in means
+        # vc=10 and vc=25 should be present
+        for entry in [(10, "base"), (25, "base")]:
+            assert entry in means, f"{entry} missing from {name}_means"
+            assert isinstance(means[entry], float)
+            assert entry in all_vals
+            assert isinstance(all_vals[entry], np.ndarray)
+
+    # KL should be >= 0
+    for entry in [(10, "base"), (25, "base")]:
+        assert metrics["pio_kl_means"][entry] >= 0.0
+
+    # Top-1 flip rate should be in [0, 1]
+    for entry in [(10, "base"), (25, "base")]:
+        assert 0.0 <= metrics["pio_top1_flip_means"][entry] <= 1.0
+
+    # Marginal KL should exist
+    assert "pio_marginal_kl_means" in metrics
+    assert "pio_marginal_kl_all" in metrics
+
+
+def test_pio_vc1_injected_when_absent(monkeypatch):
+    """When entries don't include vc=1, PIO metrics still work, and entries is NOT modified."""
+    import mcts_analysis
+    monkeypatch.setattr(mcts_analysis, "ANALYSIS_GAMES", 4)
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [(10, "base"), (25, "base")]
+    anchor = (25, "base")
+
+    metrics = mcts_analysis.run_analysis(
+        config, Game, network_path=None, entries=entries, anchor=anchor,
+        use_playout=False, cache_size=0, tree_reuse=False,
+    )
+
+    # entries in metrics should NOT include vc=1 (not modified)
+    assert (1, "base") not in metrics["entries"]
+    assert metrics["entries"] == entries
+
+    # PIO metrics should still be computed for vc=10, vc=25
+    assert (10, "base") in metrics["pio_kl_means"]
+    assert (25, "base") in metrics["pio_kl_means"]
+
+
+def test_pio_vc1_not_duplicated_when_present(monkeypatch):
+    """When entries include vc=1, PIO data point count matches total positions (no double-counting)."""
+    import mcts_analysis
+    monkeypatch.setattr(mcts_analysis, "ANALYSIS_GAMES", 4)
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [(1, "base"), (10, "base"), (25, "base")]
+    anchor = (25, "base")
+
+    metrics = mcts_analysis.run_analysis(
+        config, Game, network_path=None, entries=entries, anchor=anchor,
+        use_playout=False, cache_size=0, tree_reuse=False,
+    )
+
+    total_positions = metrics["total_positions"]
+    # PIO data points for vc=10 should equal total positions (one per position)
+    n_pio = len(metrics["pio_kl_all"][(10, "base")])
+    assert n_pio == total_positions
+    # Same for vc=25
+    n_pio_25 = len(metrics["pio_kl_all"][(25, "base")])
+    assert n_pio_25 == total_positions

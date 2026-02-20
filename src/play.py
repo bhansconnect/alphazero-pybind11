@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import alphazero
 from cache_utils import create_cache, cached_inference, print_cache_stats
 from config import GAME_REGISTRY
+from action_selector import ActionSelector
 from game_ui import get_game_ui
 
 try:
@@ -981,8 +982,61 @@ def main():
                     # Step mode: run MCTS, show probs, interactive prompt
                     probs, source, sims, wld = get_ai_probs(ctx, current, valids)
                     print(f"\nAI (P{current}) [{source}]")
-                    ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
 
+                    # Pre-select AI's chosen move (respects greedy/temperature)
+                    if pcfg.greedy:
+                        ai_best = int(np.argmax(probs))
+                    else:
+                        ai_best = int(np.random.choice(len(probs), p=probs))
+                    entries = ui.build_action_menu(ctx.game, probs, valids, wld=wld)
+                    use_text = False
+                    try:
+                        selector = ActionSelector(entries, preselect=ai_best)
+                        result = selector.run()
+                    except (ValueError, OSError):
+                        use_text = True
+                        result = None
+                        ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
+
+                    if result is None and not use_text:
+                        use_text = True
+                        ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
+
+                    if not use_text:
+                        if isinstance(result, int):
+                            print(
+                                f"\n>>> Plays: {ui.format_move(ctx.game, result)}  [{probs[result]*100:.1f}%]"
+                            )
+                            advance_mcts_trees(ctx, result)
+                            history.append(ctx.game.copy())
+                            ctx.game.play_move(result)
+                            continue
+                        if result == 'quit':
+                            return
+                        if result == 'undo':
+                            if history:
+                                ctx.game = history.pop()
+                                for p in ctx.players:
+                                    p.mcts = None
+                                print("Move undone")
+                            else:
+                                print("No moves to undo")
+                            continue
+                        if result == 'help':
+                            print_generic_help()
+                            ui.show_help(ctx.game)
+                            continue
+                        if result == 'status':
+                            print_status(ctx)
+                            continue
+                        if result == 'valid':
+                            descs = ui.get_valid_move_descriptions(ctx.game, valids)
+                            for aid, desc in descs:
+                                prob_str = f"  [{probs[aid]*100:5.1f}%]"
+                                print(f"  {aid:4d}: {desc}{prob_str}")
+                            continue
+
+                    # Text input fallback
                     while True:
                         cmd = input(f"\nAuto-step P{current} (Enter=play AI move): ").strip()
                         if not cmd:
@@ -1063,8 +1117,58 @@ def main():
                 # Manual mode: show AI suggestions, human picks
                 probs, source, sims, wld = get_ai_probs(ctx, current, valids)
                 print(f"\nAI (P{current}) suggests [{source}]:")
-                ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
 
+                # Pre-select AI's chosen move (respects greedy/temperature)
+                if pcfg.greedy:
+                    ai_best = int(np.argmax(probs))
+                else:
+                    ai_best = int(np.random.choice(len(probs), p=probs))
+                entries = ui.build_action_menu(ctx.game, probs, valids, wld=wld)
+                use_text = False
+                try:
+                    selector = ActionSelector(entries, preselect=ai_best)
+                    result = selector.run()
+                except (ValueError, OSError):
+                    use_text = True
+                    result = None
+                    ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
+
+                if result is None and not use_text:
+                    use_text = True
+                    ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
+
+                if not use_text:
+                    if isinstance(result, int):
+                        print(f"Playing: {ui.format_move(ctx.game, result)}")
+                        advance_mcts_trees(ctx, result)
+                        history.append(ctx.game.copy())
+                        ctx.game.play_move(result)
+                        continue
+                    if result == 'quit':
+                        return
+                    if result == 'undo':
+                        if history:
+                            ctx.game = history.pop()
+                            for p in ctx.players:
+                                p.mcts = None
+                            print("Move undone")
+                        else:
+                            print("No moves to undo")
+                        continue
+                    if result == 'help':
+                        print_generic_help()
+                        ui.show_help(ctx.game)
+                        continue
+                    if result == 'status':
+                        print_status(ctx)
+                        continue
+                    if result in ("auto-step", "auto-full"):
+                        ctx.auto_play = True
+                        ctx.auto_full = result == "auto-full"
+                        print(f"Auto-play enabled")
+                        continue
+
+                # Text input fallback
                 while True:
                     cmd = input(f"\nPlayer {current} (AI-assisted) move: ").strip()
                     if not cmd:
@@ -1134,10 +1238,60 @@ def main():
             ):
                 probs, source, _, wld = get_ai_probs(ctx, current, valids)
                 print(f"\nHints [{source}]:")
-                ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
-            else:
-                ui.display_actions_menu(ctx.game, None, valids)
 
+            # Try arrow-key selector first
+            entries = ui.build_action_menu(ctx.game, probs, valids, wld=wld)
+            use_text = False
+            try:
+                selector = ActionSelector(entries)
+                result = selector.run()
+            except (ValueError, OSError):
+                use_text = True
+                result = None
+                ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
+
+            if result is None and not use_text:
+                # Tab pressed - switch to text input
+                use_text = True
+                ui.display_actions_menu(ctx.game, probs, valids, wld=wld)
+
+            if not use_text:
+                if isinstance(result, int):
+                    print(f"Playing: {ui.format_move(ctx.game, result)}")
+                    advance_mcts_trees(ctx, result)
+                    history.append(ctx.game.copy())
+                    ctx.game.play_move(result)
+                    continue
+                if result == 'quit':
+                    return
+                if result == 'undo':
+                    if history:
+                        ctx.game = history.pop()
+                        for p in ctx.players:
+                            p.mcts = None
+                        print("Move undone")
+                    else:
+                        print("No moves to undo")
+                    continue
+                if result == 'help':
+                    print_generic_help()
+                    ui.show_help(ctx.game)
+                    continue
+                if result == 'status':
+                    print_status(ctx)
+                    continue
+                if result == 'valid':
+                    descs = ui.get_valid_move_descriptions(ctx.game, valids)
+                    for aid, desc in descs:
+                        prob_str = (
+                            f"  [{probs[aid]*100:5.1f}%]"
+                            if probs is not None
+                            else ""
+                        )
+                        print(f"  {aid:4d}: {desc}{prob_str}")
+                    continue
+
+            # Text input fallback
             while True:
                 cmd = input(f"\nPlayer {current} move: ").strip()
                 if not cmd:

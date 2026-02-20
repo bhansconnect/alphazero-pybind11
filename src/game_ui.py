@@ -37,13 +37,19 @@ class GameUI:
         valid_indices = np.where(np.asarray(valids) > 0)[0]
         if len(valid_indices) == 0:
             return
-        sorted_idx = valid_indices[np.argsort(probs[valid_indices])[::-1]]
         if wld is not None:
             print(f"  WLD: {wld}")
-        print("  Top moves:")
-        for idx in sorted_idx[:top_n]:
-            desc = self.format_move(gs, idx)
-            print(f"  {idx:4d}: {desc}  [{probs[idx]*100:5.1f}%]")
+        if probs is not None:
+            sorted_idx = valid_indices[np.argsort(probs[valid_indices])[::-1]]
+            print("  Top moves:")
+            for idx in sorted_idx[:top_n]:
+                desc = self.format_move(gs, idx)
+                print(f"  {idx:4d}: {desc}  [{probs[idx]*100:5.1f}%]")
+        else:
+            print("  Valid moves:")
+            for idx in valid_indices:
+                desc = self.format_move(gs, idx)
+                print(f"  {idx:4d}: {desc}")
 
     def select_variant(self) -> str | None:
         """Optionally offer variant selection at startup. Returns game name or None."""

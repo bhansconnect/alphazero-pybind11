@@ -476,7 +476,8 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     Tree reuse OFF: entries within the same mode share one fresh tree per position.
     Tree reuse ON: each entry gets its own persistent tree across positions.
 
-    Returns dict with all collected metrics.
+    Returns (metrics, position_snapshots).
+    position_snapshots: list of dicts with 'gs', 'player', 'values' keys.
     """
     base_entries = [e for e in entries if e[1] == "base"]
     selfplay_entries = [e for e in entries if e[1] == "selfplay"]
@@ -533,6 +534,10 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     game_positions = [[] for _ in range(ANALYSIS_GAMES)]
     active = list(range(ANALYSIS_GAMES))
     game_scores = [None] * ANALYSIS_GAMES
+
+    # Position snapshots (one per turn, not per sub-move)
+    position_snapshots = []
+    snapshot_prev_player = [game_states[i].current_player() for i in range(ANALYSIS_GAMES)]
 
     cache = create_cache(Game, cache_size) if not isinstance(agent, str) else None
 
@@ -715,6 +720,17 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
             game_positions[gid].append(
                 (gs.current_player(), pos_values[slot], pos_policies[slot], pos_q_values[slot])
             )
+            # Save snapshot (once per turn, not every sub-move in
+            # multi-move-per-turn games)
+            cur_player = gs.current_player()
+            if cur_player != snapshot_prev_player[gid] or gs.current_turn() == 0:
+                position_snapshots.append({
+                    "gs": gs.copy(),
+                    "player": cur_player,
+                    "values": {entry: pos_values[slot].get(entry)
+                               for entry in entries if entry in pos_values[slot]},
+                })
+                snapshot_prev_player[gid] = cur_player
             total_positions += 1
             pbar.update(1)
 
@@ -779,6 +795,7 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     pio_entropy_reduction = {e: [] for e in pio_entries}
     pio_value_correction = {e: [] for e in pio_entries}
     pio_value_sign_flip = {e: [] for e in pio_entries}
+    pio_value_accuracy_gain = {e: [] for e in pio_entries}
     pio_correction_quality = {e: [] for e in pio_entries}
 
     for gid in range(ANALYSIS_GAMES):
@@ -849,6 +866,10 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
                     v_raw = values_at_pos[baseline_entry]
                     pio_value_correction[entry].append(abs(v_mcts - v_raw))
                     pio_value_sign_flip[entry].append(float((v_raw - 0.5) * (v_mcts - 0.5) < 0))
+                    # Value accuracy gain: does search make the value more accurate?
+                    pio_value_accuracy_gain[entry].append(
+                        float(abs(v_mcts - outcome) < abs(v_raw - outcome))
+                    )
 
                 # Correction quality: when top-1 flips, is Q[move_mcts] > Q[move_raw]?
                 if flipped:
@@ -915,6 +936,40 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     metrics["value_corr_vs_outcome"] = value_corr_vs_outcome
     metrics["value_mae_vs_outcome"] = value_mae_vs_outcome
 
+    # Value calibration (ECE) per entry — adaptive equal-mass bins
+    NUM_CAL_BINS = 10
+    value_ece = {}
+    value_calibration_data = {}
+    for entry in entries:
+        vals = np.array(position_values[entry])
+        n = min(len(vals), len(position_outcomes))
+        if n < NUM_CAL_BINS:
+            continue
+        vals = vals[:n]
+        outcomes = position_outcomes[:n]
+
+        # Sort by predicted value, split into equal-mass bins
+        order = np.argsort(vals)
+        bin_size = n // NUM_CAL_BINS
+        bin_pred = np.zeros(NUM_CAL_BINS)
+        bin_actual = np.zeros(NUM_CAL_BINS)
+        bin_count = np.zeros(NUM_CAL_BINS)
+        for b in range(NUM_CAL_BINS):
+            start = b * bin_size
+            end = n if b == NUM_CAL_BINS - 1 else (b + 1) * bin_size
+            idx = order[start:end]
+            bin_pred[b] = vals[idx].mean()
+            bin_actual[b] = outcomes[idx].mean()
+            bin_count[b] = len(idx)
+
+        total = bin_count.sum()
+        ece = float(np.sum(bin_count * np.abs(bin_pred - bin_actual)) / total)
+        value_ece[entry] = ece
+        value_calibration_data[entry] = (bin_pred, bin_actual, bin_count)
+
+    metrics["value_ece"] = value_ece
+    metrics["value_calibration_data"] = value_calibration_data
+
     # Expected reward and regret metrics
     reward_means = {}
     reward_all = {}
@@ -949,13 +1004,15 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     # PIO gap metrics aggregation
     pio_metric_names = ["pio_kl", "pio_top1_flip", "pio_entropy_raw", "pio_entropy_mcts",
                         "pio_entropy_reduction", "pio_value_correction",
-                        "pio_value_sign_flip", "pio_correction_quality"]
+                        "pio_value_sign_flip", "pio_value_accuracy_gain",
+                        "pio_correction_quality"]
     pio_metric_data = {
         "pio_kl": pio_kl, "pio_top1_flip": pio_top1_flip,
         "pio_entropy_raw": pio_entropy_raw, "pio_entropy_mcts": pio_entropy_mcts,
         "pio_entropy_reduction": pio_entropy_reduction,
         "pio_value_correction": pio_value_correction,
         "pio_value_sign_flip": pio_value_sign_flip,
+        "pio_value_accuracy_gain": pio_value_accuracy_gain,
         "pio_correction_quality": pio_correction_quality,
     }
     for name in pio_metric_names:
@@ -1015,6 +1072,12 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     for entry in sorted(value_corr_vs_outcome.keys(), key=entry_sort_key):
         print(f"{entry_label(entry):>8s} {value_corr_vs_outcome[entry]:>8.4f} {value_mae_vs_outcome[entry]:>8.4f}")
 
+    if value_ece:
+        print(f"\n--- Value Calibration (ECE, lower is better) ---")
+        print(f"{'Visits':>8s} {'ECE':>10s}")
+        for entry in sorted(value_ece.keys(), key=entry_sort_key):
+            print(f"{entry_label(entry):>8s} {value_ece[entry]:>10.4f}")
+
     if reward_means:
         print("\n--- Expected Reward (V(pi) = sum(pi * Q_anchor)) ---")
         print(f"{'Visits':>8s} {'E[reward]':>10s}")
@@ -1031,12 +1094,12 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     pio_kl_means = metrics.get("pio_kl_means", {})
     if pio_kl_means:
         print(f"\n--- PIO Gap Analysis (vs raw network, vc=1 base) ---")
-        print(f"{'Visits':>8s} {'KL':>10s} {'Top1Flip':>10s} {'EntReduc':>10s} {'ValCorr':>10s} {'ValFlip':>10s} {'CorrQual':>10s}")
+        print(f"{'Visits':>8s} {'KL':>10s} {'Top1Flip':>10s} {'EntReduc':>10s} {'ValCorr':>10s} {'ValFlip':>10s} {'ValGain':>10s} {'CorrQual':>10s}")
         for entry in sorted(pio_kl_means.keys(), key=entry_sort_key):
             def _fmt(name):
                 v = metrics.get(f"{name}_means", {}).get(entry)
                 return f"{v:>10.4f}" if v is not None else f"{'N/A':>10s}"
-            print(f"{entry_label(entry):>8s} {_fmt('pio_kl')}{_fmt('pio_top1_flip')}{_fmt('pio_entropy_reduction')}{_fmt('pio_value_correction')}{_fmt('pio_value_sign_flip')}{_fmt('pio_correction_quality')}")
+            print(f"{entry_label(entry):>8s} {_fmt('pio_kl')}{_fmt('pio_top1_flip')}{_fmt('pio_entropy_reduction')}{_fmt('pio_value_correction')}{_fmt('pio_value_sign_flip')}{_fmt('pio_value_accuracy_gain')}{_fmt('pio_correction_quality')}")
 
     marginal_kl_means = metrics.get("pio_marginal_kl_means", {})
     if marginal_kl_means:
@@ -1048,7 +1111,8 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     print_cache_stats(cache)
     del agent
     gc.collect()
-    return metrics
+    return metrics, position_snapshots
+
 
 
 # --- Scaling Readiness Report ---
@@ -1059,10 +1123,11 @@ def compute_scaling_report(entries, anchor, elo=None, metrics=None):
     Returns dict with:
       elo_per_doubling: list of (vc1, vc2, elo_per_2x) triples
       elo_slope: float, elo_r2: float (log-linear fit)
-      policy_gap: {entry: float}
-      value_quality: {entry: float}
-      capacity_score: {entry: float}  (vc > 1 only)
+      policy_improvement: {entry: float}  (pio_top1_flip, ascending with VC)
+      capacity_score: {entry: float}  (vc > 1 only, pio_top1_flip * correction_quality)
       mcts_utilization: {entry: float}
+      value_ece: {entry: float}  (Expected Calibration Error, lower is better)
+      value_accuracy_gain: {entry: float}  (rate where search improves value, vc > 1 only)
     """
     if elo is None and metrics is None:
         return {}
@@ -1095,28 +1160,35 @@ def compute_scaling_report(entries, anchor, elo=None, metrics=None):
     if metrics is None:
         return result
 
-    # 2. Policy Gap: 1 - top1_agreement
-    top1_means = metrics.get("top1_means", {})
-    if top1_means:
-        result["policy_gap"] = {e: 1.0 - v for e, v in top1_means.items()}
+    # 2. Policy Improvement: pio_top1_flip (ascending with VC — measures how much
+    #    MCTS improves over raw network policy)
+    pio_flip = metrics.get("pio_top1_flip_means", {})
+    if pio_flip:
+        result["policy_improvement"] = dict(pio_flip)
 
-    # 3. Value Head Quality: passthrough of value_corr_vs_outcome
-    value_corr = metrics.get("value_corr_vs_outcome", {})
-    if value_corr:
-        result["value_quality"] = dict(value_corr)
-
-    # 4. Capacity Score: policy_gap * correction_quality (vc > 1 only)
+    # 3. Capacity Score: pio_top1_flip * correction_quality (vc > 1 only)
+    #    Measures both how much search changes the policy AND whether those changes
+    #    are correct (ascending with VC when search is beneficial)
     correction_quality = metrics.get("pio_correction_quality_means", {})
-    policy_gap = result.get("policy_gap", {})
-    if policy_gap and correction_quality:
+    if pio_flip and correction_quality:
         capacity = {}
         for entry in correction_quality:
-            if entry[0] > 1 and entry in policy_gap:
-                capacity[entry] = policy_gap[entry] * correction_quality[entry]
+            if entry[0] > 1 and entry in pio_flip:
+                capacity[entry] = pio_flip[entry] * correction_quality[entry]
         if capacity:
             result["capacity_score"] = capacity
 
-    # 5. MCTS Utilization: (reward_entry - reward_vc1) / (reward_anchor - reward_vc1)
+    # 4. Value calibration (ECE) — lower is better
+    value_ece = metrics.get("value_ece", {})
+    if value_ece:
+        result["value_ece"] = dict(value_ece)
+
+    # 5. Value accuracy gain — rate where search improves value (vc > 1 only)
+    vag = metrics.get("pio_value_accuracy_gain_means", {})
+    if vag:
+        result["value_accuracy_gain"] = dict(vag)
+
+    # 6. MCTS Utilization: (reward_entry - reward_vc1) / (reward_anchor - reward_vc1)
     reward_means = metrics.get("reward_means", {})
     if reward_means:
         # Find vc=1 baseline reward (prefer base mode)
@@ -1151,16 +1223,19 @@ def print_scaling_report(scaling, entries, anchor):
             print(f"    Log-linear fit: slope={scaling['elo_slope']:.1f} Elo/2x, R2={scaling['elo_r2']:.3f}")
 
     # Per-entry table
-    has_pg = "policy_gap" in scaling
-    has_vq = "value_quality" in scaling
+    has_pi = "policy_improvement" in scaling
+    has_ece = "value_ece" in scaling
+    has_vag = "value_accuracy_gain" in scaling
     has_cs = "capacity_score" in scaling
     has_mu = "mcts_utilization" in scaling
-    if has_pg or has_vq or has_cs or has_mu:
+    if has_pi or has_ece or has_vag or has_cs or has_mu:
         header = f"\n  {'Visits':>8s}"
-        if has_pg:
-            header += f" {'PolGap':>8s}"
-        if has_vq:
-            header += f" {'ValQual':>8s}"
+        if has_pi:
+            header += f" {'PolImpr':>8s}"
+        if has_ece:
+            header += f" {'ECE':>8s}"
+        if has_vag:
+            header += f" {'ValGain':>8s}"
         if has_cs:
             header += f" {'CapScore':>8s}"
         if has_mu:
@@ -1169,8 +1244,9 @@ def print_scaling_report(scaling, entries, anchor):
 
         sorted_entries = sorted(
             set().union(
-                scaling.get("policy_gap", {}).keys(),
-                scaling.get("value_quality", {}).keys(),
+                scaling.get("policy_improvement", {}).keys(),
+                scaling.get("value_ece", {}).keys(),
+                scaling.get("value_accuracy_gain", {}).keys(),
                 scaling.get("capacity_score", {}).keys(),
                 scaling.get("mcts_utilization", {}).keys(),
             ),
@@ -1178,11 +1254,14 @@ def print_scaling_report(scaling, entries, anchor):
         )
         for entry in sorted_entries:
             row = f"  {entry_label(entry):>8s}"
-            if has_pg:
-                v = scaling["policy_gap"].get(entry)
+            if has_pi:
+                v = scaling["policy_improvement"].get(entry)
                 row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
-            if has_vq:
-                v = scaling["value_quality"].get(entry)
+            if has_ece:
+                v = scaling["value_ece"].get(entry)
+                row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
+            if has_vag:
+                v = scaling["value_accuracy_gain"].get(entry)
                 row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
             if has_cs:
                 v = scaling["capacity_score"].get(entry)
@@ -1205,7 +1284,8 @@ def _has_display():
 
 # Metrics that are binary or discrete rates — bar charts with Wilson CI instead of boxplots
 _rate_metrics = {"top1", "top3", "top9",
-                 "pio_top1_flip", "pio_value_sign_flip", "pio_correction_quality"}
+                 "pio_top1_flip", "pio_value_sign_flip", "pio_value_accuracy_gain",
+                 "pio_correction_quality"}
 
 
 def _wilson_ci(k, n, z=1.96):
@@ -1376,14 +1456,16 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         print(f"Saved: {path}")
         fig_num += 1
 
-    # Figure 3: Value analysis (2x2)
+    # Figure 3: Value analysis (2x3)
     if metrics and "value_corr_vs_max" in metrics:
         corr_max = metrics["value_corr_vs_max"]
         mae_max = metrics["value_mae_vs_max"]
         corr_out = metrics["value_corr_vs_outcome"]
         mae_out = metrics["value_mae_vs_outcome"]
+        value_ece = metrics.get("value_ece", {})
+        calibration_data = metrics.get("value_calibration_data", {})
 
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 
         # Top-left: correlation vs anchor
         if corr_max:
@@ -1395,7 +1477,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         axes[0, 0].set_title(f"Value Correlation vs {entry_label(anchor)}")
         axes[0, 0].grid(True, alpha=0.3)
 
-        # Top-right: MAE vs anchor
+        # Top-center: MAE vs anchor
         if mae_max:
             es = sorted(mae_max.keys(), key=entry_sort_key)
             _plot_by_mode(axes[0, 1], es, [mae_max[e] for e in es],
@@ -1405,6 +1487,19 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         axes[0, 1].set_ylabel("MAE")
         axes[0, 1].set_title(f"Value MAE vs {entry_label(anchor)}")
         axes[0, 1].grid(True, alpha=0.3)
+
+        # Top-right: ECE bar chart
+        if value_ece:
+            ece_entries = sorted(value_ece.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[0, 2], ece_entries, [value_ece[e] for e in ece_entries],
+                          base_color="tab:red", sp_color="tab:pink")
+            _set_entry_xticks(axes[0, 2], ece_entries)
+            axes[0, 2].set_xlabel("MCTS Visit Count")
+            axes[0, 2].set_ylabel("ECE (lower=better)")
+            axes[0, 2].set_title("Expected Calibration Error")
+            axes[0, 2].grid(True, alpha=0.3)
+        else:
+            axes[0, 2].set_visible(False)
 
         # Bottom-left: correlation vs game outcome
         if corr_out:
@@ -1417,7 +1512,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         axes[1, 0].set_title("Value Correlation vs Game Outcome")
         axes[1, 0].grid(True, alpha=0.3)
 
-        # Bottom-right: MAE vs game outcome
+        # Bottom-center: MAE vs game outcome
         if mae_out:
             es = sorted(mae_out.keys(), key=entry_sort_key)
             _plot_by_mode(axes[1, 1], es, [mae_out[e] for e in es],
@@ -1427,6 +1522,24 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         axes[1, 1].set_ylabel("MAE")
         axes[1, 1].set_title("Value MAE vs Game Outcome")
         axes[1, 1].grid(True, alpha=0.3)
+
+        # Bottom-right: Calibration curve for anchor entry
+        if anchor in calibration_data:
+            bin_pred, bin_actual, bin_count = calibration_data[anchor]
+            sizes = 20 + 200 * (bin_count / bin_count.max())
+            axes[1, 2].scatter(bin_pred, bin_actual, s=sizes, color="tab:blue",
+                               edgecolors="gray", zorder=3, alpha=0.8)
+            axes[1, 2].plot([0, 1], [0, 1], "k--", alpha=0.5, label="perfect")
+            axes[1, 2].set_xlabel("Predicted Value")
+            axes[1, 2].set_ylabel("Actual Win Rate")
+            axes[1, 2].set_title(f"Calibration Curve ({entry_label(anchor)})")
+            axes[1, 2].set_xlim(-0.05, 1.05)
+            axes[1, 2].set_ylim(-0.05, 1.05)
+            axes[1, 2].set_aspect("equal")
+            axes[1, 2].legend(fontsize=8)
+            axes[1, 2].grid(True, alpha=0.3)
+        else:
+            axes[1, 2].set_visible(False)
 
         fig.tight_layout()
         path = os.path.join(save_dir, "value_analysis.png")
@@ -1494,7 +1607,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         fig.savefig(path, dpi=150)
         print(f"Saved: {path}")
 
-    # Figure 5: PIO Gap Summary (2x3 grid)
+    # Figure 5: PIO Gap Summary (2x4 grid)
     has_pio = metrics and metrics.get("pio_kl_means")
     if has_pio:
         pio_panel_info = [
@@ -1503,9 +1616,13 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
             ("pio_entropy_reduction", "Entropy Reduction", "lightyellow"),
             ("pio_value_correction", "|V_mcts - V_raw|", "lightsalmon"),
             ("pio_value_sign_flip", "Value Sign Flip Rate", "plum"),
+            ("pio_value_accuracy_gain", "Value Accuracy Gain", "lightcyan"),
             ("pio_correction_quality", "Correction Quality", "lightskyblue"),
         ]
-        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+        n_panels = len(pio_panel_info)
+        n_cols = 4
+        n_rows = (n_panels + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(24, 5 * n_rows))
         axes = axes.flatten()
 
         for idx, (name, title, base_color) in enumerate(pio_panel_info):
@@ -1518,6 +1635,10 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
 
             sorted_entries = sorted(means.keys(), key=entry_sort_key)
             _plot_metric_panel(ax, name, title, base_color, sorted_entries, means, all_data)
+
+        # Hide unused axes
+        for idx in range(len(pio_panel_info), len(axes)):
+            axes[idx].set_visible(False)
 
         fig.suptitle("PIO Gap Analysis (MCTS vs Raw Network)", fontsize=14, y=1.02)
         fig.tight_layout()
@@ -1615,7 +1736,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
             _set_entry_xticks(axes[0, 1], cs_entries)
             axes[0, 1].set_xlabel("MCTS Visit Count")
             axes[0, 1].set_ylabel("Capacity Score")
-            axes[0, 1].set_title("Capacity Score (Policy Gap x Correction Quality)")
+            axes[0, 1].set_title("Capacity Score (Top-1 Flip x Correction Quality)")
             axes[0, 1].grid(True, alpha=0.3)
         else:
             axes[0, 1].set_visible(False)
@@ -1636,31 +1757,35 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         else:
             axes[1, 0].set_visible(False)
 
-        # Bottom-right: Policy Gap & Value Quality (dual y-axis)
-        has_pg = "policy_gap" in scaling
-        has_vq = "value_quality" in scaling
-        if has_pg or has_vq:
+        # Bottom-right: Value Calibration & Accuracy Gain (dual y-axis)
+        has_ece = "value_ece" in scaling
+        has_vag = "value_accuracy_gain" in scaling
+        if has_ece or has_vag:
             ax_left = axes[1, 1]
-            if has_pg:
-                pg = scaling["policy_gap"]
-                pg_entries = sorted(pg.keys(), key=entry_sort_key)
-                _plot_by_mode(ax_left, pg_entries, [pg[e] for e in pg_entries],
+            all_entries = []
+            if has_ece:
+                ece = scaling["value_ece"]
+                ece_entries = sorted(ece.keys(), key=entry_sort_key)
+                _plot_by_mode(ax_left, ece_entries, [ece[e] for e in ece_entries],
                               base_color="tab:red", sp_color="tab:pink")
-                ax_left.set_ylabel("Policy Gap (1 - Top-1 Agreement)", color="tab:red")
+                ax_left.set_ylabel("ECE (lower=better)", color="tab:red")
                 ax_left.tick_params(axis="y", labelcolor="tab:red")
-                all_entries = pg_entries
-            if has_vq:
+                ax_left.invert_yaxis()
+                all_entries = ece_entries
+            if has_vag:
                 ax_right = ax_left.twinx()
-                vq = scaling["value_quality"]
-                vq_entries = sorted(vq.keys(), key=entry_sort_key)
-                _plot_by_mode(ax_right, vq_entries, [vq[e] for e in vq_entries],
+                vag = scaling["value_accuracy_gain"]
+                vag_entries = sorted(vag.keys(), key=entry_sort_key)
+                _plot_by_mode(ax_right, vag_entries, [vag[e] for e in vag_entries],
                               base_color="tab:blue", sp_color="tab:cyan")
-                ax_right.set_ylabel("Value Correlation vs Outcome", color="tab:blue")
+                ax_right.set_ylabel("Value Accuracy Gain", color="tab:blue")
                 ax_right.tick_params(axis="y", labelcolor="tab:blue")
-                all_entries = vq_entries if not has_pg else pg_entries
+                ax_right.axhline(y=0.5, color="gray", linestyle="--", alpha=0.5)
+                if not all_entries:
+                    all_entries = vag_entries
             _set_entry_xticks(ax_left, all_entries)
             ax_left.set_xlabel("MCTS Visit Count")
-            ax_left.set_title("Policy Gap & Value Quality")
+            ax_left.set_title("Value Calibration & Accuracy Gain")
             ax_left.grid(True, alpha=0.3)
         else:
             axes[1, 1].set_visible(False)
@@ -1711,7 +1836,8 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         # PIO gap metrics
         pio_prefixes = ["pio_kl", "pio_top1_flip", "pio_entropy_raw", "pio_entropy_mcts",
                         "pio_entropy_reduction", "pio_value_correction",
-                        "pio_value_sign_flip", "pio_correction_quality"]
+                        "pio_value_sign_flip", "pio_value_accuracy_gain",
+                        "pio_correction_quality"]
         for prefix in pio_prefixes:
             if f"{prefix}_means" in metrics:
                 for entry, val in metrics[f"{prefix}_means"].items():
@@ -1737,10 +1863,16 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         if "elo_slope" in scaling:
             save_data["scaling_elo_slope"] = np.array(scaling["elo_slope"])
             save_data["scaling_elo_r2"] = np.array(scaling["elo_r2"])
-        for key in ["policy_gap", "value_quality", "capacity_score", "mcts_utilization"]:
+        for key in ["policy_improvement", "capacity_score", "mcts_utilization",
+                     "value_ece", "value_accuracy_gain"]:
             if key in scaling:
                 for entry, val in scaling[key].items():
                     save_data[f"scaling_{key}_{entry_label(entry)}"] = np.array(val)
+
+    # Value calibration data
+    if metrics and "value_ece" in metrics:
+        for entry, val in metrics["value_ece"].items():
+            save_data[f"value_ece_{entry_label(entry)}"] = np.array(val)
 
     npz_path = os.path.join(save_dir, "threshold_data.npz")
     np.savez(npz_path, **save_data)
@@ -1753,7 +1885,8 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
 
 
 def main():
-    config, Game, network_path, entries, anchor, phases, use_playout, cache_size, tree_reuse = interactive_config()
+    (config, Game, network_path, entries, anchor, phases, use_playout,
+     cache_size, tree_reuse) = interactive_config()
 
     elo = None
     win_matrix = None
@@ -1764,10 +1897,13 @@ def main():
                                          cache_size=cache_size)
 
     if "analysis" in phases:
-        metrics = run_analysis(config, Game, network_path, entries, anchor, use_playout,
-                               cache_size=cache_size, tree_reuse=tree_reuse)
+        metrics, snapshots = run_analysis(
+            config, Game, network_path, entries, anchor, use_playout,
+            cache_size=cache_size, tree_reuse=tree_reuse,
+        )
 
-    visualize_and_save(entries, anchor, elo=elo, win_matrix=win_matrix, metrics=metrics)
+    visualize_and_save(entries, anchor, elo=elo, win_matrix=win_matrix,
+                       metrics=metrics)
 
     print("\nDone!")
 

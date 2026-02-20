@@ -23,6 +23,8 @@ from mcts_analysis import (
     entry_label,
     entry_sort_key,
     compute_scaling_report,
+    MctsSettings,
+    _entry_mcts_settings,
 )
 
 
@@ -182,6 +184,34 @@ def test_entry_sort_key_full_ordering():
 def test_entry_sort_key_duplicate_entries():
     """Identical entries sort equally."""
     assert entry_sort_key((400, "base")) == entry_sort_key((400, "base"))
+
+
+# --- _entry_mcts_settings tests ---
+
+
+def test_entry_mcts_settings_base():
+    """Base entry returns zero epsilon, root_temp=1.0, no root_fpu_zero."""
+    config = TrainConfig(mcts_root_temp=1.25)
+    eps, rpt, rfz = _entry_mcts_settings((200, "base"), config)
+    assert eps == 0.0
+    assert rpt == 1.0
+    assert rfz is False
+
+
+def test_entry_mcts_settings_selfplay():
+    """Selfplay entry returns 0.25 epsilon, config root_temp, root_fpu_zero=True."""
+    config = TrainConfig(mcts_root_temp=1.25)
+    eps, rpt, rfz = _entry_mcts_settings((200, "selfplay"), config)
+    assert eps == 0.25
+    assert rpt == 1.25
+    assert rfz is True
+
+
+def test_entry_mcts_settings_uses_config_root_temp():
+    """Selfplay root_temp comes from config, not hardcoded."""
+    config = TrainConfig(mcts_root_temp=2.0)
+    eps, rpt, rfz = _entry_mcts_settings((100, "selfplay"), config)
+    assert rpt == 2.0
 
 
 # --- Anchor reference tests ---

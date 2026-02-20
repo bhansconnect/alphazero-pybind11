@@ -88,6 +88,9 @@ class DLLEXPORT MCTS {
   [[nodiscard]] uint32_t num_root_children() const noexcept { return root_.children.size(); }
   [[nodiscard]] uint32_t root_n() const noexcept { return root_.n; }
   void apply_root_policy_temp();
+  [[nodiscard]] float epsilon() const noexcept { return epsilon_; }
+  [[nodiscard]] float root_policy_temp() const noexcept { return root_policy_temp_; }
+  [[nodiscard]] bool root_fpu_zero() const noexcept { return root_fpu_zero_; }
 
   [[nodiscard]] static uint32_t pick_move(const Vector<float>& p);
 

@@ -90,7 +90,10 @@ def calc_elo(past_elo, win_rates):
 
 
 @tracy_zone
-def pit_agents(config, Game, players, mcts_visits, bs, name, tree_reuse=True, cache_size=0, caches=None):
+def pit_agents(config, Game, players, mcts_visits, bs, name,
+               player_epsilon=None, player_mcts_root_temp=None,
+               player_root_fpu_zero=None,
+               tree_reuse=True, cache_size=0, caches=None):
     """Play agents against each other across all seat permutations in one run.
 
     Args:
@@ -133,6 +136,28 @@ def pit_agents(config, Game, players, mcts_visits, bs, name, tree_reuse=True, ca
         perm_visits = [visits[(j + i) % num_players] for j in range(num_players)]
         seat_visits.append(perm_visits)
     params.seat_visits = seat_visits
+
+    # Per-perm, per-seat MCTS setting overrides (rotated to match seat permutations)
+    if player_epsilon is not None:
+        seat_epsilon = []
+        for i in range(num_players):
+            perm_eps = [player_epsilon[(j + i) % num_players] for j in range(num_players)]
+            seat_epsilon.append(perm_eps)
+        params.seat_epsilon = seat_epsilon
+
+    if player_mcts_root_temp is not None:
+        seat_mcts_root_temp = []
+        for i in range(num_players):
+            perm_rpt = [player_mcts_root_temp[(j + i) % num_players] for j in range(num_players)]
+            seat_mcts_root_temp.append(perm_rpt)
+        params.seat_mcts_root_temp = seat_mcts_root_temp
+
+    if player_root_fpu_zero is not None:
+        seat_root_fpu_zero = []
+        for i in range(num_players):
+            perm_rfz = [int(player_root_fpu_zero[(j + i) % num_players]) for j in range(num_players)]
+            seat_root_fpu_zero.append(perm_rfz)
+        params.seat_root_fpu_zero = seat_root_fpu_zero
 
     n = bs * cb * num_players  # all perms at once
     params.games_to_play = n

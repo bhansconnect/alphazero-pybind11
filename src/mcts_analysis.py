@@ -1051,6 +1051,148 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     return metrics
 
 
+# --- Scaling Readiness Report ---
+
+def compute_scaling_report(entries, anchor, elo=None, metrics=None):
+    """Compute derived scaling readiness metrics from raw analysis data.
+
+    Returns dict with:
+      elo_per_doubling: list of (vc1, vc2, elo_per_2x) triples
+      elo_slope: float, elo_r2: float (log-linear fit)
+      policy_gap: {entry: float}
+      value_quality: {entry: float}
+      capacity_score: {entry: float}  (vc > 1 only)
+      mcts_utilization: {entry: float}
+    """
+    if elo is None and metrics is None:
+        return {}
+
+    result = {}
+    tournament_vcs = sorted(set(vc for vc, _ in entries))
+
+    # 1. Elo per Doubling
+    if elo is not None and len(tournament_vcs) >= 2:
+        elo_per_doubling = []
+        for i in range(len(tournament_vcs) - 1):
+            vc1, vc2 = tournament_vcs[i], tournament_vcs[i + 1]
+            elo1, elo2 = elo[i], elo[i + 1]
+            log2_ratio = math.log2(vc2 / vc1)
+            if log2_ratio > 0:
+                elo_per_doubling.append((vc1, vc2, (elo2 - elo1) / log2_ratio))
+        result["elo_per_doubling"] = elo_per_doubling
+
+        # Log-linear regression: Elo = slope * log2(vc) + intercept
+        log2_vcs = np.array([math.log2(vc) for vc in tournament_vcs])
+        elo_arr = np.array(elo[:len(tournament_vcs)])
+        if len(log2_vcs) >= 2 and np.std(log2_vcs) > 1e-9:
+            slope, intercept = np.polyfit(log2_vcs, elo_arr, 1)
+            ss_res = np.sum((elo_arr - (slope * log2_vcs + intercept)) ** 2)
+            ss_tot = np.sum((elo_arr - np.mean(elo_arr)) ** 2)
+            r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-9 else 0.0
+            result["elo_slope"] = float(slope)
+            result["elo_r2"] = float(r2)
+
+    if metrics is None:
+        return result
+
+    # 2. Policy Gap: 1 - top1_agreement
+    top1_means = metrics.get("top1_means", {})
+    if top1_means:
+        result["policy_gap"] = {e: 1.0 - v for e, v in top1_means.items()}
+
+    # 3. Value Head Quality: passthrough of value_corr_vs_outcome
+    value_corr = metrics.get("value_corr_vs_outcome", {})
+    if value_corr:
+        result["value_quality"] = dict(value_corr)
+
+    # 4. Capacity Score: policy_gap * correction_quality (vc > 1 only)
+    correction_quality = metrics.get("pio_correction_quality_means", {})
+    policy_gap = result.get("policy_gap", {})
+    if policy_gap and correction_quality:
+        capacity = {}
+        for entry in correction_quality:
+            if entry[0] > 1 and entry in policy_gap:
+                capacity[entry] = policy_gap[entry] * correction_quality[entry]
+        if capacity:
+            result["capacity_score"] = capacity
+
+    # 5. MCTS Utilization: (reward_entry - reward_vc1) / (reward_anchor - reward_vc1)
+    reward_means = metrics.get("reward_means", {})
+    if reward_means:
+        # Find vc=1 baseline reward (prefer base mode)
+        vc1_reward = None
+        for mode in ("base", "selfplay"):
+            key = (1, mode)
+            if key in reward_means:
+                vc1_reward = reward_means[key]
+                break
+        anchor_reward = reward_means.get(anchor)
+        if vc1_reward is not None and anchor_reward is not None:
+            denom = anchor_reward - vc1_reward
+            if abs(denom) > 1e-9:
+                utilization = {}
+                for entry, reward in reward_means.items():
+                    utilization[entry] = (reward - vc1_reward) / denom
+                result["mcts_utilization"] = utilization
+
+    return result
+
+
+def print_scaling_report(scaling, entries, anchor):
+    """Print formatted terminal summary of scaling readiness metrics."""
+    print(f"\n--- Scaling Readiness Report ---")
+
+    # Elo per doubling
+    if "elo_per_doubling" in scaling:
+        print(f"\n  Elo per Doubling:")
+        for vc1, vc2, epd in scaling["elo_per_doubling"]:
+            print(f"    {vc1:>6d} -> {vc2:<6d}  {epd:>8.1f} Elo/2x")
+        if "elo_slope" in scaling:
+            print(f"    Log-linear fit: slope={scaling['elo_slope']:.1f} Elo/2x, R2={scaling['elo_r2']:.3f}")
+
+    # Per-entry table
+    has_pg = "policy_gap" in scaling
+    has_vq = "value_quality" in scaling
+    has_cs = "capacity_score" in scaling
+    has_mu = "mcts_utilization" in scaling
+    if has_pg or has_vq or has_cs or has_mu:
+        header = f"\n  {'Visits':>8s}"
+        if has_pg:
+            header += f" {'PolGap':>8s}"
+        if has_vq:
+            header += f" {'ValQual':>8s}"
+        if has_cs:
+            header += f" {'CapScore':>8s}"
+        if has_mu:
+            header += f" {'MCTSUtil':>8s}"
+        print(header)
+
+        sorted_entries = sorted(
+            set().union(
+                scaling.get("policy_gap", {}).keys(),
+                scaling.get("value_quality", {}).keys(),
+                scaling.get("capacity_score", {}).keys(),
+                scaling.get("mcts_utilization", {}).keys(),
+            ),
+            key=entry_sort_key,
+        )
+        for entry in sorted_entries:
+            row = f"  {entry_label(entry):>8s}"
+            if has_pg:
+                v = scaling["policy_gap"].get(entry)
+                row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
+            if has_vq:
+                v = scaling["value_quality"].get(entry)
+                row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
+            if has_cs:
+                v = scaling["capacity_score"].get(entry)
+                row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
+            if has_mu:
+                v = scaling["mcts_utilization"].get(entry)
+                row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
+            print(row)
+
+
 # --- Phase 4: Visualization & Data Save ---
 
 def _has_display():
@@ -1138,6 +1280,14 @@ def _plot_metric_panel(ax, metric_name, title, base_color, sorted_entries, means
     ax.set_ylabel(title)
     ax.set_title(title)
     ax.grid(True, alpha=0.3)
+
+
+def _set_entry_xticks(ax, sorted_entries):
+    """Set log-scale x-axis with ticks at unique visit counts."""
+    unique_vcs = sorted(set(e[0] for e in sorted_entries))
+    ax.set_xscale("log")
+    ax.set_xticks(unique_vcs)
+    ax.set_xticklabels([str(v) for v in unique_vcs])
 
 
 def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None):
@@ -1234,12 +1384,6 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         mae_out = metrics["value_mae_vs_outcome"]
 
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-
-        def _set_entry_xticks(ax, sorted_entries):
-            unique_vcs = sorted(set(e[0] for e in sorted_entries))
-            ax.set_xscale("log")
-            ax.set_xticks(unique_vcs)
-            ax.set_xticklabels([str(v) for v in unique_vcs])
 
         # Top-left: correlation vs anchor
         if corr_max:
@@ -1433,6 +1577,100 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         fig.savefig(path, dpi=150)
         print(f"Saved: {path}")
 
+    # Figure 7: Scaling Readiness Report
+    scaling = compute_scaling_report(entries, anchor, elo=elo, metrics=metrics)
+    if scaling:
+        print_scaling_report(scaling, entries, anchor)
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+        # Top-left: Elo per Doubling (bar chart)
+        if "elo_per_doubling" in scaling:
+            epd = scaling["elo_per_doubling"]
+            bar_labels = [f"{vc1}->{vc2}" for vc1, vc2, _ in epd]
+            bar_vals = [v for _, _, v in epd]
+            positions = range(len(bar_labels))
+            axes[0, 0].bar(positions, bar_vals, color="tab:blue", edgecolor="gray",
+                           linewidth=0.8, zorder=2)
+            if "elo_slope" in scaling:
+                axes[0, 0].axhline(y=scaling["elo_slope"], color="red",
+                                   linestyle="--", linewidth=1.5, zorder=3)
+                axes[0, 0].annotate(f"R2={scaling['elo_r2']:.3f}",
+                                    xy=(0.95, 0.95), xycoords="axes fraction",
+                                    ha="right", va="top", fontsize=9,
+                                    bbox=dict(boxstyle="round,pad=0.3", facecolor="wheat", alpha=0.8))
+            axes[0, 0].set_xticks(list(positions))
+            axes[0, 0].set_xticklabels(bar_labels, rotation=45, ha="right")
+            axes[0, 0].set_ylabel("Elo per Doubling")
+            axes[0, 0].set_title("Elo per Doubling")
+            axes[0, 0].grid(True, alpha=0.3)
+        else:
+            axes[0, 0].set_visible(False)
+
+        # Top-right: Capacity Score
+        if "capacity_score" in scaling:
+            cs = scaling["capacity_score"]
+            cs_entries = sorted(cs.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[0, 1], cs_entries, [cs[e] for e in cs_entries])
+            _set_entry_xticks(axes[0, 1], cs_entries)
+            axes[0, 1].set_xlabel("MCTS Visit Count")
+            axes[0, 1].set_ylabel("Capacity Score")
+            axes[0, 1].set_title("Capacity Score (Policy Gap x Correction Quality)")
+            axes[0, 1].grid(True, alpha=0.3)
+        else:
+            axes[0, 1].set_visible(False)
+
+        # Bottom-left: MCTS Utilization
+        if "mcts_utilization" in scaling:
+            mu = scaling["mcts_utilization"]
+            mu_entries = sorted(mu.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[1, 0], mu_entries, [mu[e] for e in mu_entries],
+                          base_color="tab:green", sp_color="tab:olive")
+            _set_entry_xticks(axes[1, 0], mu_entries)
+            axes[1, 0].axhline(y=0.0, color="gray", linestyle="--", alpha=0.5)
+            axes[1, 0].axhline(y=1.0, color="gray", linestyle="--", alpha=0.5)
+            axes[1, 0].set_xlabel("MCTS Visit Count")
+            axes[1, 0].set_ylabel("MCTS Utilization")
+            axes[1, 0].set_title("MCTS Utilization (fraction of search improvement)")
+            axes[1, 0].grid(True, alpha=0.3)
+        else:
+            axes[1, 0].set_visible(False)
+
+        # Bottom-right: Policy Gap & Value Quality (dual y-axis)
+        has_pg = "policy_gap" in scaling
+        has_vq = "value_quality" in scaling
+        if has_pg or has_vq:
+            ax_left = axes[1, 1]
+            if has_pg:
+                pg = scaling["policy_gap"]
+                pg_entries = sorted(pg.keys(), key=entry_sort_key)
+                _plot_by_mode(ax_left, pg_entries, [pg[e] for e in pg_entries],
+                              base_color="tab:red", sp_color="tab:pink")
+                ax_left.set_ylabel("Policy Gap (1 - Top-1 Agreement)", color="tab:red")
+                ax_left.tick_params(axis="y", labelcolor="tab:red")
+                all_entries = pg_entries
+            if has_vq:
+                ax_right = ax_left.twinx()
+                vq = scaling["value_quality"]
+                vq_entries = sorted(vq.keys(), key=entry_sort_key)
+                _plot_by_mode(ax_right, vq_entries, [vq[e] for e in vq_entries],
+                              base_color="tab:blue", sp_color="tab:cyan")
+                ax_right.set_ylabel("Value Correlation vs Outcome", color="tab:blue")
+                ax_right.tick_params(axis="y", labelcolor="tab:blue")
+                all_entries = vq_entries if not has_pg else pg_entries
+            _set_entry_xticks(ax_left, all_entries)
+            ax_left.set_xlabel("MCTS Visit Count")
+            ax_left.set_title("Policy Gap & Value Quality")
+            ax_left.grid(True, alpha=0.3)
+        else:
+            axes[1, 1].set_visible(False)
+
+        fig.suptitle("Scaling Readiness Report", fontsize=14)
+        fig.tight_layout()
+        path = os.path.join(save_dir, "scaling_report.png")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        print(f"Saved: {path}")
+
     # Save raw data
     save_data = {
         "visit_counts": np.array(tournament_vcs),
@@ -1488,6 +1726,21 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         if "pio_marginal_kl_all" in metrics:
             for entry, arr in metrics["pio_marginal_kl_all"].items():
                 save_data[f"pio_marginal_kl_all_{entry_label(entry)}"] = arr
+
+    # Scaling report data
+    if scaling:
+        if "elo_per_doubling" in scaling:
+            epd = scaling["elo_per_doubling"]
+            save_data["scaling_elo_per_doubling_vc1"] = np.array([vc1 for vc1, _, _ in epd])
+            save_data["scaling_elo_per_doubling_vc2"] = np.array([vc2 for _, vc2, _ in epd])
+            save_data["scaling_elo_per_doubling_values"] = np.array([v for _, _, v in epd])
+        if "elo_slope" in scaling:
+            save_data["scaling_elo_slope"] = np.array(scaling["elo_slope"])
+            save_data["scaling_elo_r2"] = np.array(scaling["elo_r2"])
+        for key in ["policy_gap", "value_quality", "capacity_score", "mcts_utilization"]:
+            if key in scaling:
+                for entry, val in scaling[key].items():
+                    save_data[f"scaling_{key}_{entry_label(entry)}"] = np.array(val)
 
     npz_path = os.path.join(save_dir, "threshold_data.npz")
     np.savez(npz_path, **save_data)

@@ -22,6 +22,7 @@ from mcts_analysis import (
     get_available_games,
     entry_label,
     entry_sort_key,
+    compute_scaling_report,
 )
 
 
@@ -407,3 +408,150 @@ def test_pio_vc1_not_duplicated_when_present(monkeypatch):
     # Same for vc=25
     n_pio_25 = len(metrics["pio_kl_all"][(25, "base")])
     assert n_pio_25 == total_positions
+
+
+# --- compute_scaling_report tests ---
+
+
+def _make_entries(vcs):
+    """Helper: create base-mode entries from a list of visit counts."""
+    return [(vc, "base") for vc in vcs]
+
+
+def test_elo_per_doubling_uniform():
+    """Power-of-2 VCs with uniform Elo spacing -> exact 100.0/doubling, R2=1.0."""
+    entries = _make_entries([1, 2, 4, 8])
+    anchor = (8, "base")
+    elo = np.array([0.0, 100.0, 200.0, 300.0])
+
+    result = compute_scaling_report(entries, anchor, elo=elo, metrics=None)
+
+    assert "elo_per_doubling" in result
+    epd = result["elo_per_doubling"]
+    assert len(epd) == 3
+    for vc1, vc2, val in epd:
+        assert val == pytest.approx(100.0, abs=1e-6)
+
+    assert result["elo_slope"] == pytest.approx(100.0, abs=1e-6)
+    assert result["elo_r2"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_elo_per_doubling_nonuniform():
+    """Non-power-of-2 VCs use correct log2 denominator."""
+    entries = _make_entries([10, 30, 90])
+    anchor = (90, "base")
+    elo = np.array([0.0, 100.0, 200.0])
+
+    result = compute_scaling_report(entries, anchor, elo=elo, metrics=None)
+
+    epd = result["elo_per_doubling"]
+    assert len(epd) == 2
+    # 10->30: log2(3) ~= 1.585, so elo/doubling = 100/1.585 ~= 63.09
+    assert epd[0][2] == pytest.approx(100.0 / math.log2(3), abs=0.1)
+    # 30->90: same ratio
+    assert epd[1][2] == pytest.approx(100.0 / math.log2(3), abs=0.1)
+
+
+def test_elo_per_doubling_none_when_no_elo():
+    """elo=None -> elo_per_doubling key absent from result."""
+    entries = _make_entries([1, 10, 100])
+    anchor = (100, "base")
+    metrics = {"top1_means": {(1, "base"): 0.5, (10, "base"): 0.7, (100, "base"): 1.0}}
+
+    result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
+
+    assert "elo_per_doubling" not in result
+    assert "elo_slope" not in result
+
+
+def test_policy_gap_basic():
+    """Policy gap = 1 - top1_agreement."""
+    entries = _make_entries([1, 10, 100])
+    anchor = (100, "base")
+    metrics = {
+        "top1_means": {(1, "base"): 0.3, (10, "base"): 0.7, (100, "base"): 1.0},
+    }
+
+    result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
+
+    assert result["policy_gap"][(1, "base")] == pytest.approx(0.7)
+    assert result["policy_gap"][(10, "base")] == pytest.approx(0.3)
+    assert result["policy_gap"][(100, "base")] == pytest.approx(0.0)
+
+
+def test_capacity_score_vc1_excluded():
+    """vc=1 never appears in capacity_score."""
+    entries = _make_entries([1, 10, 100])
+    anchor = (100, "base")
+    metrics = {
+        "top1_means": {(1, "base"): 0.3, (10, "base"): 0.7, (100, "base"): 1.0},
+        "pio_correction_quality_means": {(10, "base"): 0.8, (100, "base"): 0.9},
+    }
+
+    result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
+
+    assert "capacity_score" in result
+    assert (1, "base") not in result["capacity_score"]
+    assert (10, "base") in result["capacity_score"]
+
+
+def test_capacity_score_computation():
+    """Capacity score = policy_gap * correction_quality."""
+    entries = _make_entries([1, 50])
+    anchor = (50, "base")
+    metrics = {
+        "top1_means": {(1, "base"): 0.4, (50, "base"): 1.0},
+        "pio_correction_quality_means": {(50, "base"): 0.75},
+    }
+
+    result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
+
+    # policy_gap for vc=50 = 1 - 1.0 = 0.0, so capacity = 0.0 * 0.75 = 0.0
+    assert result["capacity_score"][(50, "base")] == pytest.approx(0.0)
+
+    # Try with non-zero policy gap
+    metrics["top1_means"][(50, "base")] = 0.6
+    result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
+    # policy_gap = 0.4, correction_quality = 0.75 -> capacity = 0.3
+    assert result["capacity_score"][(50, "base")] == pytest.approx(0.3)
+
+
+def test_mcts_utilization_boundaries():
+    """Utilization = 0.0 at vc=1 and 1.0 at anchor."""
+    entries = _make_entries([1, 10, 100])
+    anchor = (100, "base")
+    metrics = {
+        "reward_means": {(1, "base"): 0.2, (10, "base"): 0.5, (100, "base"): 0.8},
+    }
+
+    result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
+
+    assert "mcts_utilization" in result
+    mu = result["mcts_utilization"]
+    assert mu[(1, "base")] == pytest.approx(0.0)
+    assert mu[(100, "base")] == pytest.approx(1.0)
+    # Intermediate: (0.5 - 0.2) / (0.8 - 0.2) = 0.5
+    assert mu[(10, "base")] == pytest.approx(0.5)
+
+
+def test_mcts_utilization_no_division_by_zero():
+    """Equal rewards (anchor ≈ vc=1) -> mcts_utilization absent."""
+    entries = _make_entries([1, 10, 100])
+    anchor = (100, "base")
+    metrics = {
+        "reward_means": {(1, "base"): 0.5, (10, "base"): 0.5, (100, "base"): 0.5},
+    }
+
+    result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
+
+    assert "mcts_utilization" not in result
+
+
+def test_scaling_report_empty_inputs():
+    """elo=None, metrics=None -> empty dict."""
+    entries = _make_entries([1, 10, 100])
+    anchor = (100, "base")
+
+    result = compute_scaling_report(entries, anchor, elo=None, metrics=None)
+
+    assert result == {}

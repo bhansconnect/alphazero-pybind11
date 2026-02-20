@@ -1,4 +1,4 @@
-"""Tests for mcts_analysis.py -- statistical functions, calc_temp, imports, PIO gap."""
+"""Tests for mcts_analysis.py -- statistical functions, calc_temp, imports, PIO gap, ECE, VIR."""
 
 import math
 import os
@@ -202,7 +202,7 @@ def test_anchor_selfplay_is_reference(monkeypatch):
     entries = [(10, "base"), (10, "selfplay")]
     anchor = (10, "selfplay")
 
-    metrics = mcts_analysis.run_analysis(
+    metrics, snapshots = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
         use_playout=False, cache_size=0, tree_reuse=False,
     )
@@ -236,7 +236,7 @@ def test_anchor_base_is_reference(monkeypatch):
     entries = [(10, "base"), (10, "selfplay")]
     anchor = (10, "base")
 
-    metrics = mcts_analysis.run_analysis(
+    metrics, snapshots = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
         use_playout=False, cache_size=0, tree_reuse=False,
     )
@@ -322,7 +322,7 @@ def test_pio_metrics_present(monkeypatch):
     entries = [(1, "base"), (10, "base"), (25, "base")]
     anchor = (25, "base")
 
-    metrics = mcts_analysis.run_analysis(
+    metrics, snapshots = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
         use_playout=False, cache_size=0, tree_reuse=False,
     )
@@ -371,7 +371,7 @@ def test_pio_vc1_injected_when_absent(monkeypatch):
     entries = [(10, "base"), (25, "base")]
     anchor = (25, "base")
 
-    metrics = mcts_analysis.run_analysis(
+    metrics, snapshots = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
         use_playout=False, cache_size=0, tree_reuse=False,
     )
@@ -396,7 +396,7 @@ def test_pio_vc1_not_duplicated_when_present(monkeypatch):
     entries = [(1, "base"), (10, "base"), (25, "base")]
     anchor = (25, "base")
 
-    metrics = mcts_analysis.run_analysis(
+    metrics, snapshots = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
         use_playout=False, cache_size=0, tree_reuse=False,
     )
@@ -456,7 +456,7 @@ def test_elo_per_doubling_none_when_no_elo():
     """elo=None -> elo_per_doubling key absent from result."""
     entries = _make_entries([1, 10, 100])
     anchor = (100, "base")
-    metrics = {"top1_means": {(1, "base"): 0.5, (10, "base"): 0.7, (100, "base"): 1.0}}
+    metrics = {"pio_top1_flip_means": {(10, "base"): 0.3, (100, "base"): 0.5}}
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
@@ -464,19 +464,21 @@ def test_elo_per_doubling_none_when_no_elo():
     assert "elo_slope" not in result
 
 
-def test_policy_gap_basic():
-    """Policy gap = 1 - top1_agreement."""
+def test_policy_improvement_basic():
+    """Policy improvement = pio_top1_flip (ascending with VC)."""
     entries = _make_entries([1, 10, 100])
     anchor = (100, "base")
     metrics = {
-        "top1_means": {(1, "base"): 0.3, (10, "base"): 0.7, (100, "base"): 1.0},
+        "pio_top1_flip_means": {(10, "base"): 0.3, (100, "base"): 0.5},
     }
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
-    assert result["policy_gap"][(1, "base")] == pytest.approx(0.7)
-    assert result["policy_gap"][(10, "base")] == pytest.approx(0.3)
-    assert result["policy_gap"][(100, "base")] == pytest.approx(0.0)
+    assert "policy_improvement" in result
+    assert result["policy_improvement"][(10, "base")] == pytest.approx(0.3)
+    assert result["policy_improvement"][(100, "base")] == pytest.approx(0.5)
+    # vc=1 should NOT be present (pio_top1_flip only exists for vc > 1)
+    assert (1, "base") not in result["policy_improvement"]
 
 
 def test_capacity_score_vc1_excluded():
@@ -484,7 +486,7 @@ def test_capacity_score_vc1_excluded():
     entries = _make_entries([1, 10, 100])
     anchor = (100, "base")
     metrics = {
-        "top1_means": {(1, "base"): 0.3, (10, "base"): 0.7, (100, "base"): 1.0},
+        "pio_top1_flip_means": {(10, "base"): 0.3, (100, "base"): 0.5},
         "pio_correction_quality_means": {(10, "base"): 0.8, (100, "base"): 0.9},
     }
 
@@ -496,24 +498,24 @@ def test_capacity_score_vc1_excluded():
 
 
 def test_capacity_score_computation():
-    """Capacity score = policy_gap * correction_quality."""
+    """Capacity score = pio_top1_flip * correction_quality."""
     entries = _make_entries([1, 50])
     anchor = (50, "base")
     metrics = {
-        "top1_means": {(1, "base"): 0.4, (50, "base"): 1.0},
+        "pio_top1_flip_means": {(50, "base"): 0.4},
         "pio_correction_quality_means": {(50, "base"): 0.75},
     }
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
-    # policy_gap for vc=50 = 1 - 1.0 = 0.0, so capacity = 0.0 * 0.75 = 0.0
-    assert result["capacity_score"][(50, "base")] == pytest.approx(0.0)
-
-    # Try with non-zero policy gap
-    metrics["top1_means"][(50, "base")] = 0.6
-    result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
-    # policy_gap = 0.4, correction_quality = 0.75 -> capacity = 0.3
+    # capacity = 0.4 * 0.75 = 0.3
     assert result["capacity_score"][(50, "base")] == pytest.approx(0.3)
+
+    # With different values
+    metrics["pio_top1_flip_means"][(50, "base")] = 0.0
+    result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
+    # 0.0 * 0.75 = 0.0
+    assert result["capacity_score"][(50, "base")] == pytest.approx(0.0)
 
 
 def test_mcts_utilization_boundaries():
@@ -555,3 +557,114 @@ def test_scaling_report_empty_inputs():
     result = compute_scaling_report(entries, anchor, elo=None, metrics=None)
 
     assert result == {}
+
+
+def test_scaling_report_ece_passthrough():
+    """ECE and value accuracy gain are passed through from metrics."""
+    entries = _make_entries([1, 10, 100])
+    anchor = (100, "base")
+    metrics = {
+        "pio_top1_flip_means": {(10, "base"): 0.3, (100, "base"): 0.5},
+        "value_ece": {(1, "base"): 0.15, (10, "base"): 0.10, (100, "base"): 0.05},
+        "pio_value_accuracy_gain_means": {(10, "base"): 0.6, (100, "base"): 0.7},
+    }
+
+    result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
+
+    assert "value_ece" in result
+    assert result["value_ece"][(10, "base")] == pytest.approx(0.10)
+    assert result["value_ece"][(100, "base")] == pytest.approx(0.05)
+    assert "value_accuracy_gain" in result
+    assert result["value_accuracy_gain"][(10, "base")] == pytest.approx(0.6)
+    assert result["value_accuracy_gain"][(100, "base")] == pytest.approx(0.7)
+
+
+# --- Position snapshot tests ---
+
+
+def test_snapshots_returned(monkeypatch):
+    """run_analysis returns position snapshots alongside metrics."""
+    import mcts_analysis
+    monkeypatch.setattr(mcts_analysis, "ANALYSIS_GAMES", 4)
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [(1, "base"), (10, "base")]
+    anchor = (10, "base")
+
+    metrics, snapshots = mcts_analysis.run_analysis(
+        config, Game, network_path=None, entries=entries, anchor=anchor,
+        use_playout=False, cache_size=0, tree_reuse=False,
+    )
+
+    # Snapshots are one per turn (not per sub-move), so <= total_positions
+    assert 0 < len(snapshots) <= metrics["total_positions"]
+
+    # Each snapshot has the required keys
+    snap = snapshots[0]
+    assert "gs" in snap
+    assert "player" in snap
+    assert "values" in snap
+    assert isinstance(snap["player"], int)
+    assert isinstance(snap["values"], dict)
+
+
+# --- Value ECE tests ---
+
+
+def test_value_ece_in_metrics(monkeypatch):
+    """ECE dict present with values in [0, 1] for all entries."""
+    import mcts_analysis
+    monkeypatch.setattr(mcts_analysis, "ANALYSIS_GAMES", 4)
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [(1, "base"), (10, "base"), (25, "base")]
+    anchor = (25, "base")
+
+    metrics, _ = mcts_analysis.run_analysis(
+        config, Game, network_path=None, entries=entries, anchor=anchor,
+        use_playout=False, cache_size=0, tree_reuse=False,
+    )
+
+    assert "value_ece" in metrics
+    value_ece = metrics["value_ece"]
+    assert isinstance(value_ece, dict)
+    # At least some entries should have ECE computed (need >= 10 positions)
+    for entry, ece in value_ece.items():
+        assert 0.0 <= ece <= 1.0, f"ECE for {entry} = {ece} out of [0, 1]"
+
+    # Calibration data should also be present
+    assert "value_calibration_data" in metrics
+
+
+# --- Value Accuracy Gain (VIR) tests ---
+
+
+def test_value_accuracy_gain_in_metrics(monkeypatch):
+    """Value accuracy gain present for vc > 1 entries."""
+    import mcts_analysis
+    monkeypatch.setattr(mcts_analysis, "ANALYSIS_GAMES", 4)
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [(1, "base"), (10, "base"), (25, "base")]
+    anchor = (25, "base")
+
+    metrics, _ = mcts_analysis.run_analysis(
+        config, Game, network_path=None, entries=entries, anchor=anchor,
+        use_playout=False, cache_size=0, tree_reuse=False,
+    )
+
+    assert "pio_value_accuracy_gain_means" in metrics
+    vag_means = metrics["pio_value_accuracy_gain_means"]
+    assert isinstance(vag_means, dict)
+    # vc=1 should NOT be in VIR (it IS the baseline)
+    assert (1, "base") not in vag_means
+    # vc=10 and vc=25 should be present
+    for entry in [(10, "base"), (25, "base")]:
+        assert entry in vag_means, f"{entry} missing from pio_value_accuracy_gain_means"
+        assert 0.0 <= vag_means[entry] <= 1.0

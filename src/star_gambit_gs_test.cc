@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <iostream>
 #include <sstream>
 #include <map>
@@ -303,11 +304,13 @@ TEST(HexCoordinates, HexInBounds) {
   EXPECT_TRUE(hex_in_bounds({0, 4}, TestConfig::BOARD_SIDE));
   EXPECT_TRUE(hex_in_bounds({-4, 0}, TestConfig::BOARD_SIDE));
   EXPECT_TRUE(hex_in_bounds({0, -4}, TestConfig::BOARD_SIDE));
+  EXPECT_TRUE(hex_in_bounds({5, 0}, TestConfig::BOARD_SIDE));
+  EXPECT_TRUE(hex_in_bounds({0, 5}, TestConfig::BOARD_SIDE));
 
   // Out of bounds
-  EXPECT_FALSE(hex_in_bounds({5, 0}, TestConfig::BOARD_SIDE));
-  EXPECT_FALSE(hex_in_bounds({0, 5}, TestConfig::BOARD_SIDE));
-  EXPECT_FALSE(hex_in_bounds({3, 3}, TestConfig::BOARD_SIDE));  // |q+r| = 6 >= 5
+  EXPECT_FALSE(hex_in_bounds({6, 0}, TestConfig::BOARD_SIDE));
+  EXPECT_FALSE(hex_in_bounds({0, 6}, TestConfig::BOARD_SIDE));
+  EXPECT_FALSE(hex_in_bounds({3, 3}, TestConfig::BOARD_SIDE));  // |s| = |-6| = 6 > 5
 }
 
 TEST(HexCoordinates, HexToIndexRoundTrip) {
@@ -363,6 +366,44 @@ TEST(UnitShapes, PortalHexes) {
 
   // Portals should be at opposite ends
   EXPECT_NE(p0_hexes[0], p1_hexes[0]);
+
+  // Verify exact P0 portal coordinates (bottom edge, BOARD_SIDE=5)
+  EXPECT_EQ(p0_hexes[0].q, 0);
+  EXPECT_EQ(p0_hexes[0].r, 5);
+  EXPECT_EQ(p0_hexes[1].q, 1);
+  EXPECT_EQ(p0_hexes[1].r, 4);
+  EXPECT_EQ(p0_hexes[2].q, -1);
+  EXPECT_EQ(p0_hexes[2].r, 5);
+
+  // Verify exact P1 portal coordinates (top edge, BOARD_SIDE=5)
+  EXPECT_EQ(p1_hexes[0].q, 0);
+  EXPECT_EQ(p1_hexes[0].r, -5);
+  EXPECT_EQ(p1_hexes[1].q, -1);
+  EXPECT_EQ(p1_hexes[1].r, -4);
+  EXPECT_EQ(p1_hexes[2].q, 1);
+  EXPECT_EQ(p1_hexes[2].r, -5);
+
+  // All portal hexes must be in bounds
+  for (const auto& h : p0_hexes) {
+    EXPECT_TRUE(hex_in_bounds(h, TestConfig::BOARD_SIDE));
+  }
+  for (const auto& h : p1_hexes) {
+    EXPECT_TRUE(hex_in_bounds(h, TestConfig::BOARD_SIDE));
+  }
+
+  // Portal hexes are on the board edge (at least one coordinate has abs == BOARD_SIDE)
+  for (const auto& h : p0_hexes) {
+    int s = -h.q - h.r;
+    EXPECT_TRUE(std::abs(h.q) == TestConfig::BOARD_SIDE ||
+                std::abs(h.r) == TestConfig::BOARD_SIDE ||
+                std::abs(s) == TestConfig::BOARD_SIDE);
+  }
+  for (const auto& h : p1_hexes) {
+    int s = -h.q - h.r;
+    EXPECT_TRUE(std::abs(h.q) == TestConfig::BOARD_SIDE ||
+                std::abs(h.r) == TestConfig::BOARD_SIDE ||
+                std::abs(s) == TestConfig::BOARD_SIDE);
+  }
 }
 
 // =============================================================================
@@ -594,6 +635,23 @@ TEST(Deployment, DeployHexLocation) {
   EXPECT_TRUE(hex_in_bounds(p0_deploy, TestConfig::BOARD_SIDE));
   EXPECT_TRUE(hex_in_bounds(p1_deploy, TestConfig::BOARD_SIDE));
   EXPECT_NE(p0_deploy, p1_deploy);
+
+  // Verify exact deploy coordinates (BOARD_SIDE=5)
+  EXPECT_EQ(p0_deploy.q, 0);
+  EXPECT_EQ(p0_deploy.r, 4);   // One row inward from edge
+  EXPECT_EQ(p1_deploy.q, 0);
+  EXPECT_EQ(p1_deploy.r, -4);  // One row inward from edge
+
+  // Deploy hexes should NOT be on the boundary row itself
+  int p0_s = -p0_deploy.q - p0_deploy.r;
+  EXPECT_LT(std::abs(p0_deploy.q), TestConfig::BOARD_SIDE);
+  EXPECT_LT(std::abs(p0_deploy.r), TestConfig::BOARD_SIDE);
+  EXPECT_LT(std::abs(p0_s), TestConfig::BOARD_SIDE);
+
+  int p1_s = -p1_deploy.q - p1_deploy.r;
+  EXPECT_LT(std::abs(p1_deploy.q), TestConfig::BOARD_SIDE);
+  EXPECT_LT(std::abs(p1_deploy.r), TestConfig::BOARD_SIDE);
+  EXPECT_LT(std::abs(p1_s), TestConfig::BOARD_SIDE);
 }
 
 TEST(Deployment, ValidDeployFacings) {
@@ -951,7 +1009,7 @@ TEST(MirrorSymmetry, ObservationTransposeCorrect) {
 
 TEST(MirrorSymmetry, PolicySpatialActionsRemapped) {
   // Spatial action at (row, col, slot) should map to
-  // (BOARD_DIM-1-row, row+col-(BOARD_SIDE-1), SLOT_MAP[slot])
+  // (BOARD_DIM-1-row, row+col-BOARD_SIDE, SLOT_MAP[slot])
   TestGame game;
 
   PlayHistory base;
@@ -966,8 +1024,8 @@ TEST(MirrorSymmetry, PolicySpatialActionsRemapped) {
 
   // Set specific spatial actions to verify remapping
   // Action at (row=2, col=5, slot=1) with NW-axis mirror:
-  // new_row = 8 - 2 = 6
-  // new_col = 2 + 5 - 4 = 3
+  // new_row = 10 - 2 = 8
+  // new_col = 2 + 5 - 5 = 2
   // new_slot = SLOT_MAP[1] = 2 (forward-left -> forward-right)
   int test_row = 2, test_col = 5, test_slot = 1;
   int base_action = TestAS::encode_spatial_action(test_row, test_col, test_slot);
@@ -977,8 +1035,8 @@ TEST(MirrorSymmetry, PolicySpatialActionsRemapped) {
   const auto& mirrored = syms[1];
 
   // Expected mirrored action with NW-axis position transform
-  int expected_row = (BOARD_DIM - 1) - test_row;  // 8 - 2 = 6
-  int expected_col = test_row + test_col - (BOARD_SIDE - 1);  // 2 + 5 - 4 = 3
+  int expected_row = (BOARD_DIM - 1) - test_row;  // 10 - 2 = 8
+  int expected_col = test_row + test_col - BOARD_SIDE;  // 2 + 5 - 5 = 2
   int expected_slot = SLOT_MAP[test_slot];  // SLOT_MAP[1] = 2
   int expected_action = TestAS::encode_spatial_action(expected_row, expected_col, expected_slot);
 
@@ -1090,7 +1148,7 @@ TEST(MirrorSymmetry, ValuePreserved) {
 
 TEST(MirrorSymmetry, FacingChannelsRemapped) {
   // Facing channels (9-14) should be remapped via MIRROR_DIRECTION_MAP
-  // Position transform: (row, col) → (BOARD_DIM-1-row, row+col-(BOARD_SIDE-1))
+  // Position transform: (row, col) → (BOARD_DIM-1-row, row+col-BOARD_SIDE)
   TestGame game;
 
   // Deploy a fighter with facing NE (direction 1)
@@ -1119,9 +1177,9 @@ TEST(MirrorSymmetry, FacingChannelsRemapped) {
         float base_val = base.canonical(9 + dir, row, col);
         if (base_val > 0) {
           // This position has a unit facing direction 'dir'
-          // NW-axis mirror position: (row, col) → (BOARD_DIM-1-row, row+col-(BOARD_SIDE-1))
+          // NW-axis mirror position: (row, col) → (BOARD_DIM-1-row, row+col-BOARD_SIDE)
           int new_row = (BOARD_DIM - 1) - row;
-          int new_col = row + col - (BOARD_SIDE - 1);
+          int new_col = row + col - BOARD_SIDE;
           int expected_dir = MIRROR_DIRECTION_MAP[dir];
 
           if (new_col >= 0 && new_col < BOARD_DIM) {
@@ -1340,11 +1398,11 @@ TEST(UnitProperties, UnitSize) {
 // =============================================================================
 
 TEST(ActionSpace, SkirmishActionCounts) {
-  // Skirmish: BOARD_SIDE=5, 9x9 spatial grid
+  // Skirmish: BOARD_SIDE=5, 11x11 spatial grid
   using AS = ActionSpace<SkirmishConfig>;
 
-  // Spatial actions: 9*9*10 = 810
-  EXPECT_EQ(AS::SPATIAL_ACTIONS, 810);
+  // Spatial actions: 11*11*10 = 1210
+  EXPECT_EQ(AS::SPATIAL_ACTIONS, 1210);
 
   // Deploy: 3 types * 6 facings = 18
   EXPECT_EQ(AS::DEPLOY_ACTIONS, 18);
@@ -1352,27 +1410,13 @@ TEST(ActionSpace, SkirmishActionCounts) {
   // End turn: 1
   EXPECT_EQ(AS::END_TURN_ACTIONS, 1);
 
-  // Total: 810 + 18 + 1 = 829
-  EXPECT_EQ(AS::NUM_MOVES, 829);
+  // Total: 1210 + 18 + 1 = 1229
+  EXPECT_EQ(AS::NUM_MOVES, 1229);
 }
 
 TEST(ActionSpace, ClashActionCounts) {
-  // Clash: BOARD_SIDE=5, 9x9 spatial grid (same as Skirmish)
+  // Clash: BOARD_SIDE=5, 11x11 spatial grid (same as Skirmish)
   using AS = ActionSpace<ClashConfig>;
-
-  // Spatial actions: 9*9*10 = 810
-  EXPECT_EQ(AS::SPATIAL_ACTIONS, 810);
-
-  // Deploy: 3 types * 6 facings = 18
-  EXPECT_EQ(AS::DEPLOY_ACTIONS, 18);
-
-  // Total: 810 + 18 + 1 = 829
-  EXPECT_EQ(AS::NUM_MOVES, 829);
-}
-
-TEST(ActionSpace, BattleActionCounts) {
-  // Battle: BOARD_SIDE=6, 11x11 spatial grid
-  using AS = ActionSpace<BattleConfig>;
 
   // Spatial actions: 11*11*10 = 1210
   EXPECT_EQ(AS::SPATIAL_ACTIONS, 1210);
@@ -1384,6 +1428,20 @@ TEST(ActionSpace, BattleActionCounts) {
   EXPECT_EQ(AS::NUM_MOVES, 1229);
 }
 
+TEST(ActionSpace, BattleActionCounts) {
+  // Battle: BOARD_SIDE=6, 13x13 spatial grid
+  using AS = ActionSpace<BattleConfig>;
+
+  // Spatial actions: 13*13*10 = 1690
+  EXPECT_EQ(AS::SPATIAL_ACTIONS, 1690);
+
+  // Deploy: 3 types * 6 facings = 18
+  EXPECT_EQ(AS::DEPLOY_ACTIONS, 18);
+
+  // Total: 1690 + 18 + 1 = 1709
+  EXPECT_EQ(AS::NUM_MOVES, 1709);
+}
+
 TEST(ActionSpace, BoardSizes) {
   // Skirmish & Clash: 5-side board
   EXPECT_EQ(SkirmishConfig::BOARD_SIDE, 5);
@@ -1391,12 +1449,12 @@ TEST(ActionSpace, BoardSizes) {
   // Battle: 6-side board
   EXPECT_EQ(BattleConfig::BOARD_SIDE, 6);
 
-  // Hex counts: 3N² - 3N + 1
-  // 5-side: 3*25 - 15 + 1 = 61
-  EXPECT_EQ(ActionSpace<SkirmishConfig>::NUM_HEXES, 61);
-  EXPECT_EQ(ActionSpace<ClashConfig>::NUM_HEXES, 61);
-  // 6-side: 3*36 - 18 + 1 = 91
-  EXPECT_EQ(ActionSpace<BattleConfig>::NUM_HEXES, 91);
+  // Hex counts: 3N² + 3N + 1
+  // 5-side: 3*25 + 15 + 1 = 91
+  EXPECT_EQ(ActionSpace<SkirmishConfig>::NUM_HEXES, 91);
+  EXPECT_EQ(ActionSpace<ClashConfig>::NUM_HEXES, 91);
+  // 6-side: 3*36 + 18 + 1 = 127
+  EXPECT_EQ(ActionSpace<BattleConfig>::NUM_HEXES, 127);
 }
 
 // =============================================================================
@@ -2283,7 +2341,7 @@ TEST(CharacterizationActionSpace, SpatialEncoding) {
   EXPECT_EQ(AS::END_TURN_OFFSET, AS::DEPLOY_OFFSET + AS::DEPLOY_ACTIONS);
   EXPECT_EQ(AS::END_TURN_ACTIONS, 1);
 
-  // Total actions for Skirmish (9*9*10 + 18 + 1 = 829)
+  // Total actions for Skirmish (11*11*10 + 18 + 1 = 1229)
   EXPECT_EQ(AS::NUM_MOVES, BOARD_DIM * BOARD_DIM * 10 + 18 + 1);
 }
 
@@ -2318,10 +2376,10 @@ TEST(CharacterizationActionSpace, SpatialEncodingFormula) {
 TEST(CharacterizationObservation, CurrentShape) {
   using AS = ActionSpace<SkirmishConfig>;
 
-  // 2D spatial shape: (channels, 2*BOARD_SIDE-1, 2*BOARD_SIDE-1)
-  constexpr int BOARD_DIM = 2 * SkirmishConfig::BOARD_SIDE - 1;
-  EXPECT_EQ(AS::CANONICAL_SHAPE[1], BOARD_DIM) << "Row dimension is 2*BOARD_SIDE-1";
-  EXPECT_EQ(AS::CANONICAL_SHAPE[2], BOARD_DIM) << "Col dimension is 2*BOARD_SIDE-1";
+  // 2D spatial shape: (channels, 2*BOARD_SIDE+1, 2*BOARD_SIDE+1)
+  constexpr int BOARD_DIM = 2 * SkirmishConfig::BOARD_SIDE + 1;
+  EXPECT_EQ(AS::CANONICAL_SHAPE[1], BOARD_DIM) << "Row dimension is 2*BOARD_SIDE+1";
+  EXPECT_EQ(AS::CANONICAL_SHAPE[2], BOARD_DIM) << "Col dimension is 2*BOARD_SIDE+1";
 }
 
 TEST(CharacterizationObservation, CurrentTensorShape) {
@@ -2329,11 +2387,11 @@ TEST(CharacterizationObservation, CurrentTensorShape) {
   auto tensor = game.canonicalized();
 
   using AS = ActionSpace<SkirmishConfig>;
-  constexpr int BOARD_DIM = 2 * SkirmishConfig::BOARD_SIDE - 1;
+  constexpr int BOARD_DIM = 2 * SkirmishConfig::BOARD_SIDE + 1;
 
   EXPECT_EQ(tensor.dimension(0), AS::CANONICAL_SHAPE[0]);
-  EXPECT_EQ(tensor.dimension(1), BOARD_DIM) << "Row dimension is 2*BOARD_SIDE-1";
-  EXPECT_EQ(tensor.dimension(2), BOARD_DIM) << "Col dimension is 2*BOARD_SIDE-1";
+  EXPECT_EQ(tensor.dimension(1), BOARD_DIM) << "Row dimension is 2*BOARD_SIDE+1";
+  EXPECT_EQ(tensor.dimension(2), BOARD_DIM) << "Col dimension is 2*BOARD_SIDE+1";
 }
 
 TEST(CharacterizationObservation, TypePresenceChannels) {

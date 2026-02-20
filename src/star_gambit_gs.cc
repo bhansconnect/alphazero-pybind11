@@ -37,17 +37,17 @@ Hex hex_neighbor(const Hex& h, int direction) {
 
 bool hex_in_bounds(const Hex& h, int board_side) {
   int s = -h.q - h.r;
-  return std::abs(h.q) < board_side && std::abs(h.r) < board_side &&
-         std::abs(s) < board_side;
+  return std::abs(h.q) <= board_side && std::abs(h.r) <= board_side &&
+         std::abs(s) <= board_side;
 }
 
 int hex_to_index(const Hex& h, int board_side) {
   int index = 0;
-  for (int r = -(board_side - 1); r < board_side; ++r) {
-    for (int q = -(board_side - 1); q < board_side; ++q) {
+  for (int r = -board_side; r <= board_side; ++r) {
+    for (int q = -board_side; q <= board_side; ++q) {
       int s = -q - r;
-      if (std::abs(q) < board_side && std::abs(r) < board_side &&
-          std::abs(s) < board_side) {
+      if (std::abs(q) <= board_side && std::abs(r) <= board_side &&
+          std::abs(s) <= board_side) {
         if (q == h.q && r == h.r) {
           return index;
         }
@@ -60,11 +60,11 @@ int hex_to_index(const Hex& h, int board_side) {
 
 Hex index_to_hex(int index, int board_side) {
   int idx = 0;
-  for (int r = -(board_side - 1); r < board_side; ++r) {
-    for (int q = -(board_side - 1); q < board_side; ++q) {
+  for (int r = -board_side; r <= board_side; ++r) {
+    for (int q = -board_side; q <= board_side; ++q) {
       int s = -q - r;
-      if (std::abs(q) < board_side && std::abs(r) < board_side &&
-          std::abs(s) < board_side) {
+      if (std::abs(q) <= board_side && std::abs(r) <= board_side &&
+          std::abs(s) <= board_side) {
         if (idx == index) {
           return {static_cast<int8_t>(q), static_cast<int8_t>(r)};
         }
@@ -76,7 +76,7 @@ Hex index_to_hex(int index, int board_side) {
 }
 
 int compute_num_hexes(int board_side) {
-  return 3 * board_side * board_side - 3 * board_side + 1;
+  return 3 * board_side * board_side + 3 * board_side + 1;
 }
 
 // =============================================================================
@@ -119,7 +119,7 @@ std::vector<Hex> get_unit_hexes(UnitType type, const Hex& anchor, int facing) {
 
 std::vector<Hex> get_portal_hexes(int player, int board_side) {
   std::vector<Hex> hexes;
-  int max_coord = board_side - 1;
+  int max_coord = board_side;
 
   if (player == 0) {
     // Player 0 at BOTTOM (positive r)
@@ -139,7 +139,7 @@ std::vector<Hex> get_portal_hexes(int player, int board_side) {
 }
 
 Hex get_deploy_hex(int player, int board_side) {
-  int max_coord = board_side - 1;
+  int max_coord = board_side;
   if (player == 0) {
     // Player 0 deploys at BOTTOM
     return {0, static_cast<int8_t>(max_coord - 1)};
@@ -1104,8 +1104,8 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
     }
 
     // Convert (row, col) to hex coordinates
-    int q = row - (Config::BOARD_SIDE - 1);
-    int r = col - (Config::BOARD_SIDE - 1);
+    int q = row - Config::BOARD_SIDE;
+    int r = col - Config::BOARD_SIDE;
     Hex anchor = {static_cast<int8_t>(q), static_cast<int8_t>(r)};
 
     // Find unit at this anchor hex
@@ -1671,7 +1671,7 @@ std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
   // The NW-axis mirror reflects across the "forward toward opponent" direction.
   //
   // In hex coordinates: (q, r) → (-q, r+q)
-  // In 2D array: (row, col) → (BOARD_DIM-1-row, row+col-(BOARD_SIDE-1))
+  // In 2D array: (row, col) → (BOARD_DIM-1-row, row+col-BOARD_SIDE)
   // Direction map: NW stays, SE stays, NE↔W, E↔SW
   std::vector<PlayHistory> syms;
   syms.push_back(base);  // Identity
@@ -1686,7 +1686,7 @@ std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
 
   // ========================================
   // Mirror observation tensor
-  // NW-axis mirror: (row, col) → (BOARD_DIM-1-row, row+col-(BOARD_SIDE-1))
+  // NW-axis mirror: (row, col) → (BOARD_DIM-1-row, row+col-BOARD_SIDE)
   // ========================================
   mirrored.canonical.resize(NUM_CHANNELS, BOARD_DIM, BOARD_DIM);
   mirrored.canonical.setZero();
@@ -1696,7 +1696,7 @@ std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
     for (int row = 0; row < BOARD_DIM; ++row) {
       for (int col = 0; col < BOARD_DIM; ++col) {
         int new_row = (BOARD_DIM - 1) - row;
-        int new_col = row + col - (BOARD_SIDE - 1);
+        int new_col = row + col - BOARD_SIDE;
         // Check bounds (some positions may map outside valid range)
         if (new_col >= 0 && new_col < BOARD_DIM) {
           mirrored.canonical(ch, new_row, new_col) = base.canonical(ch, row, col);
@@ -1772,7 +1772,7 @@ std::vector<PlayHistory> StarGambitGS<Config>::symmetries(
 
     // Apply NW-axis mirror position transformation
     int new_row = (BOARD_DIM - 1) - row;
-    int new_col = row + col - (BOARD_SIDE - 1);
+    int new_col = row + col - BOARD_SIDE;
     // Swap L/R slots
     int new_slot = SLOT_MAP[slot];
 
@@ -1881,10 +1881,10 @@ std::string StarGambitGS<Config>::dump() const noexcept {
   // === Helper to get valid hexes for a row ===
   auto get_row_hexes = [](int r, int board_side) {
     std::vector<Hex> row_hexes;
-    for (int q = -(board_side - 1); q < board_side; ++q) {
+    for (int q = -board_side; q <= board_side; ++q) {
       int s = -q - r;
-      if (std::abs(q) < board_side && std::abs(r) < board_side &&
-          std::abs(s) < board_side) {
+      if (std::abs(q) <= board_side && std::abs(r) <= board_side &&
+          std::abs(s) <= board_side) {
         row_hexes.push_back({static_cast<int8_t>(q), static_cast<int8_t>(r)});
       }
     }
@@ -2060,8 +2060,8 @@ std::string StarGambitGS<Config>::dump() const noexcept {
   // === Render the board ===
   out << "\nBoard:\n";
 
-  int min_r = -(Config::BOARD_SIDE - 1);
-  int max_r = Config::BOARD_SIDE - 1;
+  int min_r = -Config::BOARD_SIDE;
+  int max_r = Config::BOARD_SIDE;
 
   for (int r = min_r; r <= max_r; ++r) {
     // Diagonal edge line above this row (between r-1 and r)
@@ -2143,8 +2143,8 @@ FireInfo StarGambitGS<Config>::get_fire_info(uint32_t move) const {
   }
 
   // Convert (row, col) to hex
-  int q = row - (Config::BOARD_SIDE - 1);
-  int r = col - (Config::BOARD_SIDE - 1);
+  int q = row - Config::BOARD_SIDE;
+  int r = col - Config::BOARD_SIDE;
   Hex anchor = {static_cast<int8_t>(q), static_cast<int8_t>(r)};
 
   // Find unit at this anchor hex

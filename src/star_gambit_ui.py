@@ -85,7 +85,7 @@ class GameConfig:
         self.max_cruisers = max_cruisers
         self.max_dreads = max_dreads
         self.board_side = board_side
-        self.board_dim = 2 * board_side - 1
+        self.board_dim = 2 * board_side + 1
 
         # 2D grid-based action space
         self.spatial_actions = self.board_dim * self.board_dim * ACTIONS_PER_POSITION
@@ -119,12 +119,12 @@ class GameConfig:
 
     def hex_to_rowcol(self, q, r):
         """Convert hex (q, r) to grid (row, col)."""
-        bs = self.board_side - 1
+        bs = self.board_side
         return q + bs, r + bs
 
     def rowcol_to_hex(self, row, col):
         """Convert grid (row, col) to hex (q, r)."""
-        bs = self.board_side - 1
+        bs = self.board_side
         return row - bs, col - bs
 
     def canonicalize_spatial(self, row, col, slot):

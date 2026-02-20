@@ -51,6 +51,35 @@ class GameUI:
                 desc = self.format_move(gs, idx)
                 print(f"  {idx:4d}: {desc}")
 
+    def build_action_menu(self, gs, probs, valids, wld=None) -> list[tuple]:
+        """Build structured menu entries for interactive arrow-key selection.
+
+        Returns list of entry tuples:
+            ("header", "text")              - section header, not selectable
+            ("action", action_id, "text")   - selectable action item
+            ("info", "text")                - info line, not selectable
+        """
+        valid_indices = np.where(np.asarray(valids) > 0)[0]
+        entries = []
+
+        if wld is not None:
+            entries.append(("info", f"Win: {wld[0]*100:.1f}%  Loss: {wld[1]*100:.1f}%  Draw: {wld[2]*100:.1f}%"))
+
+        if probs is not None:
+            sorted_idx = valid_indices[np.argsort(probs[valid_indices])[::-1]]
+            entries.append(("header", "Actions:"))
+            for idx in sorted_idx:
+                desc = self.format_move(gs, idx)
+                prob_str = f"  [{probs[idx]*100:5.1f}%]"
+                entries.append(("action", int(idx), f"{desc}{prob_str}"))
+        else:
+            entries.append(("header", "Actions:"))
+            for idx in valid_indices:
+                desc = self.format_move(gs, idx)
+                entries.append(("action", int(idx), desc))
+
+        return entries
+
     def select_variant(self) -> str | None:
         """Optionally offer variant selection at startup. Returns game name or None."""
         return None

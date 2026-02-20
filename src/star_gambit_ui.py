@@ -663,6 +663,62 @@ class StarGambitUI(GameUI):
         """Print Star Gambit help."""
         print_help()
 
+    def build_action_menu(self, gs, probs, valids, wld=None) -> list[tuple]:
+        """Build grouped menu entries for Star Gambit action selection."""
+        cfg = self.cfg
+        entries = []
+
+        if wld is not None:
+            entries.append(("info", f"Win: {wld[0]*100:.1f}%  Loss: {wld[1]*100:.1f}%  Draw: {wld[2]*100:.1f}%"))
+
+        def format_with_prob(action):
+            base = format_action(action, cfg, gs)
+            if probs is not None and probs[action] > 0.001:
+                return f"{base}  [{probs[action]*100:5.1f}%]"
+            elif probs is not None:
+                return f"{base}  [  0.0%]"
+            return base
+
+        # Group valid actions
+        moves = []
+        fires = []
+        deploys = []
+        end_turn = None
+
+        for i in range(cfg.num_moves):
+            if valids[i] != 1:
+                continue
+            if i < cfg.spatial_actions:
+                _, _, slot = cfg.decode_spatial(i)
+                if slot <= 4:
+                    moves.append(i)
+                else:
+                    fires.append(i)
+            elif i < cfg.end_turn_offset:
+                deploys.append(i)
+            else:
+                end_turn = i
+
+        if moves:
+            entries.append(("header", "Moves:"))
+            for action in moves:
+                entries.append(("action", action, format_with_prob(action)))
+
+        if fires:
+            entries.append(("header", "Fire:"))
+            for action in fires:
+                entries.append(("action", action, format_with_prob(action)))
+
+        if deploys:
+            entries.append(("header", "Deploy:"))
+            for action in deploys:
+                entries.append(("action", action, format_with_prob(action)))
+
+        if end_turn is not None:
+            entries.append(("action", end_turn, format_with_prob(end_turn)))
+
+        return entries
+
     def display_actions_menu(self, gs, probs, valids, wld=None, top_n=5):
         """Grouped action menu: Moves / Fire / Deploy / End Turn."""
         print_actions_menu(valids, self.cfg, gs, probs=probs, wld=wld)

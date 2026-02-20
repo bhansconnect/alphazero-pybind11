@@ -67,8 +67,7 @@ struct PlayParams {
   bool history_enabled = false;
   bool self_play = false;
   bool tree_reuse = true;
-  bool add_noise = false;
-  float epsilon = 0.25;
+  float epsilon = 0.0;
   float mcts_root_temp = 1.0;  // test-time default; self-play sets via config
   bool playout_cap_randomization = false;
   uint32_t playout_cap_depth = 25;
@@ -83,6 +82,9 @@ struct PlayParams {
   std::vector<uint8_t> model_groups{};  // player → model_group_index (empty = identity)
   std::vector<std::vector<uint8_t>> seat_perms{};  // list of permutations (empty = no rotation)
   std::vector<std::vector<uint32_t>> seat_visits{};  // per-perm, per-seat visit overrides
+  std::vector<std::vector<float>> seat_epsilon{};          // per-perm, per-seat (empty = use global)
+  std::vector<std::vector<float>> seat_mcts_root_temp{};   // per-perm, per-seat (empty = use global)
+  std::vector<std::vector<uint8_t>> seat_root_fpu_zero{};  // per-perm, per-seat (empty = use global)
 };
 
 // This is a multithread safe game play manager.
@@ -267,8 +269,14 @@ class DLLEXPORT PlayManager {
   std::vector<uint32_t> mcts_visits_;       // per-model-group
   std::vector<EvalType> eval_types_;        // per-model-group
   std::vector<std::vector<uint8_t>> seat_perms_;  // computed from params (never empty)
-  std::vector<std::vector<uint32_t>> seat_visits_;  // per-perm, per-seat visit overrides
+  std::vector<std::vector<uint32_t>> seat_visits_;   // per-perm, per-seat (never empty after init)
+  std::vector<std::vector<float>> seat_epsilon_;     // per-perm, per-seat (never empty after init)
+  std::vector<std::vector<float>> seat_mcts_root_temp_;  // per-perm, per-seat (never empty after init)
+  std::vector<std::vector<uint8_t>> seat_root_fpu_zero_; // per-perm, per-seat (never empty after init)
   std::atomic<bool> eager_{false};          // GPU steal: true = hand off partial batches
+
+  // Create an MCTS instance with per-seat settings for the given permutation and player.
+  [[nodiscard]] MCTS make_mcts(uint8_t perm_index, int player) const;
 
   struct PermScores {
     Vector<float> scores;

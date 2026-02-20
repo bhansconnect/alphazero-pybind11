@@ -498,6 +498,48 @@ def test_seat_visits_binding_roundtrip():
     assert params.seat_visits == sv
 
 
+def test_seat_epsilon_binding_roundtrip():
+    """seat_epsilon can be set and read back on PlayParams."""
+    params = alphazero.PlayParams()
+    assert params.seat_epsilon == []
+
+    se = [[0.25, 0.0], [0.0, 0.25]]
+    params.seat_epsilon = se
+    assert params.seat_epsilon == se
+
+
+def test_seat_mcts_root_temp_binding_roundtrip():
+    """seat_mcts_root_temp can be set and read back on PlayParams."""
+    params = alphazero.PlayParams()
+    assert params.seat_mcts_root_temp == []
+
+    srpt = [[1.25, 1.0], [1.0, 1.25]]
+    params.seat_mcts_root_temp = srpt
+    assert params.seat_mcts_root_temp == srpt
+
+
+def test_seat_root_fpu_zero_binding_roundtrip():
+    """seat_root_fpu_zero can be set and read back on PlayParams."""
+    params = alphazero.PlayParams()
+    assert params.seat_root_fpu_zero == []
+
+    srfz = [[1, 0], [0, 1]]
+    params.seat_root_fpu_zero = srfz
+    assert params.seat_root_fpu_zero == srfz
+
+
+def test_add_noise_removed():
+    """add_noise field no longer exists on PlayParams."""
+    params = alphazero.PlayParams()
+    assert not hasattr(params, 'add_noise')
+
+
+def test_epsilon_default_zero():
+    """epsilon defaults to 0.0 (no noise)."""
+    params = alphazero.PlayParams()
+    assert params.epsilon == 0.0
+
+
 def test_seat_visits_overrides_visit_count():
     """seat_visits causes asymmetric play when same model shares a group.
 
@@ -549,3 +591,27 @@ def test_seat_visits_overrides_visit_count():
         # In perm 1, seat 1 has 200 visits — should win most
         assert perm1_scores[1] > perm1_scores[0], \
             f"Perm 1: seat 1 (200 visits) should beat seat 0 (1 visit): {perm1_scores}"
+
+
+def test_pit_agents_per_seat_overrides():
+    """pit_agents with per-seat epsilon/root_temp/fpu_zero produces valid results."""
+    from tournament import pit_agents
+
+    Game = alphazero.Connect4GS
+    config = TrainConfig(game="connect4")
+    nplayers = Game.NUM_PLAYERS()
+
+    players = [PlayoutPlayer()] * nplayers
+    depths = [10] * nplayers
+
+    win_rates = pit_agents(
+        config, Game, players, depths, bs=8,
+        name="per-seat-test",
+        player_epsilon=[0.25, 0.0],
+        player_mcts_root_temp=[1.25, 1.0],
+        player_root_fpu_zero=[True, False],
+    )
+
+    assert len(win_rates) == nplayers
+    total = sum(win_rates)
+    assert 0.9 < total < 1.1  # win rates should sum to ~1.0

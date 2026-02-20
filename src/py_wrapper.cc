@@ -276,7 +276,6 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("history_enabled", &PlayParams::history_enabled)
       .def_readwrite("tree_reuse", &PlayParams::tree_reuse)
       .def_readwrite("self_play", &PlayParams::self_play)
-      .def_readwrite("add_noise", &PlayParams::add_noise)
       .def_readwrite("epsilon", &PlayParams::epsilon)
       .def_readwrite("fpu_reduction", &PlayParams::fpu_reduction)
       .def_readwrite("root_fpu_zero", &PlayParams::root_fpu_zero)
@@ -289,7 +288,10 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("eval_type", &PlayParams::eval_type)
       .def_readwrite("model_groups", &PlayParams::model_groups)
       .def_readwrite("seat_perms", &PlayParams::seat_perms)
-      .def_readwrite("seat_visits", &PlayParams::seat_visits);
+      .def_readwrite("seat_visits", &PlayParams::seat_visits)
+      .def_readwrite("seat_epsilon", &PlayParams::seat_epsilon)
+      .def_readwrite("seat_mcts_root_temp", &PlayParams::seat_mcts_root_temp)
+      .def_readwrite("seat_root_fpu_zero", &PlayParams::seat_root_fpu_zero);
 
   py::class_<PlayManager>(m, "PlayManager")
       .def(py::init([](const GameState* gs, PlayParams params) {

@@ -18,6 +18,7 @@ if __name__ == "__main__" and sys.platform == "darwin" and os.environ.get("Mallo
 import glob
 import math
 import gc
+from typing import NamedTuple
 import re
 import numpy as np
 import torch
@@ -341,18 +342,35 @@ def interactive_config():
 
 # --- Phase 2: Elo Tournament (Round-Robin) ---
 
-def run_tournament(config, Game, network_path, entries, use_playout=False, cache_size=0):
-    """Run round-robin Elo tournament between visit count configs.
+class MctsSettings(NamedTuple):
+    epsilon: float
+    mcts_root_temp: float
+    root_fpu_zero: bool
 
-    Returns (elo_ratings, win_matrix) indexed by unique numeric visit counts.
+
+def _entry_mcts_settings(entry, config) -> MctsSettings:
+    """Return MctsSettings for a player's entry.
+
+    Selfplay entries get Dirichlet noise, root policy temp, and root FPU zero.
+    Base entries get clean tournament settings (no noise, root_temp=1.0, no root FPU zero).
+    """
+    _, mode = entry
+    if mode == "selfplay":
+        return MctsSettings(0.25, config.mcts_root_temp, True)
+    return MctsSettings(0.0, 1.0, False)
+
+
+def run_tournament(config, Game, network_path, entries, use_playout=False, cache_size=0):
+    """Run round-robin Elo tournament between entry configs.
+
+    Each entry is a (visit_count, mode) tuple where mode is "base" or "selfplay".
+    Returns (elo_ratings, win_matrix) indexed by entries.
     """
     print("=" * 60)
     print("Phase: Elo Tournament (Round-Robin)")
     print("=" * 60)
 
-    # Tournament uses unique numeric VCs (mode doesn't affect tournament play)
-    visit_counts = sorted(set(vc for vc, _ in entries))
-    count = len(visit_counts)
+    count = len(entries)
 
     # Load network (shared across players)
     num_players = Game.NUM_PLAYERS()
@@ -376,16 +394,19 @@ def run_tournament(config, Game, network_path, entries, use_playout=False, cache
     # Create a single shared cache for all matchups (same network throughout)
     shared_cache = create_sharded_cache(Game, cache_size) if cache_size > 0 else None
 
+    # Check if any entry uses selfplay mode (needs per-seat overrides)
+    has_selfplay = any(mode == "selfplay" for _, mode in entries)
+
     total_matchups = count * (count - 1) // 2
     with tqdm.tqdm(total=total_matchups, desc="Tournament") as pbar:
         for i in range(count):
             for j in range(i + 1, count):
-                d1 = visit_counts[i]
-                d2 = visit_counts[j]
+                entry_i = entries[i]
+                entry_j = entries[j]
 
                 players = make_players()
-                depths = [d2] * num_players
-                depths[0] = d1
+                depths = [entry_j[0]] * num_players
+                depths[0] = entry_i[0]
 
                 # All model groups share the same cache (same network)
                 if shared_cache is not None:
@@ -393,12 +414,24 @@ def run_tournament(config, Game, network_path, entries, use_playout=False, cache
                 else:
                     caches = None
 
-                name = f"v{d1}-v{d2}"
+                # Per-player MCTS settings (only needed when selfplay entries exist)
+                kwargs = {}
+                if has_selfplay:
+                    eps_i, rpt_i, rfz_i = _entry_mcts_settings(entry_i, config)
+                    eps_j, rpt_j, rfz_j = _entry_mcts_settings(entry_j, config)
+                    kwargs["player_epsilon"] = [eps_i] + [eps_j] * (num_players - 1)
+                    kwargs["player_mcts_root_temp"] = [rpt_i] + [rpt_j] * (num_players - 1)
+                    kwargs["player_root_fpu_zero"] = [rfz_i] + [rfz_j] * (num_players - 1)
+
+                label_i = entry_label(entry_i)
+                label_j = entry_label(entry_j)
+                name = f"{label_i}-{label_j}"
                 win_rates = pit_agents(
                     config, Game, players, depths,
                     TOURNAMENT_BATCH_SIZE, name,
                     cache_size=0,
                     caches=caches,
+                    **kwargs,
                 )
                 win_matrix[i, j] = win_rates[0]
                 win_matrix[j, i] = win_rates[1]
@@ -414,9 +447,9 @@ def run_tournament(config, Game, network_path, entries, use_playout=False, cache
     elo = calc_elo(elo, win_matrix)
 
     print("\n--- Tournament Results ---")
-    print(f"{'Visits':>8s} {'Elo':>8s}")
-    for i, vc in enumerate(visit_counts):
-        print(f"{vc:>8d} {elo[i]:>8.0f}")
+    print(f"{'Entry':>10s} {'Elo':>8s}")
+    for i, entry in enumerate(entries):
+        print(f"{entry_label(entry):>10s} {elo[i]:>8.0f}")
 
     gc.collect()
     return elo, win_matrix
@@ -1397,25 +1430,25 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
     save_dir = os.path.join("data", "threshold_analysis")
     os.makedirs(save_dir, exist_ok=True)
 
-    # Tournament uses unique numeric VCs
-    tournament_vcs = sorted(set(vc for vc, _ in entries))
-
     fig_num = 1
 
-    # Figure 1: Elo vs visit count
+    # Figure 1: Elo vs visit count (indexed by entries)
     if elo is not None:
         fig, ax = plt.subplots(figsize=(8, 5))
-        ax.plot(tournament_vcs, elo, "o-", markersize=8, linewidth=2)
-        for i, vc in enumerate(tournament_vcs):
-            ax.annotate(f"{elo[i]:.0f}", (vc, elo[i]),
+        sorted_entries = sorted(entries, key=entry_sort_key)
+        sorted_elo = [elo[entries.index(e)] for e in sorted_entries]
+        _plot_by_mode(ax, sorted_entries, sorted_elo)
+        for e, el in zip(sorted_entries, sorted_elo):
+            ax.annotate(f"{el:.0f}", (e[0], el),
                         textcoords="offset points", xytext=(0, 12),
                         ha="center", fontsize=9)
         ax.set_xscale("log")
         ax.set_xlabel("MCTS Visit Count")
         ax.set_ylabel("Elo Rating")
         ax.set_title("Elo vs MCTS Visit Count")
-        ax.set_xticks(tournament_vcs)
-        ax.set_xticklabels([str(v) for v in tournament_vcs])
+        unique_vcs = sorted(set(vc for vc, _ in entries))
+        ax.set_xticks(unique_vcs)
+        ax.set_xticklabels([str(v) for v in unique_vcs])
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
         path = os.path.join(save_dir, "elo_vs_visits.png")
@@ -1798,7 +1831,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
 
     # Save raw data
     save_data = {
-        "visit_counts": np.array(tournament_vcs),
+        "visit_counts": np.array(sorted(set(vc for vc, _ in entries))),
         "entry_labels": np.array([entry_label(e) for e in entries]),
         "anchor": np.array(entry_label(anchor)),
     }

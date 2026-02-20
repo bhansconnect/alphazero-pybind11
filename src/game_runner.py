@@ -1392,7 +1392,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     params.games_to_play = n
     params.mcts_visits = [depth] * Game.NUM_PLAYERS()
     params.history_enabled = True
-    params.add_noise = True
+    params.epsilon = 0.25
     params.playout_cap_randomization = True
     params.playout_cap_depth = fast_depth
     params.playout_cap_percent = 0.75

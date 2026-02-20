@@ -45,8 +45,58 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     seat_perms_ = params_.seat_perms;
   }
 
-  // 5. Copy seat_visits overrides
-  seat_visits_ = params_.seat_visits;
+  // 5. Normalize seat overrides (validate dimensions or fill from globals)
+  const auto num_perms = seat_perms_.size();
+  const auto np = static_cast<size_t>(base_gs_->num_players());
+
+  auto validate_2d = [&](const auto& vec, const char* name) {
+    if (vec.size() != num_perms) {
+      throw std::runtime_error{
+          std::string(name) + " outer dimension must match number of seat permutations"};
+    }
+    for (size_t p = 0; p < num_perms; ++p) {
+      if (vec[p].size() != np) {
+        throw std::runtime_error{
+            std::string(name) + " inner dimension must match number of players"};
+      }
+    }
+  };
+
+  if (params_.seat_visits.empty()) {
+    seat_visits_.resize(num_perms);
+    for (size_t p = 0; p < num_perms; ++p) {
+      seat_visits_[p].resize(np);
+      for (size_t s = 0; s < np; ++s) {
+        seat_visits_[p][s] = mcts_visits_[seat_perms_[p][s]];
+      }
+    }
+  } else {
+    validate_2d(params_.seat_visits, "seat_visits");
+    seat_visits_ = params_.seat_visits;
+  }
+
+  if (params_.seat_epsilon.empty()) {
+    seat_epsilon_.resize(num_perms, std::vector<float>(np, params_.epsilon));
+  } else {
+    validate_2d(params_.seat_epsilon, "seat_epsilon");
+    seat_epsilon_ = params_.seat_epsilon;
+  }
+
+  if (params_.seat_mcts_root_temp.empty()) {
+    seat_mcts_root_temp_.resize(num_perms,
+        std::vector<float>(np, params_.mcts_root_temp));
+  } else {
+    validate_2d(params_.seat_mcts_root_temp, "seat_mcts_root_temp");
+    seat_mcts_root_temp_ = params_.seat_mcts_root_temp;
+  }
+
+  if (params_.seat_root_fpu_zero.empty()) {
+    seat_root_fpu_zero_.resize(num_perms,
+        std::vector<uint8_t>(np, params_.root_fpu_zero ? 1u : 0u));
+  } else {
+    validate_2d(params_.seat_root_fpu_zero, "seat_root_fpu_zero");
+    seat_root_fpu_zero_ = params_.seat_root_fpu_zero;
+  }
 
   // 6. Create per-model-group queues and caches
   for (auto i = 0U; i < num_model_groups_; ++i) {
@@ -76,20 +126,16 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     auto gd = GameData{};
     gd.gs = base_gs_->copy();
     gd.gs->randomize_start();
+    gd.perm_index = i % seat_perms_.size();
+    gd.seat_perm = seat_perms_[gd.perm_index];
     for (auto j = 0; j < base_gs_->num_players(); ++j) {
-      gd.mcts.emplace_back(params_.cpuct, base_gs_->num_players(),
-                           base_gs_->num_moves(), params_.epsilon,
-                           params_.mcts_root_temp, params_.fpu_reduction,
-                           base_gs_->relative_values(), params_.root_fpu_zero,
-                           params_.shaped_dirichlet);
+      gd.mcts.emplace_back(make_mcts(gd.perm_index, j));
     }
     gd.canonical = Tensor<float, 3>{base_gs_->canonicalized()};
     gd.v = Vector<float>{base_gs_->num_players() + 1};
     gd.pi = Vector<float>{base_gs_->num_moves()};
     gd.v.setZero();
     gd.pi.setZero();
-    gd.perm_index = i % seat_perms_.size();
-    gd.seat_perm = seat_perms_[gd.perm_index];
     games_.push_back(std::move(gd));
     awaiting_mcts_.push(i);
   }
@@ -116,11 +162,9 @@ void PlayManager::play() {
       const auto cp = game.gs->current_player();
       auto& mcts = game.mcts[cp];
       mcts.process_result(*game.gs, game.v, game.pi,
-                          params_.add_noise && !game.capped);
-      auto group = game.seat_perm[cp];
+                          seat_epsilon_[game.perm_index][cp] > 0 && !game.capped);
       auto goal_depth = game.capped ? params_.playout_cap_depth
-          : (seat_visits_.empty() ? mcts_visits_[group]
-                                  : seat_visits_[game.perm_index][cp]);
+                                    : seat_visits_[game.perm_index][cp];
       if (mcts.depth() >= goal_depth) {
         // Actually play a move.
         auto temp = params_.start_temp;
@@ -169,7 +213,8 @@ void PlayManager::play() {
               .canonical = Tensor<float, 3>{game.gs->canonicalized()},
               .v = Vector<float>{game.v.size()},
               .pi = Vector<float>{
-                  (params_.policy_target_pruning && params_.add_noise)
+                  (params_.policy_target_pruning &&
+                   seat_epsilon_[game.perm_index][cp] > 0)
                       ? mcts.probs_pruned(1.0)
                       : mcts.probs(1.0)
               },
@@ -255,12 +300,8 @@ void PlayManager::play() {
           // Setup next game.
           game.gs = base_gs_->copy();
           game.gs->randomize_start();
-          for (auto& m : game.mcts) {
-            m = MCTS{params_.cpuct,          base_gs_->num_players(),
-                     base_gs_->num_moves(),  params_.epsilon,
-                     params_.mcts_root_temp, params_.fpu_reduction,
-                     base_gs_->relative_values(), params_.root_fpu_zero,
-                     params_.shaped_dirichlet};
+          for (auto j = 0; j < base_gs_->num_players(); ++j) {
+            game.mcts[j] = make_mcts(game.perm_index, j);
           }
         }
         // A move has been played, update playout cap.
@@ -268,19 +309,16 @@ void PlayManager::play() {
                       (dist(re) < params_.playout_cap_percent);
         // If not reusing the mcts tree, reset mcts.
         if (!params_.tree_reuse) {
-          for (auto& m : game.mcts) {
-            m = MCTS{params_.cpuct,          base_gs_->num_players(),
-                     base_gs_->num_moves(),  params_.epsilon,
-                     params_.mcts_root_temp, params_.fpu_reduction,
-                     base_gs_->relative_values(), params_.root_fpu_zero,
-                     params_.shaped_dirichlet};
+          for (auto j = 0; j < base_gs_->num_players(); ++j) {
+            game.mcts[j] = make_mcts(game.perm_index, j);
           }
         } else {
           // Re-apply root policy temperature and noise on the reused subtree.
-          auto& next_mcts = game.mcts[game.gs->current_player()];
+          auto next_cp = game.gs->current_player();
+          auto& next_mcts = game.mcts[next_cp];
           if (next_mcts.root_n() > 0) {
             next_mcts.apply_root_policy_temp();
-            if (params_.add_noise && !game.capped) {
+            if (seat_epsilon_[game.perm_index][next_cp] > 0 && !game.capped) {
               next_mcts.add_root_noise();
             }
           }
@@ -319,6 +357,18 @@ void PlayManager::play() {
     }
     awaiting_inference_[group]->push(i.value());
   }
+}
+
+MCTS PlayManager::make_mcts(uint8_t perm_index, int player) const {
+  return MCTS{params_.cpuct,
+              base_gs_->num_players(),
+              base_gs_->num_moves(),
+              seat_epsilon_[perm_index][player],
+              seat_mcts_root_temp_[perm_index][player],
+              params_.fpu_reduction,
+              base_gs_->relative_values(),
+              static_cast<bool>(seat_root_fpu_zero_[perm_index][player]),
+              params_.shaped_dirichlet};
 }
 
 void PlayManager::update_inferences(const uint8_t group,

@@ -70,15 +70,18 @@ def batch_top_k_agreement(p, q, k):
 
 def batch_kl_divergence(p, q, epsilon=1e-10):
     """Mean KL(p || q) across samples. Epsilon-smooth q."""
-    # Mask where p > 0, compute element-wise KL, sum per sample
+    # safe_p avoids np.log(0) warnings; masked out by np.where anyway
+    safe_p = np.where(p > 0, p, 1.0)
     safe_q = q + epsilon
-    kl = np.where(p > 0, p * np.log(p / safe_q), 0.0)
+    kl = np.where(p > 0, p * np.log(safe_p / safe_q), 0.0)
     return float(np.mean(np.sum(kl, axis=1)))
 
 
 def batch_policy_entropy(p, epsilon=1e-10):
     """Mean Shannon entropy across samples."""
-    ent = np.where(p > 0, -p * np.log(p), 0.0)
+    # safe_p avoids np.log(0) warnings; masked out by np.where anyway
+    safe_p = np.where(p > 0, p, 1.0)
+    ent = np.where(p > 0, -p * np.log(safe_p), 0.0)
     return float(np.mean(np.sum(ent, axis=1)))
 
 

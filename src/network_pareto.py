@@ -15,6 +15,7 @@ import math
 import os
 import random
 import re
+import readline  # noqa: F401 - Enable line editing in input()
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -108,6 +109,21 @@ def parse_config_string(s):
     return s, kwargs
 
 
+def _expand_optional_group(grp):
+    """Expand an optional group with comma-separated values.
+
+    '-k5,7'    -> ['', '-k5', '-k7']
+    '-hc32,64' -> ['', '-hc32', '-hc64']
+    '-resnet'  -> ['', '-resnet']  (no comma values, unchanged)
+    """
+    m = re.match(r'^(-[a-zA-Z]+)([\d,]+)$', grp)
+    if m and ',' in m.group(2):
+        prefix = m.group(1)
+        values = m.group(2).split(',')
+        return [""] + [f"{prefix}{v}" for v in values]
+    return ["", grp]
+
+
 def expand_config_string(s):
     """Expand comma-separated values and optional groups into a cross-product of configs.
 
@@ -119,6 +135,10 @@ def expand_config_string(s):
     Parenthesized groups are optional (with and without):
         '4d16,32c(-hc64)' -> 4 configs: 4d16c, 4d32c, 4d16c-hc64, 4d32c-hc64
         '4d16c(-resnet)'  -> 2 configs: 4d16c, 4d16c-resnet
+
+    Comma-separated values inside optional groups expand independently:
+        '4d16c(-k5,7)'    -> 3 configs: 4d16c, 4d16c-k5, 4d16c-k7
+        '4d16c(-hc32,64)' -> 3 configs: 4d16c, 4d16c-hc32, 4d16c-hc64
     """
     s = s.strip()
 
@@ -178,9 +198,9 @@ def expand_config_string(s):
     if heads:
         lists.append(heads)
 
-    # Optional groups: each adds [("", group_str)] to the product
+    # Optional groups: each adds variants to the product
     for grp in optional_groups:
-        lists.append(["", grp])
+        lists.append(_expand_optional_group(grp))
 
     results = []
     for combo in itertools.product(*lists):
@@ -279,15 +299,41 @@ def _load_iter_range(hist_dir, iter_range, max_samples, num_workers):
     return all_c, all_v, all_pi
 
 
-def load_data(source_dir, max_samples, num_workers, config=None,
-              val_iters=0, val_max_samples=0):
-    """Load training data with optional validation split.
+def _load_val_tail(hist_dir, window_start, window_end, val_samples, num_workers):
+    """Greedily load val_samples from the most recent iterations.
 
-    When val_iters > 0, the most recent val_iters iterations are held out for
-    validation, and the remaining earlier iterations form the training set.
+    Starts at window_end and works backwards until enough samples are
+    collected or the window is exhausted.  Returns (c, v, pi) or Nones.
+    """
+    acc_c, acc_v, acc_pi = [], [], []
+    remaining = val_samples
+
+    for it in range(window_end, window_start - 1, -1):
+        c, v, pi = _load_iter_range(hist_dir, range(it, it + 1), remaining, num_workers)
+        if c is None:
+            continue
+        acc_c.append(c); acc_v.append(v); acc_pi.append(pi)
+        remaining -= c.shape[0]
+        if remaining <= 0:
+            break
+
+    if not acc_c:
+        return None, None, None
+
+    return torch.cat(acc_c).float(), torch.cat(acc_v).float(), torch.cat(acc_pi).float()
+
+
+def load_data(source_dir, max_samples, num_workers, config=None,
+              val_samples=0):
+    """Load training data with optional validation set.
+
+    Training always uses the full window.  When val_samples > 0, validation
+    samples are greedily loaded from the most recent iterations (the same
+    data may overlap with training -- this is intentional so training sees
+    the full window).
 
     Returns (config, train_c, train_v, train_pi, val_c, val_v, val_pi).
-    Val tensors are None when val_iters=0.
+    Val tensors are None when val_samples=0.
     """
     if config is None:
         config = load_config_only(source_dir)
@@ -305,20 +351,9 @@ def load_data(source_dir, max_samples, num_workers, config=None,
     window_start = max(0, iteration - hist_size)
     window_end = iteration  # inclusive
 
-    # Clamp val_iters
-    val_iters = min(val_iters, hist_size // 2)
+    train_range = range(window_start, window_end + 1)
 
-    if val_iters > 0:
-        val_start = window_end - val_iters + 1
-        train_range = range(window_start, val_start)
-        val_range = range(val_start, window_end + 1)
-        print(f"Train iters: {train_range.start}-{train_range.stop - 1}, "
-              f"Val iters: {val_range.start}-{val_range.stop - 1}")
-    else:
-        train_range = range(window_start, window_end + 1)
-        val_range = None
-
-    # Load training data
+    # Load training data (full window)
     print(f"Loading training data...")
     train_c, train_v, train_pi = _load_iter_range(
         hist_dir, train_range, max_samples, num_workers)
@@ -327,16 +362,16 @@ def load_data(source_dir, max_samples, num_workers, config=None,
         sys.exit(1)
     print(f"Train: {train_c.shape[0]:,} samples (iters {train_range.start}-{train_range.stop - 1})")
 
-    # Load validation data
+    # Load validation data (greedy from tail)
     val_c = val_v = val_pi = None
-    if val_range is not None:
-        print(f"Loading validation data...")
-        val_c, val_v, val_pi = _load_iter_range(
-            hist_dir, val_range, val_max_samples, num_workers)
+    if val_samples > 0:
+        print(f"Loading validation data (up to {val_samples:,} from tail)...")
+        val_c, val_v, val_pi = _load_val_tail(
+            hist_dir, window_start, window_end, val_samples, num_workers)
         if val_c is not None:
-            print(f"Val: {val_c.shape[0]:,} samples (iters {val_range.start}-{val_range.stop - 1})")
+            print(f"Val: {val_c.shape[0]:,} samples")
         else:
-            print(f"Warning: no validation data found in val iters, using train-only mode")
+            print(f"Warning: no validation data found, using train-only mode")
 
     return config, train_c, train_v, train_pi, val_c, val_v, val_pi
 
@@ -556,6 +591,7 @@ def collect_configs(config, args):
     print("Add configs (empty or 'go' to start):")
 
     configs = []
+    seen_labels = set()
     while True:
         try:
             line = input("> ").strip()
@@ -568,6 +604,9 @@ def collect_configs(config, args):
         for single in expanded:
             try:
                 label, kwargs = parse_config_string(single)
+                if label in seen_labels:
+                    print(f"  Skipped duplicate: {label}")
+                    continue
                 kwargs['star_gambit_spatial'] = config.star_gambit_spatial
                 kwargs['head_pool'] = config.head_pool
                 nn_args = NNArgs(lr=args.lr, cv=config.cv, **kwargs)
@@ -576,6 +615,7 @@ def collect_configs(config, args):
                 del tmp_model
                 print(f"  Added: {label}  ({params:,} params)")
                 configs.append((label, nn_args))
+                seen_labels.add(label)
             except ValueError as e:
                 print(f"  Error: {e}")
             except Exception as e:
@@ -854,6 +894,100 @@ def save_results_npz(results, save_dir):
     print(f"Saved: {path}")
 
 
+def _parse_selection_input(text, n):
+    """Parse user selection like '1,3' or '1-3' or 'all'. Returns list of 0-based indices."""
+    text = text.strip().lower()
+    if text == 'all':
+        return list(range(n))
+    indices = set()
+    for part in text.split(','):
+        part = part.strip()
+        if '-' in part:
+            lo, hi = part.split('-', 1)
+            lo, hi = int(lo.strip()), int(hi.strip())
+            indices.update(range(lo - 1, hi))  # 1-based to 0-based
+        else:
+            indices.add(int(part) - 1)
+    return sorted(i for i in indices if 0 <= i < n)
+
+
+def select_configs_for_training(configs, infer_results, steps, batch_size, val_samples):
+    """Show time estimates and let user select which configs to train.
+
+    Returns filtered (configs, infer_results).
+    """
+    if not configs:
+        return configs, infer_results
+
+    # Estimate training time: forward+backward+optim ≈ 3x forward
+    estimates = []
+    for label, nn_args in configs:
+        params, infer_ms = infer_results[label]
+        train_min = steps * infer_ms * 3 / 1000 / 60
+        val_min = 0
+        if val_samples > 0:
+            val_batches = math.ceil(val_samples / batch_size)
+            val_min = val_batches * infer_ms / 1000 / 60
+        total_min = train_min + val_min
+        estimates.append((label, params, infer_ms, total_min))
+
+    total_all = sum(e[3] for e in estimates)
+    print(f"\nEstimated total training time: {total_all:.1f}m")
+
+    # Try simple-term-menu for interactive selection
+    try:
+        from simple_term_menu import TerminalMenu
+
+        entries = []
+        for label, params, infer_ms, total_min in estimates:
+            entries.append(f"{label:<22} ({params:>10,} params, {infer_ms:.1f}ms, ~{total_min:.1f}m)")
+
+        menu = TerminalMenu(
+            entries,
+            title="\nSelect configs to train (space=toggle, enter=confirm):",
+            multi_select=True,
+            show_multi_select_hint=True,
+            preselected_entries=list(range(len(entries))),
+        )
+        sel = menu.show()
+
+        if sel is None:
+            return [], infer_results
+
+        if isinstance(sel, int):
+            selected = [sel]
+        else:
+            selected = list(sel)
+
+        if not selected:
+            return [], infer_results
+
+    except (ImportError, Exception):
+        # Fallback: text-based selection
+        print("\nConfigs to train:")
+        for i, (label, params, infer_ms, total_min) in enumerate(estimates, 1):
+            print(f"  {i}. {label:<22} ({params:>10,} params, {infer_ms:.1f}ms, ~{total_min:.1f}m)")
+        print(f"\nSelect configs (e.g. '1,3' or '1-3' or 'all', default=all):")
+        try:
+            text = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return [], infer_results
+        if not text or text.lower() == 'all':
+            selected = list(range(len(configs)))
+        else:
+            selected = _parse_selection_input(text, len(configs))
+            if not selected:
+                return [], infer_results
+
+    # Filter configs and infer_results
+    new_configs = [configs[i] for i in selected]
+    new_infer = {label: infer_results[label] for label, _ in new_configs}
+    selected_labels = [configs[i][0] for i in selected]
+    print(f"\nSelected {len(new_configs)} configs: {', '.join(selected_labels)}")
+    return new_configs, new_infer
+
+
 def main():
     parser = argparse.ArgumentParser(description="Network capacity fitting benchmark")
     parser.add_argument("source_dir", help="Experiment directory with training data")
@@ -862,8 +996,7 @@ def main():
     parser.add_argument("--lr", type=float, default=0.01, help="Initial learning rate (default: 0.01)")
     parser.add_argument("--max-samples", type=int, default=200_000, help="Max samples to load (default: 200000)")
     parser.add_argument("--log-interval", type=int, default=100, help="Log loss every N steps (default: 100)")
-    parser.add_argument("--val-iters", type=int, default=5, help="Most-recent iterations for validation (default: 5)")
-    parser.add_argument("--val-max-samples", type=int, default=50_000, help="Cap validation samples (default: 50000)")
+    parser.add_argument("--val-samples", type=int, default=20_000, help="Validation samples from window tail (0=disable, default: 20000)")
     parser.add_argument("--no-charts", action="store_true", help="Disable chart generation")
     args = parser.parse_args()
 
@@ -904,12 +1037,19 @@ def main():
         infer_results[label] = (params, infer_ms)
         print(f"  {label:<22} {params:>10,} params  {infer_ms:>7.1f} ms")
 
+    # 3b. Interactive selection with time estimates
+    configs, infer_results = select_configs_for_training(
+        configs, infer_results, args.steps, args.batch_size, args.val_samples)
+    if not configs:
+        print("No configs selected. Exiting.")
+        sys.exit(0)
+
     # 4. Load training data with optional val split
     print()
     num_workers = os.cpu_count() or 4
     config, train_c, train_v, train_pi, val_c, val_v, val_pi = load_data(
         args.source_dir, args.max_samples, num_workers, config=config,
-        val_iters=args.val_iters, val_max_samples=args.val_max_samples,
+        val_samples=args.val_samples,
     )
     n_train = train_c.shape[0]
     has_val = val_c is not None

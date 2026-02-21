@@ -33,6 +33,10 @@ from game_runner import (
 )
 from cache_utils import create_cache, create_sharded_cache, print_cache_stats, print_sharded_cache_stats
 from tournament import pit_agents, calc_elo
+from policy_metrics import (
+    jensen_shannon_divergence, total_variation, hellinger_distance,
+    top_k_agreement, kl_divergence, policy_entropy,
+)
 
 np.set_printoptions(precision=3, suppress=True)
 
@@ -77,46 +81,6 @@ def calc_temp_selfplay(config, turn):
     temp *= math.exp(-ld * turn)
     temp += config.final_temp
     return temp
-
-
-def jensen_shannon_divergence(p, q):
-    """JSD(p, q). Bounded [0, ln(2)]."""
-    m = 0.5 * (p + q)
-    jsd = 0.0
-    mask_p = p > 0
-    jsd += 0.5 * np.sum(p[mask_p] * np.log(p[mask_p] / m[mask_p]))
-    mask_q = q > 0
-    jsd += 0.5 * np.sum(q[mask_q] * np.log(q[mask_q] / m[mask_q]))
-    return float(jsd)
-
-
-def total_variation(p, q):
-    """TV(p, q). Bounded [0, 1]."""
-    return 0.5 * float(np.sum(np.abs(p - q)))
-
-
-def hellinger_distance(p, q):
-    """Hellinger distance. Bounded [0, 1]."""
-    return float(np.sqrt(0.5 * np.sum((np.sqrt(p) - np.sqrt(q))**2)))
-
-
-def top_k_agreement(p, q, k):
-    """Fraction of top-k moves by p that appear in top-k of q."""
-    top_p = set(np.argsort(p)[-k:])
-    top_q = set(np.argsort(q)[-k:])
-    return len(top_p & top_q) / k
-
-
-def kl_divergence(p, q, epsilon=1e-10):
-    """KL(p || q). Skip terms where p=0. Epsilon-smooth q to avoid log(0)."""
-    mask = p > 0
-    return float(np.sum(p[mask] * np.log(p[mask] / (q[mask] + epsilon))))
-
-
-def policy_entropy(p, epsilon=1e-10):
-    """Shannon entropy H(p) = -sum(p * log(p)). Skip zeros."""
-    mask = p > 0
-    return float(-np.sum(p[mask] * np.log(p[mask])))
 
 
 # --- Game discovery ---
@@ -194,7 +158,7 @@ def select_checkpoint(checkpoints):
 # --- Phase 1: Interactive Configuration ---
 
 def interactive_config():
-    """Interactive configuration. Returns (config, Game, network_path, entries, anchor, phases, use_playout, cache_size, tree_reuse)."""
+    """Interactive configuration. Returns (config, Game, network_path, entries, anchor, phases, use_playout, cache_size, tree_reuse, experiment_dir)."""
     print("=== MCTS Threshold Analysis ===\n")
 
     # Game selection from registry
@@ -337,7 +301,14 @@ def interactive_config():
     tree_reuse = tree_reuse_input != 'n'
     print(f"  -> tree_reuse={tree_reuse}\n")
 
-    return config, Game, network_path, entries, anchor, phases, use_playout, cache_size, tree_reuse
+    # Derive experiment directory from network_path for saving analysis output
+    if network_path is not None:
+        # network_path is data/{game}/{experiment}/checkpoint/{iter}-{name}.pt
+        experiment_dir = os.path.dirname(os.path.dirname(network_path))
+    else:
+        experiment_dir = os.path.join("data", game_name)
+
+    return config, Game, network_path, entries, anchor, phases, use_playout, cache_size, tree_reuse, experiment_dir
 
 
 # --- Phase 2: Elo Tournament (Round-Robin) ---
@@ -1195,8 +1166,8 @@ def compute_scaling_report(entries, anchor, elo=None, metrics=None):
     """Compute derived scaling readiness metrics from raw analysis data.
 
     Returns dict with:
-      elo_per_doubling: list of (vc1, vc2, elo_per_2x) triples
-      elo_slope: float, elo_r2: float (log-linear fit)
+      elo_per_doubling: list of (vc1, vc2, elo_per_2x, mode) quads
+      elo_regressions: {mode: (slope, r2)}
       policy_improvement: {entry: float}  (pio_top1_flip, ascending with VC)
       capacity_score: {entry: float}  (vc > 1 only, pio_top1_flip * correction_quality)
       mcts_utilization: {entry: float}
@@ -1207,29 +1178,38 @@ def compute_scaling_report(entries, anchor, elo=None, metrics=None):
         return {}
 
     result = {}
-    tournament_vcs = sorted(set(vc for vc, _ in entries))
 
-    # 1. Elo per Doubling
-    if elo is not None and len(tournament_vcs) >= 2:
+    # 1. Elo per Doubling — computed separately per mode to avoid index mismatch
+    if elo is not None:
+        modes_present = sorted(set(mode for _, mode in entries))
         elo_per_doubling = []
-        for i in range(len(tournament_vcs) - 1):
-            vc1, vc2 = tournament_vcs[i], tournament_vcs[i + 1]
-            elo1, elo2 = elo[i], elo[i + 1]
-            log2_ratio = math.log2(vc2 / vc1)
-            if log2_ratio > 0:
-                elo_per_doubling.append((vc1, vc2, (elo2 - elo1) / log2_ratio))
-        result["elo_per_doubling"] = elo_per_doubling
+        regressions = {}
 
-        # Log-linear regression: Elo = slope * log2(vc) + intercept
-        log2_vcs = np.array([math.log2(vc) for vc in tournament_vcs])
-        elo_arr = np.array(elo[:len(tournament_vcs)])
-        if len(log2_vcs) >= 2 and np.std(log2_vcs) > 1e-9:
-            slope, intercept = np.polyfit(log2_vcs, elo_arr, 1)
-            ss_res = np.sum((elo_arr - (slope * log2_vcs + intercept)) ** 2)
-            ss_tot = np.sum((elo_arr - np.mean(elo_arr)) ** 2)
-            r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-9 else 0.0
-            result["elo_slope"] = float(slope)
-            result["elo_r2"] = float(r2)
+        for mode in modes_present:
+            mode_entries = [(vc, m) for vc, m in entries if m == mode]
+            mode_vcs = sorted(vc for vc, _ in mode_entries)
+            mode_elos = [elo[entries.index(e)] for e in sorted(mode_entries, key=lambda e: e[0])]
+
+            for i in range(len(mode_vcs) - 1):
+                vc1, vc2 = mode_vcs[i], mode_vcs[i + 1]
+                log2_ratio = math.log2(vc2 / vc1)
+                if log2_ratio > 0:
+                    elo_per_doubling.append((vc1, vc2, (mode_elos[i + 1] - mode_elos[i]) / log2_ratio, mode))
+
+            if len(mode_vcs) >= 2:
+                log2_vcs = np.array([math.log2(vc) for vc in mode_vcs])
+                elo_arr = np.array(mode_elos)
+                if np.std(log2_vcs) > 1e-9:
+                    slope, intercept = np.polyfit(log2_vcs, elo_arr, 1)
+                    ss_res = np.sum((elo_arr - (slope * log2_vcs + intercept)) ** 2)
+                    ss_tot = np.sum((elo_arr - np.mean(elo_arr)) ** 2)
+                    r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-9 else 0.0
+                    regressions[mode] = (float(slope), float(r2))
+
+        if elo_per_doubling:
+            result["elo_per_doubling"] = elo_per_doubling
+        if regressions:
+            result["elo_regressions"] = regressions
 
     if metrics is None:
         return result
@@ -1291,10 +1271,13 @@ def print_scaling_report(scaling, entries, anchor):
     # Elo per doubling
     if "elo_per_doubling" in scaling:
         print(f"\n  Elo per Doubling:")
-        for vc1, vc2, epd in scaling["elo_per_doubling"]:
-            print(f"    {vc1:>6d} -> {vc2:<6d}  {epd:>8.1f} Elo/2x")
-        if "elo_slope" in scaling:
-            print(f"    Log-linear fit: slope={scaling['elo_slope']:.1f} Elo/2x, R2={scaling['elo_r2']:.3f}")
+        for vc1, vc2, epd, mode in scaling["elo_per_doubling"]:
+            suffix = "sp" if mode == "selfplay" else ""
+            print(f"    {vc1}{suffix:>3s} -> {vc2}{suffix:<3s}  {epd:>8.1f} Elo/2x")
+        if "elo_regressions" in scaling:
+            for mode, (slope, r2) in scaling["elo_regressions"].items():
+                label = f" ({mode})" if len(scaling["elo_regressions"]) > 1 else ""
+                print(f"    Log-linear fit{label}: slope={slope:.1f} Elo/2x, R2={r2:.3f}")
 
     # Per-entry table
     has_pi = "policy_improvement" in scaling
@@ -1444,7 +1427,7 @@ def _set_entry_xticks(ax, sorted_entries):
     ax.set_xticklabels([str(v) for v in unique_vcs])
 
 
-def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None):
+def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None, save_dir=None):
     """Generate plots and save raw data."""
     if not _has_display():
         import matplotlib
@@ -1468,7 +1451,8 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         if has_mixed:
             ax.legend(fontsize=8)
 
-    save_dir = os.path.join("data", "threshold_analysis")
+    if save_dir is None:
+        save_dir = os.path.join("data", "mcts_analysis")
     os.makedirs(save_dir, exist_ok=True)
 
     fig_num = 1
@@ -1782,18 +1766,24 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
         # Top-left: Elo per Doubling (bar chart)
         if "elo_per_doubling" in scaling:
             epd = scaling["elo_per_doubling"]
-            bar_labels = [f"{vc1}->{vc2}" for vc1, vc2, _ in epd]
-            bar_vals = [v for _, _, v in epd]
+            mode_colors = {"base": "tab:blue", "selfplay": "tab:orange"}
+            bar_labels = []
+            bar_vals = []
+            bar_colors = []
+            for vc1, vc2, val, mode in epd:
+                suffix = "sp" if mode == "selfplay" else ""
+                bar_labels.append(f"{vc1}{suffix}->{vc2}{suffix}")
+                bar_vals.append(val)
+                bar_colors.append(mode_colors.get(mode, "tab:blue"))
             positions = range(len(bar_labels))
-            axes[0, 0].bar(positions, bar_vals, color="tab:blue", edgecolor="gray",
+            axes[0, 0].bar(positions, bar_vals, color=bar_colors, edgecolor="gray",
                            linewidth=0.8, zorder=2)
-            if "elo_slope" in scaling:
-                axes[0, 0].axhline(y=scaling["elo_slope"], color="red",
-                                   linestyle="--", linewidth=1.5, zorder=3)
-                axes[0, 0].annotate(f"R2={scaling['elo_r2']:.3f}",
-                                    xy=(0.95, 0.95), xycoords="axes fraction",
-                                    ha="right", va="top", fontsize=9,
-                                    bbox=dict(boxstyle="round,pad=0.3", facecolor="wheat", alpha=0.8))
+            if "elo_regressions" in scaling:
+                for mode, (slope, r2) in scaling["elo_regressions"].items():
+                    label = f"{mode} R2={r2:.3f}" if len(scaling["elo_regressions"]) > 1 else f"R2={r2:.3f}"
+                    axes[0, 0].axhline(y=slope, color=mode_colors.get(mode, "red"),
+                                       linestyle="--", linewidth=1.5, zorder=3, label=label)
+                axes[0, 0].legend(fontsize=8)
             axes[0, 0].set_xticks(list(positions))
             axes[0, 0].set_xticklabels(bar_labels, rotation=45, ha="right")
             axes[0, 0].set_ylabel("Elo per Doubling")
@@ -1931,12 +1921,15 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
     if scaling:
         if "elo_per_doubling" in scaling:
             epd = scaling["elo_per_doubling"]
-            save_data["scaling_elo_per_doubling_vc1"] = np.array([vc1 for vc1, _, _ in epd])
-            save_data["scaling_elo_per_doubling_vc2"] = np.array([vc2 for _, vc2, _ in epd])
-            save_data["scaling_elo_per_doubling_values"] = np.array([v for _, _, v in epd])
-        if "elo_slope" in scaling:
-            save_data["scaling_elo_slope"] = np.array(scaling["elo_slope"])
-            save_data["scaling_elo_r2"] = np.array(scaling["elo_r2"])
+            save_data["scaling_elo_per_doubling_vc1"] = np.array([vc1 for vc1, _, _, _ in epd])
+            save_data["scaling_elo_per_doubling_vc2"] = np.array([vc2 for _, vc2, _, _ in epd])
+            save_data["scaling_elo_per_doubling_values"] = np.array([v for _, _, v, _ in epd])
+            save_data["scaling_elo_per_doubling_modes"] = np.array([m for _, _, _, m in epd])
+        if "elo_regressions" in scaling:
+            for mode, (slope, r2) in scaling["elo_regressions"].items():
+                suffix = f"_{mode}" if len(scaling["elo_regressions"]) > 1 else ""
+                save_data[f"scaling_elo_slope{suffix}"] = np.array(slope)
+                save_data[f"scaling_elo_r2{suffix}"] = np.array(r2)
         for key in ["policy_improvement", "capacity_score", "mcts_utilization",
                      "value_ece", "value_accuracy_gain"]:
             if key in scaling:
@@ -1960,7 +1953,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None)
 
 def main():
     (config, Game, network_path, entries, anchor, phases, use_playout,
-     cache_size, tree_reuse) = interactive_config()
+     cache_size, tree_reuse, experiment_dir) = interactive_config()
 
     elo = None
     win_matrix = None
@@ -1976,8 +1969,9 @@ def main():
             cache_size=cache_size, tree_reuse=tree_reuse,
         )
 
+    save_dir = os.path.join(experiment_dir, "analysis")
     visualize_and_save(entries, anchor, elo=elo, win_matrix=win_matrix,
-                       metrics=metrics)
+                       metrics=metrics, save_dir=save_dir)
 
     print("\nDone!")
 

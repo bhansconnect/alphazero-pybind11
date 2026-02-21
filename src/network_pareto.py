@@ -11,7 +11,6 @@ Usage:
 
 import argparse
 import itertools
-import math
 import os
 import random
 import re
@@ -30,7 +29,6 @@ from game_runner import glob_file_triples, _load_and_select, calc_hist_size
 from neural_net import NNArgs, NNWrapper, NNArch, get_device
 from policy_metrics import (
     batch_top1_agreement, batch_top_k_agreement, batch_kl_divergence,
-    batch_policy_entropy, batch_total_variation,
 )
 
 
@@ -46,16 +44,9 @@ class BenchResult:
     steps: int
     time_min: float
     losses_log: list = field(default_factory=list)
-    # Validation metrics (None when no val set)
-    val_v_loss: Optional[float] = None
-    val_pi_loss: Optional[float] = None
-    val_total_loss: Optional[float] = None
     top1_agree: Optional[float] = None
     top3_agree: Optional[float] = None
     kl_div: Optional[float] = None
-    pi_entropy_net: Optional[float] = None
-    pi_entropy_tgt: Optional[float] = None
-    v_tv: Optional[float] = None
 
 
 def parse_config_string(s):
@@ -299,41 +290,10 @@ def _load_iter_range(hist_dir, iter_range, max_samples, num_workers):
     return all_c, all_v, all_pi
 
 
-def _load_val_tail(hist_dir, window_start, window_end, val_samples, num_workers):
-    """Greedily load val_samples from the most recent iterations.
+def load_data(source_dir, max_samples, num_workers, config=None):
+    """Load training data from an experiment directory.
 
-    Starts at window_end and works backwards until enough samples are
-    collected or the window is exhausted.  Returns (c, v, pi) or Nones.
-    """
-    acc_c, acc_v, acc_pi = [], [], []
-    remaining = val_samples
-
-    for it in range(window_end, window_start - 1, -1):
-        c, v, pi = _load_iter_range(hist_dir, range(it, it + 1), remaining, num_workers)
-        if c is None:
-            continue
-        acc_c.append(c); acc_v.append(v); acc_pi.append(pi)
-        remaining -= c.shape[0]
-        if remaining <= 0:
-            break
-
-    if not acc_c:
-        return None, None, None
-
-    return torch.cat(acc_c).float(), torch.cat(acc_v).float(), torch.cat(acc_pi).float()
-
-
-def load_data(source_dir, max_samples, num_workers, config=None,
-              val_samples=0):
-    """Load training data with optional validation set.
-
-    Training always uses the full window.  When val_samples > 0, validation
-    samples are greedily loaded from the most recent iterations (the same
-    data may overlap with training -- this is intentional so training sees
-    the full window).
-
-    Returns (config, train_c, train_v, train_pi, val_c, val_v, val_pi).
-    Val tensors are None when val_samples=0.
+    Returns (config, train_c, train_v, train_pi).
     """
     if config is None:
         config = load_config_only(source_dir)
@@ -362,18 +322,7 @@ def load_data(source_dir, max_samples, num_workers, config=None,
         sys.exit(1)
     print(f"Train: {train_c.shape[0]:,} samples (iters {train_range.start}-{train_range.stop - 1})")
 
-    # Load validation data (greedy from tail)
-    val_c = val_v = val_pi = None
-    if val_samples > 0:
-        print(f"Loading validation data (up to {val_samples:,} from tail)...")
-        val_c, val_v, val_pi = _load_val_tail(
-            hist_dir, window_start, window_end, val_samples, num_workers)
-        if val_c is not None:
-            print(f"Val: {val_c.shape[0]:,} samples")
-        else:
-            print(f"Warning: no validation data found, using train-only mode")
-
-    return config, train_c, train_v, train_pi, val_c, val_v, val_pi
+    return config, train_c, train_v, train_pi
 
 
 def pregenerate_batches(n_samples, batch_size, steps):
@@ -465,13 +414,19 @@ def train_config(nn_wrapper, all_c, all_v, all_pi, batch_indices, lr, steps,
 
 
 def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
-    """Full eval-mode pass over the dataset. Returns (v_loss, pi_loss)."""
+    """Full eval-mode pass over the dataset with policy metrics.
+
+    Returns dict: {v_loss, pi_loss, total_loss, top1_agree, top3_agree, kl_div}.
+    """
     nn_wrapper.nnet.eval()
     non_blocking = device.type == 'cuda'
     n = all_c.shape[0]
     v_total = 0.0
     pi_total = 0.0
     n_batches = 0
+
+    all_net_pi = []
+    all_tgt_pi = []
 
     with torch.no_grad():
         for start in range(0, n, batch_size):
@@ -485,70 +440,22 @@ def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
             pi_total += nn_wrapper.loss_pi(pi, out_pi).item()
             n_batches += 1
 
-    return v_total / n_batches, pi_total / n_batches
+            all_net_pi.append(torch.exp(out_pi).cpu().numpy())
+            all_tgt_pi.append(pi.cpu().numpy())
 
+    v_loss = v_total / n_batches
+    pi_loss = pi_total / n_batches
 
-def eval_with_metrics(nn_wrapper, val_c, val_v, val_pi, batch_size, device):
-    """Full eval pass over validation data with quality metrics.
-
-    Returns dict with val_v_loss, val_pi_loss, val_total_loss, and policy/value metrics.
-    """
-    nn_wrapper.nnet.eval()
-    non_blocking = device.type == 'cuda'
-    n = val_c.shape[0]
-    v_total = 0.0
-    pi_total = 0.0
-    n_batches = 0
-
-    # Collect outputs for metrics
-    all_net_pi = []
-    all_tgt_pi = []
-    all_net_v = []
-    all_tgt_v = []
-
-    with torch.no_grad():
-        for start in range(0, n, batch_size):
-            end = min(start + batch_size, n)
-            c = val_c[start:end].to(device, non_blocking=non_blocking)
-            v = val_v[start:end].to(device, non_blocking=non_blocking)
-            pi = val_pi[start:end].to(device, non_blocking=non_blocking)
-
-            out_v, out_pi = nn_wrapper.nnet(c)
-            v_total += nn_wrapper.loss_v(v, out_v).item()
-            pi_total += nn_wrapper.loss_pi(pi, out_pi).item()
-            n_batches += 1
-
-            # Convert log-softmax to probabilities
-            net_pi_probs = torch.exp(out_pi).cpu().numpy()
-            tgt_pi_probs = pi.cpu().numpy()
-            all_net_pi.append(net_pi_probs)
-            all_tgt_pi.append(tgt_pi_probs)
-
-            # Value distributions
-            net_v_probs = torch.exp(out_v).cpu().numpy()
-            tgt_v_probs = v.cpu().numpy()
-            all_net_v.append(net_v_probs)
-            all_tgt_v.append(tgt_v_probs)
-
-    val_v_loss = v_total / n_batches
-    val_pi_loss = pi_total / n_batches
-
-    # Concatenate all batches
     net_pi = np.concatenate(all_net_pi, axis=0)
     tgt_pi = np.concatenate(all_tgt_pi, axis=0)
-    net_v = np.concatenate(all_net_v, axis=0)
-    tgt_v = np.concatenate(all_tgt_v, axis=0)
 
     return {
-        "val_v_loss": val_v_loss,
-        "val_pi_loss": val_pi_loss,
-        "val_total_loss": val_v_loss + val_pi_loss,
+        "v_loss": v_loss,
+        "pi_loss": pi_loss,
+        "total_loss": v_loss + pi_loss,
         "top1_agree": batch_top1_agreement(net_pi, tgt_pi),
         "top3_agree": batch_top_k_agreement(net_pi, tgt_pi, 3),
         "kl_div": batch_kl_divergence(tgt_pi, net_pi),
-        "pi_entropy_net": batch_policy_entropy(net_pi),
-        "pi_entropy_tgt": batch_policy_entropy(tgt_pi),
-        "v_tv": batch_total_variation(net_v, tgt_v),
     }
 
 
@@ -624,54 +531,50 @@ def collect_configs(config, args):
     return configs
 
 
-def print_results_table(results, has_val=False):
+def print_results_table(results):
     """Print the results table and learning curves."""
     # Filter out OOM entries for Pareto, but show them in table
     valid = [(i, r) for i, r in enumerate(results) if r.total_loss != float('inf')]
     oom = [(i, r) for i, r in enumerate(results) if r.total_loss == float('inf')]
 
-    # Sort: valid by val total if available, else train total. OOM at end.
-    if has_val:
-        valid.sort(key=lambda x: x[1].val_total_loss if x[1].val_total_loss is not None else float('inf'))
-    else:
-        valid.sort(key=lambda x: x[1].total_loss)
+    valid.sort(key=lambda x: x[1].total_loss)
     ordered = valid + oom
 
-    sort_col = "val total" if has_val else "total loss"
     print(f"\n{'='*60}")
-    print(f"RESULTS (sorted by {sort_col})")
+    print(f"RESULTS (sorted by total loss)")
     print(f"{'='*60}")
 
-    # Pareto frontier (valid entries only) — use val_total if available
+    # Pareto frontier (valid entries only)
     if valid:
-        loss_col = [(r.val_total_loss if has_val and r.val_total_loss is not None else r.total_loss) for _, r in valid]
-        valid_points = np.array([[r.mem_mb, r.infer_ms, lc] for (_, r), lc in zip(valid, loss_col)])
+        valid_points = np.array([[r.mem_mb, r.infer_ms, r.total_loss] for _, r in valid])
         valid_pareto = is_pareto_optimal(valid_points)
     else:
         valid_pareto = np.array([], dtype=bool)
 
-    header = f"{'Config':<22} {'Params':>10} {'Mem MB':>8} {'Infer ms':>9} {'V Loss':>8} {'Pi Loss':>9} {'Total':>8}"
-    if has_val:
-        header += f" {'ValTot':>8}"
-    header += f" {'Steps':>6} {'Time':>6}"
+    header = (f"{'Config':<22} {'Params':>10} {'Mem MB':>8} {'Infer ms':>9} "
+              f"{'V Loss':>8} {'Pi Loss':>9} {'Total':>8} "
+              f"{'Top1%':>7} {'Top3%':>7} {'KL':>8} "
+              f"{'Steps':>6} {'Time':>6}")
     print(header)
     print("-" * len(header))
 
     vi = 0
     for orig_i, r in ordered:
         if r.total_loss == float('inf'):
-            line = f"{r.label:<22} {r.params:>10,} {'OOM':>8s} {r.infer_ms:>9.1f} {'OOM':>8s} {'OOM':>9s} {'OOM':>8s}"
-            if has_val:
-                line += f" {'OOM':>8s}"
-            line += f" {'-':>6s} {'-':>6s}"
+            line = (f"{r.label:<22} {r.params:>10,} {'OOM':>8s} {r.infer_ms:>9.1f} "
+                    f"{'OOM':>8s} {'OOM':>9s} {'OOM':>8s} "
+                    f"{'':>7s} {'':>7s} {'':>8s} "
+                    f"{'-':>6s} {'-':>6s}")
             print(line)
         else:
             star = " ***" if valid_pareto[vi] else ""
-            line = f"{r.label:<22} {r.params:>10,} {r.mem_mb:>8.1f} {r.infer_ms:>9.1f} {r.v_loss:>8.4f} {r.pi_loss:>9.4f} {r.total_loss:>8.4f}"
-            if has_val:
-                vt = r.val_total_loss
-                line += f" {vt:>8.4f}" if vt is not None else f" {'N/A':>8s}"
-            line += f" {r.steps:>6} {r.time_min:>5.1f}m{star}"
+            top1 = f"{r.top1_agree * 100:>6.1f}%" if r.top1_agree is not None else f"{'N/A':>7s}"
+            top3 = f"{r.top3_agree * 100:>6.1f}%" if r.top3_agree is not None else f"{'N/A':>7s}"
+            kl = f"{r.kl_div:>8.4f}" if r.kl_div is not None else f"{'N/A':>8s}"
+            line = (f"{r.label:<22} {r.params:>10,} {r.mem_mb:>8.1f} {r.infer_ms:>9.1f} "
+                    f"{r.v_loss:>8.4f} {r.pi_loss:>9.4f} {r.total_loss:>8.4f} "
+                    f"{top1} {top3} {kl} "
+                    f"{r.steps:>6} {r.time_min:>5.1f}m{star}")
             print(line)
             vi += 1
 
@@ -711,31 +614,44 @@ def print_results_table(results, has_val=False):
         print(row)
 
 
-def print_val_metrics_table(results):
-    """Print validation quality metrics table."""
-    valid = [r for r in results if r.val_total_loss is not None]
-    if not valid:
-        return
+def _pareto_2d(x, y, lower_better_y=True):
+    """2D Pareto frontier: lower x is better, y direction set by flag.
 
-    valid.sort(key=lambda r: r.val_total_loss)
+    Returns boolean mask of Pareto-optimal points.
+    """
+    pts = np.column_stack([x, y if lower_better_y else -y])
+    n = len(pts)
+    optimal = np.ones(n, dtype=bool)
+    for i in range(n):
+        for j in range(n):
+            if i != j and np.all(pts[j] <= pts[i]) and np.any(pts[j] < pts[i]):
+                optimal[i] = False
+                break
+    return optimal
 
-    print(f"\n{'='*60}")
-    print("VALIDATION QUALITY METRICS")
-    print(f"{'='*60}")
 
-    header = (f"{'Config':<22} {'ValTot':>8} {'Top1%':>7} {'Top3%':>7} "
-              f"{'KL Div':>8} {'Net Ent':>8} {'Tgt Ent':>8} {'V TV':>7}")
-    print(header)
-    print("-" * len(header))
+def _draw_pareto_scatter(ax, x, y, labels, pareto, x_label, y_label, title,
+                         marker='o', color='tab:blue', lower_better_y=True):
+    """Draw a scatter plot with Pareto frontier and labeled points."""
+    ax.scatter(x[~pareto], y[~pareto], color='gray', alpha=0.5, s=50, label='Dominated')
+    ax.scatter(x[pareto], y[pareto], color=color, alpha=0.9, s=80, marker=marker, label='Pareto-optimal')
 
-    for r in valid:
-        top1 = f"{r.top1_agree * 100:>6.1f}%" if r.top1_agree is not None else f"{'N/A':>7s}"
-        top3 = f"{r.top3_agree * 100:>6.1f}%" if r.top3_agree is not None else f"{'N/A':>7s}"
-        kl = f"{r.kl_div:>8.4f}" if r.kl_div is not None else f"{'N/A':>8s}"
-        ne = f"{r.pi_entropy_net:>8.4f}" if r.pi_entropy_net is not None else f"{'N/A':>8s}"
-        te = f"{r.pi_entropy_tgt:>8.4f}" if r.pi_entropy_tgt is not None else f"{'N/A':>8s}"
-        vtv = f"{r.v_tv:>7.4f}" if r.v_tv is not None else f"{'N/A':>7s}"
-        print(f"{r.label:<22} {r.val_total_loss:>8.4f} {top1} {top3} {kl} {ne} {te} {vtv}")
+    # Pareto frontier line
+    pidx = np.where(pareto)[0]
+    if len(pidx) > 1:
+        order = np.argsort(x[pidx])
+        ax.plot(x[pidx[order]], y[pidx[order]], '--', color=color, alpha=0.5, linewidth=1)
+
+    # Label every point with a color-coded box
+    for i, lbl in enumerate(labels):
+        ax.annotate(lbl, (x[i], y[i]), textcoords="offset points", xytext=(5, 5),
+                    fontsize=7, bbox=dict(boxstyle='round,pad=0.2', fc=color, alpha=0.15))
+
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_title(title)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
 
 
 def save_charts(results, save_dir):
@@ -753,57 +669,70 @@ def save_charts(results, save_dir):
     if not valid:
         return
 
-    has_val = any(r.val_total_loss is not None for r in valid)
+    labels = [r.label for r in valid]
+    speed = np.array([r.infer_ms for r in valid])
 
-    # Chart 1: Train vs Val loss grouped bars
-    if has_val:
-        val_valid = [r for r in valid if r.val_total_loss is not None]
-        if val_valid:
-            fig, ax = plt.subplots(figsize=(max(8, len(val_valid) * 1.2), 5))
-            labels = [r.label for r in val_valid]
-            x = np.arange(len(labels))
-            width = 0.35
-            train_vals = [r.total_loss for r in val_valid]
-            val_vals = [r.val_total_loss for r in val_valid]
-            ax.bar(x - width/2, train_vals, width, label='Train', color='tab:blue', alpha=0.8)
-            ax.bar(x + width/2, val_vals, width, label='Val', color='tab:orange', alpha=0.8)
-            ax.set_xlabel('Config')
-            ax.set_ylabel('Total Loss')
-            ax.set_title('Train vs Validation Loss')
-            ax.set_xticks(x)
-            ax.set_xticklabels(labels, rotation=45, ha='right')
-            ax.legend()
-            ax.grid(True, alpha=0.3, axis='y')
-            fig.tight_layout()
-            path = os.path.join(save_dir, "pareto_train_val_loss.png")
-            fig.savefig(path, dpi=150)
-            plt.close(fig)
-            print(f"Saved: {path}")
+    # Chart 1: Speed vs Loss (3 series on one plot)
+    fig, ax = plt.subplots(figsize=(10, 7))
+    series = [
+        ('Total', [r.total_loss for r in valid], 'tab:blue', 'o'),
+        ('Value', [r.v_loss for r in valid], 'tab:red', 's'),
+        ('Policy', [r.pi_loss for r in valid], 'tab:green', '^'),
+    ]
+    for name, vals, color, marker in series:
+        y = np.array(vals)
+        pareto = _pareto_2d(speed, y)
+        ax.scatter(speed[~pareto], y[~pareto], color=color, alpha=0.3, s=40, marker=marker)
+        ax.scatter(speed[pareto], y[pareto], color=color, alpha=0.9, s=80, marker=marker, label=f'{name}')
+        pidx = np.where(pareto)[0]
+        if len(pidx) > 1:
+            order = np.argsort(speed[pidx])
+            ax.plot(speed[pidx[order]], y[pidx[order]], '--', color=color, alpha=0.5, linewidth=1)
+        for i, lbl in enumerate(labels):
+            ax.annotate(lbl, (speed[i], y[i]), textcoords="offset points", xytext=(5, 5),
+                        fontsize=6, bbox=dict(boxstyle='round,pad=0.2', fc=color, alpha=0.15))
+    ax.set_xlabel('Inference (ms)')
+    ax.set_ylabel('Loss')
+    ax.set_title('Inference Speed vs Loss')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    path = os.path.join(save_dir, "pareto_speed_vs_loss.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"Saved: {path}")
 
-    # Chart 2: Top-1 / Top-3 agreement bars
-    if has_val:
-        val_valid = [r for r in valid if r.top1_agree is not None]
-        if val_valid:
-            fig, ax = plt.subplots(figsize=(max(8, len(val_valid) * 1.2), 5))
-            labels = [r.label for r in val_valid]
-            x = np.arange(len(labels))
-            width = 0.35
-            top1_vals = [r.top1_agree * 100 for r in val_valid]
-            top3_vals = [r.top3_agree * 100 for r in val_valid]
-            ax.bar(x - width/2, top1_vals, width, label='Top-1', color='tab:blue', alpha=0.8)
-            ax.bar(x + width/2, top3_vals, width, label='Top-3', color='tab:green', alpha=0.8)
-            ax.set_xlabel('Config')
-            ax.set_ylabel('Agreement (%)')
-            ax.set_title('Policy Agreement with MCTS Target')
-            ax.set_xticks(x)
-            ax.set_xticklabels(labels, rotation=45, ha='right')
-            ax.legend()
-            ax.grid(True, alpha=0.3, axis='y')
-            fig.tight_layout()
-            path = os.path.join(save_dir, "pareto_agreement.png")
-            fig.savefig(path, dpi=150)
-            plt.close(fig)
-            print(f"Saved: {path}")
+    # Chart 2: Speed vs Quality (3 subplots)
+    has_metrics = any(r.top1_agree is not None for r in valid)
+    if has_metrics:
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+        # Top-1 agreement (higher is better)
+        top1 = np.array([r.top1_agree * 100 if r.top1_agree is not None else 0 for r in valid])
+        p = _pareto_2d(speed, top1, lower_better_y=False)
+        _draw_pareto_scatter(axes[0], speed, top1, labels, p,
+                             'Inference (ms)', 'Top-1 Agreement (%)',
+                             'Speed vs Top-1%', 'o', 'tab:blue', False)
+
+        # Top-3 agreement (higher is better)
+        top3 = np.array([r.top3_agree * 100 if r.top3_agree is not None else 0 for r in valid])
+        p = _pareto_2d(speed, top3, lower_better_y=False)
+        _draw_pareto_scatter(axes[1], speed, top3, labels, p,
+                             'Inference (ms)', 'Top-3 Agreement (%)',
+                             'Speed vs Top-3%', 's', 'tab:green', False)
+
+        # KL divergence (lower is better)
+        kl = np.array([r.kl_div if r.kl_div is not None else 0 for r in valid])
+        p = _pareto_2d(speed, kl)
+        _draw_pareto_scatter(axes[2], speed, kl, labels, p,
+                             'Inference (ms)', 'KL Divergence',
+                             'Speed vs KL Div', '^', 'tab:red', True)
+
+        fig.tight_layout()
+        path = os.path.join(save_dir, "pareto_speed_vs_quality.png")
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+        print(f"Saved: {path}")
 
     # Chart 3: Learning curves
     configs_with_logs = [r for r in valid if r.losses_log]
@@ -824,49 +753,6 @@ def save_charts(results, save_dir):
         plt.close(fig)
         print(f"Saved: {path}")
 
-    # Chart 4: Params vs loss scatter with Pareto frontier
-    loss_col = [(r.val_total_loss if has_val and r.val_total_loss is not None else r.total_loss) for r in valid]
-    params_arr = np.array([r.params for r in valid])
-    loss_arr = np.array(loss_col)
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    # Compute Pareto-optimal for this 2D view
-    pts_2d = np.column_stack([params_arr, loss_arr])
-    n = len(pts_2d)
-    pareto_2d = np.ones(n, dtype=bool)
-    for i in range(n):
-        for j in range(n):
-            if i != j and np.all(pts_2d[j] <= pts_2d[i]) and np.any(pts_2d[j] < pts_2d[i]):
-                pareto_2d[i] = False
-                break
-
-    ax.scatter(params_arr[~pareto_2d], loss_arr[~pareto_2d],
-               color='tab:blue', alpha=0.7, s=60, label='Dominated')
-    ax.scatter(params_arr[pareto_2d], loss_arr[pareto_2d],
-               color='tab:red', alpha=0.9, s=100, marker='*', label='Pareto-optimal')
-    # Label points
-    for i, r in enumerate(valid):
-        ax.annotate(r.label, (params_arr[i], loss_arr[i]),
-                    textcoords="offset points", xytext=(5, 5), fontsize=7)
-    # Draw Pareto frontier line
-    pareto_idx = np.where(pareto_2d)[0]
-    if len(pareto_idx) > 1:
-        order = np.argsort(params_arr[pareto_idx])
-        ax.plot(params_arr[pareto_idx[order]], loss_arr[pareto_idx[order]],
-                'r--', alpha=0.5, linewidth=1)
-
-    loss_label = 'Val Total Loss' if has_val else 'Total Loss'
-    ax.set_xlabel('Parameters')
-    ax.set_ylabel(loss_label)
-    ax.set_title(f'Parameters vs {loss_label}')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    path = os.path.join(save_dir, "pareto_params_vs_loss.png")
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    print(f"Saved: {path}")
-
 
 def save_results_npz(results, save_dir):
     """Save raw results data as npz."""
@@ -882,10 +768,7 @@ def save_results_npz(results, save_dir):
     data["steps"] = np.array([r.steps for r in results])
     data["time_min"] = np.array([r.time_min for r in results])
 
-    # Val metrics (use nan for None)
-    for key in ["val_v_loss", "val_pi_loss", "val_total_loss",
-                "top1_agree", "top3_agree", "kl_div",
-                "pi_entropy_net", "pi_entropy_tgt", "v_tv"]:
+    for key in ["top1_agree", "top3_agree", "kl_div"]:
         data[key] = np.array([getattr(r, key) if getattr(r, key) is not None else np.nan
                               for r in results])
 
@@ -911,7 +794,7 @@ def _parse_selection_input(text, n):
     return sorted(i for i in indices if 0 <= i < n)
 
 
-def select_configs_for_training(configs, infer_results, steps, batch_size, val_samples):
+def select_configs_for_training(configs, infer_results, steps):
     """Show time estimates and let user select which configs to train.
 
     Returns filtered (configs, infer_results).
@@ -923,12 +806,7 @@ def select_configs_for_training(configs, infer_results, steps, batch_size, val_s
     estimates = []
     for label, nn_args in configs:
         params, infer_ms = infer_results[label]
-        train_min = steps * infer_ms * 3 / 1000 / 60
-        val_min = 0
-        if val_samples > 0:
-            val_batches = math.ceil(val_samples / batch_size)
-            val_min = val_batches * infer_ms / 1000 / 60
-        total_min = train_min + val_min
+        total_min = steps * infer_ms * 3 / 1000 / 60
         estimates.append((label, params, infer_ms, total_min))
 
     total_all = sum(e[3] for e in estimates)
@@ -996,7 +874,6 @@ def main():
     parser.add_argument("--lr", type=float, default=0.01, help="Initial learning rate (default: 0.01)")
     parser.add_argument("--max-samples", type=int, default=200_000, help="Max samples to load (default: 200000)")
     parser.add_argument("--log-interval", type=int, default=100, help="Log loss every N steps (default: 100)")
-    parser.add_argument("--val-samples", type=int, default=20_000, help="Validation samples from window tail (0=disable, default: 20000)")
     parser.add_argument("--no-charts", action="store_true", help="Disable chart generation")
     args = parser.parse_args()
 
@@ -1039,23 +916,18 @@ def main():
 
     # 3b. Interactive selection with time estimates
     configs, infer_results = select_configs_for_training(
-        configs, infer_results, args.steps, args.batch_size, args.val_samples)
+        configs, infer_results, args.steps)
     if not configs:
         print("No configs selected. Exiting.")
         sys.exit(0)
 
-    # 4. Load training data with optional val split
+    # 4. Load training data
     print()
     num_workers = os.cpu_count() or 4
-    config, train_c, train_v, train_pi, val_c, val_v, val_pi = load_data(
-        args.source_dir, args.max_samples, num_workers, config=config,
-        val_samples=args.val_samples,
-    )
+    config, train_c, train_v, train_pi = load_data(
+        args.source_dir, args.max_samples, num_workers, config=config)
     n_train = train_c.shape[0]
-    has_val = val_c is not None
     print(f"Train dataset: {n_train:,} samples")
-    if has_val:
-        print(f"Val dataset: {val_c.shape[0]:,} samples")
 
     # 5. Pre-generate batch indices
     print(f"Pre-generating {args.steps} batches (bs={args.batch_size})...")
@@ -1066,10 +938,6 @@ def main():
         train_c = train_c.pin_memory()
         train_v = train_v.pin_memory()
         train_pi = train_pi.pin_memory()
-        if has_val:
-            val_c = val_c.pin_memory()
-            val_v = val_v.pin_memory()
-            val_pi = val_pi.pin_memory()
 
     # 6. Train + eval each config (with OOM recovery)
     results: List[BenchResult] = []
@@ -1095,32 +963,20 @@ def main():
             time_min = elapsed / 60
             print(f"  Time: {time_min:.1f}m  Peak memory: {mem_mb:.0f} MB")
 
-            print("  Final eval loss (train)...")
-            v_loss, pi_loss = eval_loss(nn_train, train_c, train_v, train_pi, args.batch_size, device)
-            total_loss = v_loss + pi_loss
-            print(f"  V Loss: {v_loss:.4f}  Pi Loss: {pi_loss:.4f}  Total: {total_loss:.4f}")
+            print("  Final eval + metrics (train)...")
+            metrics = eval_loss(nn_train, train_c, train_v, train_pi, args.batch_size, device)
+            print(f"  V Loss: {metrics['v_loss']:.4f}  Pi Loss: {metrics['pi_loss']:.4f}  "
+                  f"Total: {metrics['total_loss']:.4f}  "
+                  f"Top1: {metrics['top1_agree']*100:.1f}%  KL: {metrics['kl_div']:.4f}")
 
             br = BenchResult(
                 label=label, params=params, mem_mb=mem_mb, infer_ms=infer_ms,
-                v_loss=v_loss, pi_loss=pi_loss, total_loss=total_loss,
+                v_loss=metrics['v_loss'], pi_loss=metrics['pi_loss'],
+                total_loss=metrics['total_loss'],
                 steps=args.steps, time_min=time_min, losses_log=losses_log,
+                top1_agree=metrics['top1_agree'], top3_agree=metrics['top3_agree'],
+                kl_div=metrics['kl_div'],
             )
-
-            # Validation metrics
-            if has_val:
-                print("  Validation eval + metrics...")
-                val_metrics = eval_with_metrics(nn_train, val_c, val_v, val_pi, args.batch_size, device)
-                br.val_v_loss = val_metrics["val_v_loss"]
-                br.val_pi_loss = val_metrics["val_pi_loss"]
-                br.val_total_loss = val_metrics["val_total_loss"]
-                br.top1_agree = val_metrics["top1_agree"]
-                br.top3_agree = val_metrics["top3_agree"]
-                br.kl_div = val_metrics["kl_div"]
-                br.pi_entropy_net = val_metrics["pi_entropy_net"]
-                br.pi_entropy_tgt = val_metrics["pi_entropy_tgt"]
-                br.v_tv = val_metrics["v_tv"]
-                print(f"  Val Total: {br.val_total_loss:.4f}  Top1: {br.top1_agree*100:.1f}%  KL: {br.kl_div:.4f}")
-
             results.append(br)
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
@@ -1138,8 +994,7 @@ def main():
                 torch.cuda.empty_cache()
 
     # 7. Results
-    print_results_table(results, has_val=has_val)
-    print_val_metrics_table(results)
+    print_results_table(results)
 
     # 8. Save to analysis dir
     analysis_dir = os.path.join(args.source_dir, "analysis")

@@ -31,7 +31,8 @@ void Node::update_policy(const Vector<float>& pi) noexcept {
 float Node::uct(float sqrt_parent_n, float cpuct,
                 float fpu_value) const noexcept {
   return (n == 0 ? fpu_value : q) +
-         cpuct * policy * sqrt_parent_n / static_cast<float>(n + 1);
+         cpuct * policy * sqrt_parent_n /
+             static_cast<float>(n + n_in_flight + 1);
 }
 
 Node* Node::best_child(float cpuct, float fpu_reduction) noexcept {
@@ -42,7 +43,7 @@ Node* Node::best_child(float cpuct, float fpu_reduction) noexcept {
     }
   }
   auto fpu_value = v - fpu_reduction * std::sqrt(seen_policy);
-  auto sqrt_n = std::sqrt(static_cast<float>(n));
+  auto sqrt_n = std::sqrt(static_cast<float>(n + n_in_flight));
   auto best_i = 0;
   auto best_uct = children.at(0).uct(sqrt_n, cpuct, fpu_value);
   for (auto i = 1; i < static_cast<int>(children.size()); ++i) {
@@ -360,5 +361,106 @@ float MCTS::normalized_root_entropy() const noexcept {
   }
   return entropy / log_k;
 }
+
+std::unique_ptr<GameState> MCTS::find_leaf_batched(const GameState& gs) {
+  InFlightLeaf ifl;
+  Node* cur = &root_;
+  auto leaf = gs.copy();
+
+  // n_in_flight > 0 allows traversal past nodes expanded by a prior
+  // in-flight call but not yet backpropagated. children.empty() check
+  // prevents best_child on unexpanded nodes.
+  while ((cur->n > 0 || cur->n_in_flight > 0) && !cur->children.empty() &&
+         !cur->scores.has_value()) {
+    ifl.path.push_back(cur);
+    float fpu = (cur == &root_ && root_fpu_zero_) ? 0.0f : fpu_reduction_;
+    auto* selected = cur->best_child(cpuct_, fpu);
+    // Increment AFTER selection so the current traversal uses clean UCT values,
+    // but subsequent find_leaf_batched calls see the in-flight penalty.
+    ++cur->n_in_flight;
+    cur = selected;
+    leaf->play_move(cur->move);
+  }
+  ++cur->n_in_flight;
+  total_leaf_depth_ += ifl.path.size();
+
+  // Only expand if not already expanded by prior in-flight call
+  if (cur->n == 0 && cur->children.empty()) {
+    cur->player = leaf->current_player();
+    cur->scores = leaf->scores();
+    cur->add_children(leaf->valid_moves());
+  }
+
+  ifl.leaf = cur;
+  in_flight_.push_back(std::move(ifl));
+  return leaf;
+}
+
+void MCTS::process_result_batched(const GameState& gs, uint32_t leaf_index,
+                                  Vector<float>& value, Vector<float>& pi,
+                                  bool root_noise_enabled) {
+  auto& ifl = in_flight_.at(leaf_index);
+  current_ = ifl.leaf;
+  --current_->n_in_flight;
+
+  if (current_->scores.has_value()) {
+    value = current_->scores.value();
+  } else {
+    // Rescale pi based on valid moves.
+    auto valids = Vector<float>(gs.num_moves());
+    valids.setZero();
+    for (auto& c : current_->children) {
+      valids(c.move) = 1;
+    }
+    pi.array() *= valids.array();
+    pi /= pi.sum();
+    if (current_ == &root_) {
+      pi = pi.array().pow(1.0f / root_policy_temp_);
+      pi /= pi.sum();
+      current_->update_policy(pi);
+      if (root_noise_enabled) {
+        add_root_noise();
+      }
+    } else {
+      current_->update_policy(pi);
+    }
+    if (relative_values_) {
+      value = relative_to_absolute(value, current_->player, num_players_);
+    }
+  }
+
+  // Backprop walk
+  for (auto it = ifl.path.rbegin(); it != ifl.path.rend(); ++it) {
+    auto* parent = *it;
+    --parent->n_in_flight;
+    auto v = value(parent->player);
+    v += value(num_players_) / num_players_;
+    current_->q = (current_->q * static_cast<float>(current_->n) + v) /
+                  static_cast<float>(current_->n + 1);
+    current_->d =
+        (current_->d * static_cast<float>(current_->n) + value(num_players_)) /
+        static_cast<float>(current_->n + 1);
+    if (current_->n == 0) {
+      auto leaf_v =
+          value(current_->player) + value(num_players_) / num_players_;
+      current_->v = leaf_v;
+    }
+    ++current_->n;
+    current_ = parent;
+  }
+  // Root handling (same as process_result)
+  if (root_.n == 0) {
+    root_.v = value(root_.player) + value(num_players_) / num_players_;
+    root_.d = value(num_players_);
+  }
+  ++depth_;
+  ++root_.n;
+}
+
+uint32_t MCTS::in_flight_count() const noexcept {
+  return static_cast<uint32_t>(in_flight_.size());
+}
+
+void MCTS::reset_batch() noexcept { in_flight_.clear(); }
 
 }  // namespace alphazero

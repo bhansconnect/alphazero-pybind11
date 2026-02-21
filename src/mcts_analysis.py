@@ -18,6 +18,7 @@ if __name__ == "__main__" and sys.platform == "darwin" and os.environ.get("Mallo
 import glob
 import math
 import gc
+import time as _time
 from typing import NamedTuple
 import re
 import numpy as np
@@ -49,18 +50,50 @@ TOURNAMENT_CONCURRENT_BATCHES = 2
 ANALYSIS_GAMES = 64
 
 
+class Entry(NamedTuple):
+    """An analysis entry: (visit_count, mode, batch_size).
+
+    mode: "base" (no noise, eval temp) or "selfplay" (Dirichlet, root temp).
+    batch_size: WU-UCT batch size. 1 = sequential (default).
+    """
+    vc: int
+    mode: str
+    batch_size: int = 1
+
+
 # --- Entry helpers ---
 
+def _to_entry(e):
+    """Normalize a tuple to an Entry (handles 2-tuples for backward compat)."""
+    if isinstance(e, Entry):
+        return e
+    if len(e) == 2:
+        return Entry(e[0], e[1], 1)
+    return Entry(*e)
+
+
 def entry_label(entry):
-    """Label for an (vc, mode) entry: '200' or '200sp'."""
-    vc, mode = entry
-    return f"{vc}sp" if mode == "selfplay" else str(vc)
+    """Label for an entry: '200', '200sp', '200b8', '200spb8'."""
+    e = _to_entry(entry)
+    label = f"{e.vc}sp" if e.mode == "selfplay" else str(e.vc)
+    if e.batch_size > 1:
+        label += f"b{e.batch_size}"
+    elif e.batch_size == 0:
+        label += "b0"
+    return label
+
+
+def _resolve_batch_size(entry):
+    """Resolve batch_size: 0 (auto) -> computed from vc, else as-is."""
+    if entry.batch_size == 0:
+        return max(1, min(int(entry.vc * 0.12), 64))
+    return entry.batch_size
 
 
 def entry_sort_key(entry):
-    """Sort key: by VC, then base before selfplay."""
-    vc, mode = entry
-    return (vc, 0 if mode == "base" else 1)
+    """Sort key: by VC, then base before selfplay, then batch_size."""
+    e = _to_entry(entry)
+    return (e.vc, 0 if e.mode == "base" else 1, e.batch_size)
 
 
 def calc_temp(config, turn):
@@ -246,29 +279,36 @@ def interactive_config():
         else:
             print(f"  -> {os.path.basename(network_path)}\n")
 
-    # Visit counts as (vc, mode) entries (append 'sp' for selfplay mode, e.g. 200sp)
+    # Visit counts as (vc, mode, batch_size) entries
     print(f"Default visit counts: {DEFAULT_VISIT_COUNTS}")
     print("  (1 = raw network policy, no MCTS search)")
     print("  (append 'sp' for selfplay mode, e.g. 200sp)")
+    print("  (append 'b<N>' for batched WU-UCT, e.g. 200b8, 200spb16, 120b0 for auto)")
     print("  (same VC can appear in both modes, e.g. 200, 200sp)")
     vc_input = input("Enter comma-separated visit counts or press Enter for defaults: ").strip()
     if vc_input:
         entries = []
         for token in vc_input.split(","):
             token = token.strip().lower()
+            # Parse optional bN suffix
+            batch_size = 1
+            batch_match = re.search(r'b(\d+)$', token)
+            if batch_match:
+                batch_size = int(batch_match.group(1))
+                token = token[:batch_match.start()]
             if token.endswith("sp"):
                 vc = int(token[:-2])
                 mode = "selfplay"
             else:
                 vc = int(token)
                 mode = "base"
-            entry = (vc, mode)
+            entry = Entry(vc, mode, batch_size)
             if entry not in entries:
                 entries.append(entry)
         anchor = entries[-1]  # last entry typed
         entries.sort(key=entry_sort_key)
     else:
-        entries = [(vc, "base") for vc in DEFAULT_VISIT_COUNTS]
+        entries = [Entry(vc, "base") for vc in DEFAULT_VISIT_COUNTS]
         anchor = entries[-1]
     # Display with mode indicators
     print(f"  -> [{', '.join(entry_label(e) for e in entries)}]")
@@ -325,7 +365,8 @@ def _entry_mcts_settings(entry, config) -> MctsSettings:
     Selfplay entries get Dirichlet noise, root policy temp, and root FPU zero.
     Base entries get clean tournament settings (no noise, root_temp=1.0, no root FPU zero).
     """
-    _, mode = entry
+    entry = _to_entry(entry)
+    mode = entry.mode
     if mode == "selfplay":
         return MctsSettings(0.25, config.mcts_root_temp, True)
     return MctsSettings(0.0, 1.0, False)
@@ -337,6 +378,7 @@ def run_tournament(config, Game, network_path, entries, use_playout=False, cache
     Each entry is a (visit_count, mode) tuple where mode is "base" or "selfplay".
     Returns (elo_ratings, win_matrix) indexed by entries.
     """
+    entries = [_to_entry(e) for e in entries]
     print("=" * 60)
     print("Phase: Elo Tournament (Monrad)")
     print("=" * 60)
@@ -370,7 +412,7 @@ def run_tournament(config, Game, network_path, entries, use_playout=False, cache
     shared_cache = create_sharded_cache(Game, cache_size) if cache_size > 0 else None
 
     # Check if any entry uses selfplay mode (needs per-seat overrides)
-    has_selfplay = any(mode == "selfplay" for _, mode in entries)
+    has_selfplay = any(e.mode == "selfplay" for e in entries)
 
     for r in tqdm.trange(rounds, desc="Rounds"):
         dist = math.ceil(dist / 2)
@@ -524,8 +566,10 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     Returns (metrics, position_snapshots).
     position_snapshots: list of dicts with 'gs', 'player', 'values' keys.
     """
-    base_entries = [e for e in entries if e[1] == "base"]
-    selfplay_entries = [e for e in entries if e[1] == "selfplay"]
+    entries = [_to_entry(e) for e in entries]
+    anchor = _to_entry(anchor)
+    base_entries = [e for e in entries if e.mode == "base"]
+    selfplay_entries = [e for e in entries if e.mode == "selfplay"]
     has_selfplay = len(selfplay_entries) > 0
     has_base = len(base_entries) > 0
 
@@ -558,9 +602,9 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     num_moves = Game.NUM_MOVES()
     relative_values = Game().relative_values()
 
-    anchor_vc = anchor[0]
-    has_vc1_base = (1, "base") in entries
-    has_vc1_selfplay = (1, "selfplay") in entries
+    anchor_vc = anchor.vc
+    has_vc1_base = any(e.vc == 1 and e.mode == "base" for e in entries)
+    has_vc1_selfplay = any(e.vc == 1 and e.mode == "selfplay" for e in entries)
 
     # PIO: always capture vc=1 for gap analysis
     _pio_inject_base = not has_vc1_base  # Always needed as PIO baseline
@@ -568,8 +612,8 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     has_vc1_base = has_vc1_base or _pio_inject_base
     has_vc1_selfplay = has_vc1_selfplay or _pio_inject_selfplay
 
-    base_vcs = sorted(set(e[0] for e in base_entries))
-    selfplay_vcs = sorted(set(e[0] for e in selfplay_entries))
+    base_vcs = sorted(set(e.vc for e in base_entries))
+    selfplay_vcs = sorted(set(e.vc for e in selfplay_entries))
 
     # The base reference tree always runs to anchor_vc for move selection + Q-values
     base_ref_target = anchor_vc
@@ -603,22 +647,37 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     trees = {}
 
     if tree_reuse:
-        # One persistent tree per entry per game
+        # One persistent tree per entry per game (unbatched only)
+        # Batched entries grouped by (mode, batch_size) share one tree per group
         for gid in range(ANALYSIS_GAMES):
             trees[gid] = {}
             for entry in entries:
-                vc, mode = entry
+                if entry.batch_size != 1:
+                    continue
+                is_sp = entry.mode == "selfplay"
+                mcts_obj = _make_selfplay_mcts() if is_sp else _make_base_mcts()
+                trees[gid][entry] = (mcts_obj, entry.vc, is_sp)
+            # Group batched entries
+            _tr_groups = {}
+            for entry in entries:
+                if entry.batch_size != 1:
+                    _tr_groups.setdefault((entry.mode, entry.batch_size), []).append(entry)
+            for (mode, bs), group in _tr_groups.items():
                 is_sp = mode == "selfplay"
                 mcts_obj = _make_selfplay_mcts() if is_sp else _make_base_mcts()
-                trees[gid][entry] = (mcts_obj, vc, is_sp)
-            # If anchor is selfplay, we need a separate base ref tree
-            if anchor[1] == "selfplay":
+                target = max(e.vc for e in group)
+                trees[gid][("batched", mode, bs)] = (mcts_obj, target, is_sp)
+            # Need a separate base ref tree if anchor is selfplay or batched
+            if anchor.mode == "selfplay" or anchor.batch_size != 1:
                 trees[gid]["base_ref"] = (_make_base_mcts(), anchor_vc, False)
     # Shared trees created per-position below
 
     print(f"Playing {ANALYSIS_GAMES} games with anchor {entry_label(anchor)} per position...")
 
     total_positions = 0
+    entry_timing = {}  # entry -> cumulative seconds
+    _seq_elapsed_total = 0.0  # total wall time for sequential loops
+    _seq_sims_total = 0       # total simulations across sequential loops
     pbar = tqdm.tqdm(desc="Positions", unit="pos")
 
     while active:
@@ -629,24 +688,47 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
         pos_values = [{} for _ in range(n)]
         pos_q_values = [None] * n
 
+        # Identify batched entries (batch_size != 1) — these need their own trees
+        batched_entries = [e for e in entries if _to_entry(e).batch_size != 1]
+        # Group batched entries by (mode, batch_size) to share trees
+        batched_groups = {}
+        for entry in batched_entries:
+            gk = (entry.mode, entry.batch_size)
+            batched_groups.setdefault(gk, []).append(entry)
+
         if not tree_reuse:
             # Create fresh shared trees per position
             for slot, gid in enumerate(active):
                 trees[gid] = {}
-                # Base shared tree — runs to max of base VCs and anchor_vc
-                base_target = max(base_vcs + [anchor_vc]) if base_vcs else anchor_vc
+                # Base shared tree — runs to max of base VCs (unbatched only) and anchor_vc
+                unbatched_base_vcs = sorted(set(e.vc for e in base_entries if _to_entry(e).batch_size == 1))
+                base_target = max(unbatched_base_vcs + [anchor_vc]) if unbatched_base_vcs else anchor_vc
                 trees[gid]["base"] = (_make_base_mcts(), base_target, False)
-                # Selfplay shared tree (if any selfplay entries)
-                if selfplay_vcs:
-                    trees[gid]["selfplay"] = (_make_selfplay_mcts(), max(selfplay_vcs), True)
+                # Selfplay shared tree (if any unbatched selfplay entries)
+                unbatched_sp_vcs = sorted(set(e.vc for e in selfplay_entries if _to_entry(e).batch_size == 1))
+                if unbatched_sp_vcs:
+                    trees[gid]["selfplay"] = (_make_selfplay_mcts(), max(unbatched_sp_vcs), True)
+                # Batched entries: one shared tree per (mode, batch_size) group
+                for (mode, bs), group in batched_groups.items():
+                    is_sp = mode == "selfplay"
+                    mcts_obj = _make_selfplay_mcts() if is_sp else _make_base_mcts()
+                    target = max(e.vc for e in group)
+                    group_key = ("batched", mode, bs)
+                    trees[gid][group_key] = (mcts_obj, target, is_sp)
 
         # Build the work list: (gid, key, tree, target_vc, is_selfplay)
         # For tree_reuse, keys are entry tuples + optional "base_ref"
         # For shared trees, keys are "base" and "selfplay"
+        # Batched entries (batch_size != 1) are processed separately.
         work_items = []
+        batched_work_items = []
         for slot, gid in enumerate(active):
             for key, (mcts_obj, target, is_sp) in trees[gid].items():
-                work_items.append((gid, key, mcts_obj, target, is_sp, slot))
+                item = (gid, key, mcts_obj, target, is_sp, slot)
+                if isinstance(key, tuple) and len(key) == 3 and key[0] == "batched":
+                    batched_work_items.append(item)
+                else:
+                    work_items.append(item)
 
         # Snapshot tracking: which entries have been captured for each slot
         snapshotted = [set() for _ in range(n)]
@@ -665,13 +747,16 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
             rn = mcts_obj.root_n()
             if tree_reuse:
                 # key is an entry tuple or "base_ref"
-                if isinstance(key, tuple) and rn >= key[0]:
+                if isinstance(key, tuple) and rn >= key.vc:
                     _snapshot(slot, key, mcts_obj, is_sp)
             else:
-                # Shared tree — check all entries of matching mode
+                # Shared tree — check all unbatched entries of matching mode
+                # (batched entries snapshot from their own trees)
                 entries_to_check = selfplay_entries if is_sp else base_entries
                 for entry in entries_to_check:
-                    if entry[0] <= rn:
+                    if _to_entry(entry).batch_size != 1:
+                        continue
+                    if entry.vc <= rn:
                         _snapshot(slot, entry, mcts_obj, is_sp)
 
         # Check if any trees are already at their target (tree reuse: root_n > 0)
@@ -681,6 +766,10 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
         # vc=1 is special: captured after 1 simulation from the appropriate tree
         vc1_captured_base = [False] * n
         vc1_captured_selfplay = [False] * n
+
+        _loop_start = _time.time()
+        _pre_root_n = {id(mcts_obj): mcts_obj.root_n()
+                       for _, _, mcts_obj, _, _, _ in work_items}
 
         # Main simulation loop — interleaved across all trees
         while True:
@@ -710,9 +799,9 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
                             _check_snapshots(gid, key, mcts_obj, is_sp, slot)
                             # Check vc=1
                             if has_vc1_base and not is_sp and mcts_obj.root_n() >= 1 and not vc1_captured_base[slot]:
-                                _snapshot(slot, (1, "base"), mcts_obj, is_sp)
+                                _snapshot(slot, Entry(1, "base"), mcts_obj, is_sp)
                             if has_vc1_selfplay and is_sp and mcts_obj.root_n() >= 1 and not vc1_captured_selfplay[slot]:
-                                _snapshot(slot, (1, "selfplay"), mcts_obj, is_sp)
+                                _snapshot(slot, Entry(1, "selfplay"), mcts_obj, is_sp)
                             continue  # try next leaf
                     miss_items.append((gid, key, mcts_obj, leaf, h, is_sp, slot, gs))
                     break  # need eval, stop this tree
@@ -730,11 +819,103 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
                 _check_snapshots(gid, key, mcts_obj, is_sp, slot)
                 # Check vc=1 after first sim
                 if has_vc1_base and not is_sp and mcts_obj.root_n() >= 1 and not vc1_captured_base[slot]:
-                    _snapshot(slot, (1, "base"), mcts_obj, is_sp)
+                    _snapshot(slot, Entry(1, "base"), mcts_obj, is_sp)
                     vc1_captured_base[slot] = True
                 if has_vc1_selfplay and is_sp and mcts_obj.root_n() >= 1 and not vc1_captured_selfplay[slot]:
-                    _snapshot(slot, (1, "selfplay"), mcts_obj, is_sp)
+                    _snapshot(slot, Entry(1, "selfplay"), mcts_obj, is_sp)
                     vc1_captured_selfplay[slot] = True
+
+        _seq_elapsed = _time.time() - _loop_start
+        _seq_elapsed_total += _seq_elapsed
+        for _, _, mcts_obj, _, _, _ in work_items:
+            _seq_sims_total += mcts_obj.root_n() - _pre_root_n[id(mcts_obj)]
+
+        # Process batched work items — grouped by (mode, batch_size), shared tree
+        for gid, key, mcts_obj, target, is_sp, slot in batched_work_items:
+            _, mode, batch_size = key  # ("batched", mode, bs)
+            group_entries = batched_groups[(mode, batch_size)]
+            sorted_group = sorted(group_entries, key=lambda e: e.vc)
+            gs = game_states[gid]
+            bs = _resolve_batch_size(group_entries[0])  # all same batch_size
+            _batch_start = _time.time()
+            _entry_done = set()  # track which entries have recorded timing
+
+            while mcts_obj.root_n() < target:
+                # Full batch (allow overshoot)
+                pending_gpu = []    # (leaf_idx, hash)
+                canonical_list = []
+                playout_leaves = []  # (leaf_idx, leaf) for playout batch
+
+                for _ in range(bs):
+                    leaf = mcts_obj.find_leaf_batched(gs)
+                    leaf_idx = mcts_obj.in_flight_count() - 1
+
+                    # Terminal
+                    if leaf.scores() is not None:
+                        v = np.array(leaf.scores(), dtype=np.float32)
+                        pi = np.zeros(num_moves, dtype=np.float32)
+                        mcts_obj.process_result_batched(gs, leaf_idx, v, pi, is_sp)
+                        continue
+
+                    if agent == "playout":
+                        playout_leaves.append((leaf_idx, leaf))
+                        continue
+                    elif agent == "random":
+                        v = np.full(num_players + 1, 1.0 / (num_players + 1), dtype=np.float32)
+                        pi = np.full(num_moves, 1.0 / num_moves, dtype=np.float32)
+                        mcts_obj.process_result_batched(gs, leaf_idx, v, pi, is_sp)
+                        continue
+
+                    # NN agent — check cache
+                    h = alphazero.hash_game_state(leaf)
+                    if cache is not None:
+                        result = cache.find(h, num_moves, num_players + 1)
+                        if result is not None:
+                            pi_c, v_c = result
+                            mcts_obj.process_result_batched(gs, leaf_idx,
+                                                            np.array(v_c), np.array(pi_c), is_sp)
+                            continue
+
+                    canonical_list.append(np.array(leaf.canonicalized()))
+                    pending_gpu.append((leaf_idx, h))
+
+                # Batch playout evaluation
+                if playout_leaves:
+                    leaves = [lf for _, lf in playout_leaves]
+                    v_np, pi_np = alphazero.playout_eval_batch(leaves)
+                    for j, (leaf_idx, _) in enumerate(playout_leaves):
+                        mcts_obj.process_result_batched(gs, leaf_idx,
+                                                        v_np[j], pi_np[j], is_sp)
+
+                # Batched GPU inference for cache misses
+                if pending_gpu:
+                    batch_tensor = torch.from_numpy(np.stack(canonical_list))
+                    v_batch, pi_batch = agent.process(batch_tensor)
+                    v_np, pi_np = v_batch.cpu().numpy(), pi_batch.cpu().numpy()
+                    for j, (leaf_idx, h) in enumerate(pending_gpu):
+                        v, pi = v_np[j].flatten(), pi_np[j].flatten()
+                        if cache is not None:
+                            cache.insert(h, pi, v)
+                        mcts_obj.process_result_batched(gs, leaf_idx, v, pi, is_sp)
+
+                mcts_obj.reset_batch()
+
+                # Snapshot entries whose vc threshold has been reached
+                # and record per-entry timing when first reached
+                rn = mcts_obj.root_n()
+                for entry in sorted_group:
+                    if entry.vc <= rn:
+                        _snapshot(slot, entry, mcts_obj, is_sp)
+                        if entry not in _entry_done:
+                            _entry_done.add(entry)
+                            entry_timing[entry] = entry_timing.get(entry, 0.0) + (_time.time() - _batch_start)
+
+            # Final snapshot for any remaining entries
+            _batch_end = _time.time()
+            for entry in sorted_group:
+                _snapshot(slot, entry, mcts_obj, is_sp)
+                if entry not in _entry_done:
+                    entry_timing[entry] = entry_timing.get(entry, 0.0) + (_batch_end - _batch_start)
 
         # Capture Q-values from the base reference tree at anchor_vc
         for slot, gid in enumerate(active):
@@ -754,7 +935,7 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
             pos_policies[slot]["base_ref"] = _get_policy(ref_tree, False, config)
             pos_values[slot]["base_ref"] = float(np.array(ref_tree.root_value())[0])
             # Fill anchor entry from base_ref if anchor is base mode and not yet captured
-            if anchor[1] == "base" and anchor not in pos_policies[slot]:
+            if anchor.mode == "base" and anchor not in pos_policies[slot]:
                 pos_policies[slot][anchor] = pos_policies[slot]["base_ref"]
                 pos_values[slot][anchor] = pos_values[slot]["base_ref"]
 
@@ -818,6 +999,13 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     pbar.close()
     print(f"Collected {total_positions} positions across {ANALYSIS_GAMES} games")
 
+    # Estimate sequential entry timing from aggregate throughput
+    if _seq_sims_total > 0 and _seq_elapsed_total > 0 and total_positions > 0:
+        seq_sims_per_sec = _seq_sims_total / _seq_elapsed_total
+        for entry in entries:
+            if entry.batch_size == 1 and entry.vc > 1 and entry not in entry_timing:
+                entry_timing[entry] = (entry.vc * total_positions) / seq_sims_per_sec
+
     # Aggregate metrics from all games (keyed by entry tuples)
     all_jsd = {e: [] for e in entries}
     all_tv = {e: [] for e in entries}
@@ -832,7 +1020,7 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     expected_reward = {e: [] for e in entries}
 
     # PIO gap accumulators (only for entries with vc > 1)
-    pio_entries = [e for e in entries if e[0] > 1]
+    pio_entries = [e for e in entries if e.vc > 1]
     pio_kl = {e: [] for e in pio_entries}
     pio_top1_flip = {e: [] for e in pio_entries}
     pio_entropy_raw = {e: [] for e in pio_entries}
@@ -883,7 +1071,7 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
 
             # PIO gap metrics: compare each entry (vc > 1) against vc=1 baseline
             for entry in pio_entries:
-                baseline_entry = (1, "base")
+                baseline_entry = Entry(1, "base")
                 if entry not in policies_at_pos or baseline_entry not in policies_at_pos:
                     continue
                 pi_mcts = policies_at_pos[entry]
@@ -1075,12 +1263,12 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     # Marginal KL: KL(pi_N2 || pi_N1) for consecutive visit-count pairs within each mode
     pio_marginal_kl = {}
     for mode in ("base", "selfplay"):
-        mode_entries = sorted([e for e in entries if e[1] == mode], key=entry_sort_key)
+        mode_entries = sorted([e for e in entries if e.mode == mode], key=entry_sort_key)
         if not mode_entries:
             continue
         # Always use base vc=1 as chain start (universal PIO baseline)
-        if mode_entries[0][0] > 1 and (1, "base") not in set(mode_entries):
-            mode_entries = [(1, "base")] + mode_entries
+        if mode_entries[0][0] > 1 and Entry(1, "base") not in set(mode_entries):
+            mode_entries = [Entry(1, "base")] + mode_entries
         for i in range(1, len(mode_entries)):
             e_prev, e_curr = mode_entries[i-1], mode_entries[i]
             vals = []
@@ -1153,6 +1341,18 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
         for entry in sorted(marginal_kl_means.keys(), key=entry_sort_key):
             print(f"{entry_label(entry):>8s} {marginal_kl_means[entry]:>10.4f}")
 
+    # Timing summary
+    if entry_timing:
+        print(f"\n--- Search Timing ---")
+        print(f"{'Entry':>8s} {'Total(s)':>10s} {'Per-pos(s)':>12s} {'Sims/s':>10s}")
+        for entry in sorted(entry_timing.keys(), key=entry_sort_key):
+            t = entry_timing[entry]
+            per_pos = t / total_positions if total_positions > 0 else 0
+            sims_per_sec = (entry.vc * total_positions) / t if t > 0 else 0
+            print(f"{entry_label(entry):>8s} {t:>10.2f} {per_pos:>12.4f} {sims_per_sec:>10.0f}")
+        metrics["entry_timing"] = {entry_label(e): t for e, t in entry_timing.items()}
+        metrics["entry_timing_raw"] = dict(entry_timing)
+
     print_cache_stats(cache)
     del agent
     gc.collect()
@@ -1174,6 +1374,9 @@ def compute_scaling_report(entries, anchor, elo=None, metrics=None):
       value_ece: {entry: float}  (Expected Calibration Error, lower is better)
       value_accuracy_gain: {entry: float}  (rate where search improves value, vc > 1 only)
     """
+    entries = [_to_entry(e) for e in entries]
+    anchor = _to_entry(anchor)
+
     if elo is None and metrics is None:
         return {}
 
@@ -1181,14 +1384,14 @@ def compute_scaling_report(entries, anchor, elo=None, metrics=None):
 
     # 1. Elo per Doubling — computed separately per mode to avoid index mismatch
     if elo is not None:
-        modes_present = sorted(set(mode for _, mode in entries))
+        modes_present = sorted(set(e.mode for e in entries))
         elo_per_doubling = []
         regressions = {}
 
         for mode in modes_present:
-            mode_entries = [(vc, m) for vc, m in entries if m == mode]
-            mode_vcs = sorted(vc for vc, _ in mode_entries)
-            mode_elos = [elo[entries.index(e)] for e in sorted(mode_entries, key=lambda e: e[0])]
+            mode_entries = [e for e in entries if e.mode == mode]
+            mode_vcs = sorted(e.vc for e in mode_entries)
+            mode_elos = [elo[entries.index(e)] for e in sorted(mode_entries, key=lambda e: e.vc)]
 
             for i in range(len(mode_vcs) - 1):
                 vc1, vc2 = mode_vcs[i], mode_vcs[i + 1]
@@ -1227,7 +1430,8 @@ def compute_scaling_report(entries, anchor, elo=None, metrics=None):
     if pio_flip and correction_quality:
         capacity = {}
         for entry in correction_quality:
-            if entry[0] > 1 and entry in pio_flip:
+            e = _to_entry(entry)
+            if e.vc > 1 and entry in pio_flip:
                 capacity[entry] = pio_flip[entry] * correction_quality[entry]
         if capacity:
             result["capacity_score"] = capacity
@@ -1248,7 +1452,7 @@ def compute_scaling_report(entries, anchor, elo=None, metrics=None):
         # Find vc=1 baseline reward (prefer base mode)
         vc1_reward = None
         for mode in ("base", "selfplay"):
-            key = (1, mode)
+            key = Entry(1, mode)
             if key in reward_means:
                 vc1_reward = reward_means[key]
                 break
@@ -1380,7 +1584,7 @@ def _plot_metric_panel(ax, metric_name, title, base_color, sorted_entries, means
             bar_means.append(p)
             ci_lo.append(max(0.0, p - lo))
             ci_hi.append(max(0.0, hi - p))
-            bar_colors.append("lightyellow" if entry[1] == "selfplay" else base_color)
+            bar_colors.append("lightyellow" if entry.mode == "selfplay" else base_color)
 
         bars = ax.bar(positions, bar_means, color=bar_colors, edgecolor="gray",
                        linewidth=0.8, zorder=2)
@@ -1399,7 +1603,7 @@ def _plot_metric_panel(ax, metric_name, title, base_color, sorted_entries, means
         bp = ax.boxplot(bp_data, tick_labels=labels,
                         showfliers=False, patch_artist=True)
         for i, entry in enumerate(sorted_entries):
-            if entry[1] == "selfplay":
+            if entry.mode == "selfplay":
                 bp["boxes"][i].set_facecolor("lightyellow" if base_color != "lightyellow" else "lightblue")
             else:
                 bp["boxes"][i].set_facecolor(base_color)
@@ -1421,7 +1625,7 @@ def _plot_metric_panel(ax, metric_name, title, base_color, sorted_entries, means
 
 def _set_entry_xticks(ax, sorted_entries):
     """Set log-scale x-axis with ticks at unique visit counts."""
-    unique_vcs = sorted(set(e[0] for e in sorted_entries))
+    unique_vcs = sorted(set(e.vc for e in sorted_entries))
     ax.set_xscale("log")
     ax.set_xticks(unique_vcs)
     ax.set_xticklabels([str(v) for v in unique_vcs])
@@ -1433,13 +1637,15 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         import matplotlib
         matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    entries = [_to_entry(e) for e in entries]
+    anchor = _to_entry(anchor)
 
-    has_mixed = len(set(mode for _, mode in entries)) > 1
+    has_mixed = len(set(e.mode for e in entries)) > 1
 
     def _plot_by_mode(ax, sorted_entries, values, base_color="tab:blue", sp_color="tab:orange", **kwargs):
         """Plot values split by mode with appropriate markers/lines."""
-        base = [(e[0], v) for e, v in zip(sorted_entries, values) if e[1] == "base"]
-        sp = [(e[0], v) for e, v in zip(sorted_entries, values) if e[1] == "selfplay"]
+        base = [(e.vc, v) for e, v in zip(sorted_entries, values) if e.mode == "base"]
+        sp = [(e.vc, v) for e, v in zip(sorted_entries, values) if e.mode == "selfplay"]
         if base:
             bx, by = zip(*base)
             ax.plot(bx, by, "o-", markersize=8, linewidth=2, color=base_color,
@@ -1464,14 +1670,14 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         sorted_elo = [elo[entries.index(e)] for e in sorted_entries]
         _plot_by_mode(ax, sorted_entries, sorted_elo)
         for e, el in zip(sorted_entries, sorted_elo):
-            ax.annotate(f"{el:.0f}", (e[0], el),
+            ax.annotate(f"{el:.0f}", (e.vc, el),
                         textcoords="offset points", xytext=(0, 12),
                         ha="center", fontsize=9)
         ax.set_xscale("log")
         ax.set_xlabel("MCTS Visit Count")
         ax.set_ylabel("Elo Rating")
         ax.set_title("Elo vs MCTS Visit Count")
-        unique_vcs = sorted(set(vc for vc, _ in entries))
+        unique_vcs = sorted(set(e.vc for e in entries))
         ax.set_xticks(unique_vcs)
         ax.set_xticklabels([str(v) for v in unique_vcs])
         ax.grid(True, alpha=0.3)
@@ -1621,7 +1827,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         # Left: expected reward curve
         reward_es = sorted(reward_means.keys(), key=entry_sort_key)
         _plot_by_mode(axes[panel], reward_es, [reward_means[e] for e in reward_es])
-        reward_unique_vcs = sorted(set(e[0] for e in reward_es))
+        reward_unique_vcs = sorted(set(e.vc for e in reward_es))
         axes[panel].set_xscale("log")
         axes[panel].set_xlabel("MCTS Visit Count")
         axes[panel].set_ylabel("Expected Reward V(pi)")
@@ -1636,7 +1842,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             regret_es = sorted(regret_means.keys(), key=entry_sort_key)
             _plot_by_mode(axes[panel], regret_es, [regret_means[e] for e in regret_es],
                           base_color="tab:red", sp_color="tab:purple")
-            regret_unique_vcs = sorted(set(e[0] for e in regret_es))
+            regret_unique_vcs = sorted(set(e.vc for e in regret_es))
             axes[panel].set_xscale("log")
             axes[panel].set_xlabel("MCTS Visit Count")
             axes[panel].set_ylabel("Regret")
@@ -1654,7 +1860,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             bp = axes[panel].boxplot(bp_data, tick_labels=labels,
                                      showfliers=False, patch_artist=True)
             for i, entry in enumerate(regret_box_es):
-                bp["boxes"][i].set_facecolor("lightyellow" if entry[1] == "selfplay" else "lightsalmon")
+                bp["boxes"][i].set_facecolor("lightyellow" if entry.mode == "selfplay" else "lightsalmon")
             axes[panel].set_xlabel("MCTS Visit Count")
             axes[panel].set_ylabel("Regret")
             axes[panel].set_title("Policy Regret Distribution")
@@ -1718,7 +1924,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             marginal_means = metrics["pio_marginal_kl_means"]
             marginal_es = sorted(marginal_means.keys(), key=entry_sort_key)
             _plot_by_mode(axes[panel], marginal_es, [marginal_means[e] for e in marginal_es])
-            marginal_vcs = sorted(set(e[0] for e in marginal_es))
+            marginal_vcs = sorted(set(e.vc for e in marginal_es))
             axes[panel].set_xscale("log")
             axes[panel].set_xlabel("MCTS Visit Count")
             axes[panel].set_ylabel("Marginal KL")
@@ -1742,7 +1948,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
                                         label=f"vc=1 {mode}")
             axes[panel].legend(fontsize=8)
 
-            reward_vcs = sorted(set(e[0] for e in reward_es))
+            reward_vcs = sorted(set(e.vc for e in reward_es))
             axes[panel].set_xscale("log")
             axes[panel].set_xlabel("MCTS Visit Count")
             axes[panel].set_ylabel("Expected Reward V(pi)")
@@ -1860,9 +2066,60 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         fig.savefig(path, dpi=150, bbox_inches="tight")
         print(f"Saved: {path}")
 
+    # Figure: Search Timing (Sims/s and per-position time, color-coded by batch_size)
+    entry_timing_raw = metrics.get("entry_timing_raw", {}) if metrics else {}
+    total_positions = metrics.get("total_positions", 0) if metrics else 0
+    if entry_timing_raw and total_positions > 0:
+        from matplotlib.cm import get_cmap
+        from matplotlib.patches import Patch
+
+        sorted_timing_entries = sorted(entry_timing_raw.keys(), key=entry_sort_key)
+        labels = [entry_label(e) for e in sorted_timing_entries]
+        times = [entry_timing_raw[e] for e in sorted_timing_entries]
+        sims_per_sec = [(e.vc * total_positions) / t if t > 0 else 0
+                        for e, t in zip(sorted_timing_entries, times)]
+        per_pos = [t / total_positions if total_positions > 0 else 0
+                   for t in times]
+
+        # Color by batch_size
+        unique_bs = sorted(set(e.batch_size for e in sorted_timing_entries))
+        cmap = get_cmap("viridis", max(len(unique_bs), 2))
+        bs_to_color = {bs: cmap(i / max(len(unique_bs) - 1, 1)) for i, bs in enumerate(unique_bs)}
+        colors = [bs_to_color[e.batch_size] for e in sorted_timing_entries]
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+        x = np.arange(len(labels))
+
+        ax1.bar(x, sims_per_sec, color=colors)
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(labels, rotation=45, ha="right")
+        ax1.set_ylabel("Simulations / second")
+        ax1.set_title("Search Throughput (Sims/s)")
+        ax1.grid(True, alpha=0.3, axis="y")
+
+        ax2.bar(x, per_pos, color=colors)
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(labels, rotation=45, ha="right")
+        ax2.set_ylabel("Seconds / position")
+        ax2.set_title("Per-Position Search Time")
+        ax2.grid(True, alpha=0.3, axis="y")
+
+        # Legend mapping colors to batch sizes
+        legend_elements = [
+            Patch(facecolor=bs_to_color[bs],
+                  label="seq" if bs == 1 else f"b={bs}")
+            for bs in unique_bs
+        ]
+        fig.legend(handles=legend_elements, loc="upper right", fontsize=9,
+                   title="Batch Size")
+        fig.tight_layout(rect=[0, 0, 0.92, 1])
+        path = os.path.join(save_dir, "search_timing.png")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        print(f"Saved: {path}")
+
     # Save raw data
     save_data = {
-        "visit_counts": np.array(sorted(set(vc for vc, _ in entries))),
+        "visit_counts": np.array(sorted(set(e.vc for e in entries))),
         "entry_labels": np.array([entry_label(e) for e in entries]),
         "anchor": np.array(entry_label(anchor)),
     }
@@ -1916,6 +2173,10 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         if "pio_marginal_kl_all" in metrics:
             for entry, arr in metrics["pio_marginal_kl_all"].items():
                 save_data[f"pio_marginal_kl_all_{entry_label(entry)}"] = arr
+        # Timing data
+        if "entry_timing_raw" in metrics:
+            for entry, t in metrics["entry_timing_raw"].items():
+                save_data[f"timing_{entry_label(entry)}"] = np.array(t)
 
     # Scaling report data
     if scaling:

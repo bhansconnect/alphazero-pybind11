@@ -25,6 +25,7 @@ from mcts_analysis import (
     compute_scaling_report,
     MctsSettings,
     _entry_mcts_settings,
+    Entry,
 )
 from policy_metrics import batch_top_k_agreement
 
@@ -194,36 +195,47 @@ def test_game_registry_used():
 
 def test_entry_label_base():
     """Base mode entries show just the VC number."""
-    assert entry_label((200, "base")) == "200"
-    assert entry_label((1, "base")) == "1"
+    assert entry_label(Entry(200, "base")) == "200"
+    assert entry_label(Entry(1, "base")) == "1"
 
 
 def test_entry_label_selfplay():
     """Selfplay mode entries show VC with 'sp' suffix."""
-    assert entry_label((200, "selfplay")) == "200sp"
-    assert entry_label((1, "selfplay")) == "1sp"
+    assert entry_label(Entry(200, "selfplay")) == "200sp"
+    assert entry_label(Entry(1, "selfplay")) == "1sp"
 
 
 def test_entry_sort_key_base_before_selfplay():
     """At the same VC, base sorts before selfplay."""
-    assert entry_sort_key((200, "base")) < entry_sort_key((200, "selfplay"))
+    assert entry_sort_key(Entry(200, "base")) < entry_sort_key(Entry(200, "selfplay"))
 
 
 def test_entry_sort_key_lower_vc_first():
     """Lower VC sorts before higher VC regardless of mode."""
-    assert entry_sort_key((100, "selfplay")) < entry_sort_key((200, "base"))
+    assert entry_sort_key(Entry(100, "selfplay")) < entry_sort_key(Entry(200, "base"))
 
 
 def test_entry_sort_key_full_ordering():
     """Full sort produces expected order."""
-    entries = [(200, "selfplay"), (100, "base"), (200, "base"), (50, "selfplay")]
+    entries = [Entry(200, "selfplay"), Entry(100, "base"), Entry(200, "base"), Entry(50, "selfplay")]
     sorted_entries = sorted(entries, key=entry_sort_key)
-    assert sorted_entries == [(50, "selfplay"), (100, "base"), (200, "base"), (200, "selfplay")]
+    assert sorted_entries == [Entry(50, "selfplay"), Entry(100, "base"), Entry(200, "base"), Entry(200, "selfplay")]
 
 
 def test_entry_sort_key_duplicate_entries():
     """Identical entries sort equally."""
-    assert entry_sort_key((400, "base")) == entry_sort_key((400, "base"))
+    assert entry_sort_key(Entry(400, "base")) == entry_sort_key(Entry(400, "base"))
+
+
+def test_entry_label_auto_batch():
+    """Auto batch (batch_size=0) entries show 'b0' suffix."""
+    assert entry_label(Entry(120, "base", 0)) == "120b0"
+    assert entry_label(Entry(200, "selfplay", 0)) == "200spb0"
+
+
+def test_entry_sort_key_auto_batch():
+    """Auto batch (batch_size=0) sorts before sequential (batch_size=1)."""
+    assert entry_sort_key(Entry(120, "base", 0)) < entry_sort_key(Entry(120, "base", 1))
 
 
 # --- _entry_mcts_settings tests ---
@@ -232,7 +244,7 @@ def test_entry_sort_key_duplicate_entries():
 def test_entry_mcts_settings_base():
     """Base entry returns zero epsilon, root_temp=1.0, no root_fpu_zero."""
     config = TrainConfig(mcts_root_temp=1.25)
-    eps, rpt, rfz = _entry_mcts_settings((200, "base"), config)
+    eps, rpt, rfz = _entry_mcts_settings(Entry(200, "base"), config)
     assert eps == 0.0
     assert rpt == 1.0
     assert rfz is False
@@ -241,7 +253,7 @@ def test_entry_mcts_settings_base():
 def test_entry_mcts_settings_selfplay():
     """Selfplay entry returns 0.25 epsilon, config root_temp, root_fpu_zero=True."""
     config = TrainConfig(mcts_root_temp=1.25)
-    eps, rpt, rfz = _entry_mcts_settings((200, "selfplay"), config)
+    eps, rpt, rfz = _entry_mcts_settings(Entry(200, "selfplay"), config)
     assert eps == 0.25
     assert rpt == 1.25
     assert rfz is True
@@ -250,7 +262,7 @@ def test_entry_mcts_settings_selfplay():
 def test_entry_mcts_settings_uses_config_root_temp():
     """Selfplay root_temp comes from config, not hardcoded."""
     config = TrainConfig(mcts_root_temp=2.0)
-    eps, rpt, rfz = _entry_mcts_settings((100, "selfplay"), config)
+    eps, rpt, rfz = _entry_mcts_settings(Entry(100, "selfplay"), config)
     assert rpt == 2.0
 
 
@@ -269,8 +281,8 @@ def test_anchor_selfplay_is_reference(monkeypatch):
     config = TrainConfig(game="connect4")
     Game = config.Game
 
-    entries = [(10, "base"), (10, "selfplay")]
-    anchor = (10, "selfplay")
+    entries = [Entry(10, "base"), Entry(10, "selfplay")]
+    anchor = Entry(10, "selfplay")
 
     metrics, snapshots = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
@@ -290,7 +302,7 @@ def test_anchor_selfplay_is_reference(monkeypatch):
 
     # The base entry at the same VC must have JSD > 0
     # (base policy differs from selfplay due to Dirichlet noise)
-    base_entry = (10, "base")
+    base_entry = Entry(10, "base")
     assert base_entry in jsd_means
     assert jsd_means[base_entry] > 0.0
 
@@ -303,8 +315,8 @@ def test_anchor_base_is_reference(monkeypatch):
     config = TrainConfig(game="connect4")
     Game = config.Game
 
-    entries = [(10, "base"), (10, "selfplay")]
-    anchor = (10, "base")
+    entries = [Entry(10, "base"), Entry(10, "selfplay")]
+    anchor = Entry(10, "base")
 
     metrics, snapshots = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
@@ -319,7 +331,7 @@ def test_anchor_base_is_reference(monkeypatch):
     assert regret_means[anchor] == pytest.approx(0.0, abs=1e-10)
 
     # Selfplay entry should diverge from the base anchor
-    sp_entry = (10, "selfplay")
+    sp_entry = Entry(10, "selfplay")
     assert sp_entry in jsd_means
     assert jsd_means[sp_entry] > 0.0
 
@@ -389,8 +401,8 @@ def test_pio_metrics_present(monkeypatch):
     config = TrainConfig(game="connect4")
     Game = config.Game
 
-    entries = [(1, "base"), (10, "base"), (25, "base")]
-    anchor = (25, "base")
+    entries = [Entry(1, "base"), Entry(10, "base"), Entry(25, "base")]
+    anchor = Entry(25, "base")
 
     metrics, snapshots = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
@@ -409,20 +421,20 @@ def test_pio_metrics_present(monkeypatch):
         assert isinstance(means, dict)
         assert isinstance(all_vals, dict)
         # vc=1 should NOT be in PIO metrics (it IS the baseline)
-        assert (1, "base") not in means
+        assert Entry(1, "base") not in means
         # vc=10 and vc=25 should be present
-        for entry in [(10, "base"), (25, "base")]:
+        for entry in [Entry(10, "base"), Entry(25, "base")]:
             assert entry in means, f"{entry} missing from {name}_means"
             assert isinstance(means[entry], float)
             assert entry in all_vals
             assert isinstance(all_vals[entry], np.ndarray)
 
     # KL should be >= 0
-    for entry in [(10, "base"), (25, "base")]:
+    for entry in [Entry(10, "base"), Entry(25, "base")]:
         assert metrics["pio_kl_means"][entry] >= 0.0
 
     # Top-1 flip rate should be in [0, 1]
-    for entry in [(10, "base"), (25, "base")]:
+    for entry in [Entry(10, "base"), Entry(25, "base")]:
         assert 0.0 <= metrics["pio_top1_flip_means"][entry] <= 1.0
 
     # Marginal KL should exist
@@ -438,8 +450,8 @@ def test_pio_vc1_injected_when_absent(monkeypatch):
     config = TrainConfig(game="connect4")
     Game = config.Game
 
-    entries = [(10, "base"), (25, "base")]
-    anchor = (25, "base")
+    entries = [Entry(10, "base"), Entry(25, "base")]
+    anchor = Entry(25, "base")
 
     metrics, snapshots = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
@@ -447,12 +459,12 @@ def test_pio_vc1_injected_when_absent(monkeypatch):
     )
 
     # entries in metrics should NOT include vc=1 (not modified)
-    assert (1, "base") not in metrics["entries"]
+    assert Entry(1, "base") not in metrics["entries"]
     assert metrics["entries"] == entries
 
     # PIO metrics should still be computed for vc=10, vc=25
-    assert (10, "base") in metrics["pio_kl_means"]
-    assert (25, "base") in metrics["pio_kl_means"]
+    assert Entry(10, "base") in metrics["pio_kl_means"]
+    assert Entry(25, "base") in metrics["pio_kl_means"]
 
 
 def test_pio_vc1_not_duplicated_when_present(monkeypatch):
@@ -463,8 +475,8 @@ def test_pio_vc1_not_duplicated_when_present(monkeypatch):
     config = TrainConfig(game="connect4")
     Game = config.Game
 
-    entries = [(1, "base"), (10, "base"), (25, "base")]
-    anchor = (25, "base")
+    entries = [Entry(1, "base"), Entry(10, "base"), Entry(25, "base")]
+    anchor = Entry(25, "base")
 
     metrics, snapshots = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
@@ -473,10 +485,10 @@ def test_pio_vc1_not_duplicated_when_present(monkeypatch):
 
     total_positions = metrics["total_positions"]
     # PIO data points for vc=10 should equal total positions (one per position)
-    n_pio = len(metrics["pio_kl_all"][(10, "base")])
+    n_pio = len(metrics["pio_kl_all"][Entry(10, "base")])
     assert n_pio == total_positions
     # Same for vc=25
-    n_pio_25 = len(metrics["pio_kl_all"][(25, "base")])
+    n_pio_25 = len(metrics["pio_kl_all"][Entry(25, "base")])
     assert n_pio_25 == total_positions
 
 
@@ -485,13 +497,13 @@ def test_pio_vc1_not_duplicated_when_present(monkeypatch):
 
 def _make_entries(vcs):
     """Helper: create base-mode entries from a list of visit counts."""
-    return [(vc, "base") for vc in vcs]
+    return [Entry(vc, "base") for vc in vcs]
 
 
 def test_elo_per_doubling_uniform():
     """Power-of-2 VCs with uniform Elo spacing -> exact 100.0/doubling, R2=1.0."""
     entries = _make_entries([1, 2, 4, 8])
-    anchor = (8, "base")
+    anchor = Entry(8, "base")
     elo = np.array([0.0, 100.0, 200.0, 300.0])
 
     result = compute_scaling_report(entries, anchor, elo=elo, metrics=None)
@@ -512,7 +524,7 @@ def test_elo_per_doubling_uniform():
 def test_elo_per_doubling_nonuniform():
     """Non-power-of-2 VCs use correct log2 denominator."""
     entries = _make_entries([10, 30, 90])
-    anchor = (90, "base")
+    anchor = Entry(90, "base")
     elo = np.array([0.0, 100.0, 200.0])
 
     result = compute_scaling_report(entries, anchor, elo=elo, metrics=None)
@@ -528,8 +540,8 @@ def test_elo_per_doubling_nonuniform():
 def test_elo_per_doubling_none_when_no_elo():
     """elo=None -> elo_per_doubling key absent from result."""
     entries = _make_entries([1, 10, 100])
-    anchor = (100, "base")
-    metrics = {"pio_top1_flip_means": {(10, "base"): 0.3, (100, "base"): 0.5}}
+    anchor = Entry(100, "base")
+    metrics = {"pio_top1_flip_means": {Entry(10, "base"): 0.3, Entry(100, "base"): 0.5}}
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
@@ -540,81 +552,81 @@ def test_elo_per_doubling_none_when_no_elo():
 def test_policy_improvement_basic():
     """Policy improvement = pio_top1_flip (ascending with VC)."""
     entries = _make_entries([1, 10, 100])
-    anchor = (100, "base")
+    anchor = Entry(100, "base")
     metrics = {
-        "pio_top1_flip_means": {(10, "base"): 0.3, (100, "base"): 0.5},
+        "pio_top1_flip_means": {Entry(10, "base"): 0.3, Entry(100, "base"): 0.5},
     }
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
     assert "policy_improvement" in result
-    assert result["policy_improvement"][(10, "base")] == pytest.approx(0.3)
-    assert result["policy_improvement"][(100, "base")] == pytest.approx(0.5)
+    assert result["policy_improvement"][Entry(10, "base")] == pytest.approx(0.3)
+    assert result["policy_improvement"][Entry(100, "base")] == pytest.approx(0.5)
     # vc=1 should NOT be present (pio_top1_flip only exists for vc > 1)
-    assert (1, "base") not in result["policy_improvement"]
+    assert Entry(1, "base") not in result["policy_improvement"]
 
 
 def test_capacity_score_vc1_excluded():
     """vc=1 never appears in capacity_score."""
     entries = _make_entries([1, 10, 100])
-    anchor = (100, "base")
+    anchor = Entry(100, "base")
     metrics = {
-        "pio_top1_flip_means": {(10, "base"): 0.3, (100, "base"): 0.5},
-        "pio_correction_quality_means": {(10, "base"): 0.8, (100, "base"): 0.9},
+        "pio_top1_flip_means": {Entry(10, "base"): 0.3, Entry(100, "base"): 0.5},
+        "pio_correction_quality_means": {Entry(10, "base"): 0.8, Entry(100, "base"): 0.9},
     }
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
     assert "capacity_score" in result
-    assert (1, "base") not in result["capacity_score"]
-    assert (10, "base") in result["capacity_score"]
+    assert Entry(1, "base") not in result["capacity_score"]
+    assert Entry(10, "base") in result["capacity_score"]
 
 
 def test_capacity_score_computation():
     """Capacity score = pio_top1_flip * correction_quality."""
     entries = _make_entries([1, 50])
-    anchor = (50, "base")
+    anchor = Entry(50, "base")
     metrics = {
-        "pio_top1_flip_means": {(50, "base"): 0.4},
-        "pio_correction_quality_means": {(50, "base"): 0.75},
+        "pio_top1_flip_means": {Entry(50, "base"): 0.4},
+        "pio_correction_quality_means": {Entry(50, "base"): 0.75},
     }
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
     # capacity = 0.4 * 0.75 = 0.3
-    assert result["capacity_score"][(50, "base")] == pytest.approx(0.3)
+    assert result["capacity_score"][Entry(50, "base")] == pytest.approx(0.3)
 
     # With different values
-    metrics["pio_top1_flip_means"][(50, "base")] = 0.0
+    metrics["pio_top1_flip_means"][Entry(50, "base")] = 0.0
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
     # 0.0 * 0.75 = 0.0
-    assert result["capacity_score"][(50, "base")] == pytest.approx(0.0)
+    assert result["capacity_score"][Entry(50, "base")] == pytest.approx(0.0)
 
 
 def test_mcts_utilization_boundaries():
     """Utilization = 0.0 at vc=1 and 1.0 at anchor."""
     entries = _make_entries([1, 10, 100])
-    anchor = (100, "base")
+    anchor = Entry(100, "base")
     metrics = {
-        "reward_means": {(1, "base"): 0.2, (10, "base"): 0.5, (100, "base"): 0.8},
+        "reward_means": {Entry(1, "base"): 0.2, Entry(10, "base"): 0.5, Entry(100, "base"): 0.8},
     }
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
     assert "mcts_utilization" in result
     mu = result["mcts_utilization"]
-    assert mu[(1, "base")] == pytest.approx(0.0)
-    assert mu[(100, "base")] == pytest.approx(1.0)
+    assert mu[Entry(1, "base")] == pytest.approx(0.0)
+    assert mu[Entry(100, "base")] == pytest.approx(1.0)
     # Intermediate: (0.5 - 0.2) / (0.8 - 0.2) = 0.5
-    assert mu[(10, "base")] == pytest.approx(0.5)
+    assert mu[Entry(10, "base")] == pytest.approx(0.5)
 
 
 def test_mcts_utilization_no_division_by_zero():
     """Equal rewards (anchor ≈ vc=1) -> mcts_utilization absent."""
     entries = _make_entries([1, 10, 100])
-    anchor = (100, "base")
+    anchor = Entry(100, "base")
     metrics = {
-        "reward_means": {(1, "base"): 0.5, (10, "base"): 0.5, (100, "base"): 0.5},
+        "reward_means": {Entry(1, "base"): 0.5, Entry(10, "base"): 0.5, Entry(100, "base"): 0.5},
     }
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
@@ -625,7 +637,7 @@ def test_mcts_utilization_no_division_by_zero():
 def test_scaling_report_empty_inputs():
     """elo=None, metrics=None -> empty dict."""
     entries = _make_entries([1, 10, 100])
-    anchor = (100, "base")
+    anchor = Entry(100, "base")
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=None)
 
@@ -635,21 +647,21 @@ def test_scaling_report_empty_inputs():
 def test_scaling_report_ece_passthrough():
     """ECE and value accuracy gain are passed through from metrics."""
     entries = _make_entries([1, 10, 100])
-    anchor = (100, "base")
+    anchor = Entry(100, "base")
     metrics = {
-        "pio_top1_flip_means": {(10, "base"): 0.3, (100, "base"): 0.5},
-        "value_ece": {(1, "base"): 0.15, (10, "base"): 0.10, (100, "base"): 0.05},
-        "pio_value_accuracy_gain_means": {(10, "base"): 0.6, (100, "base"): 0.7},
+        "pio_top1_flip_means": {Entry(10, "base"): 0.3, Entry(100, "base"): 0.5},
+        "value_ece": {Entry(1, "base"): 0.15, Entry(10, "base"): 0.10, Entry(100, "base"): 0.05},
+        "pio_value_accuracy_gain_means": {Entry(10, "base"): 0.6, Entry(100, "base"): 0.7},
     }
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
     assert "value_ece" in result
-    assert result["value_ece"][(10, "base")] == pytest.approx(0.10)
-    assert result["value_ece"][(100, "base")] == pytest.approx(0.05)
+    assert result["value_ece"][Entry(10, "base")] == pytest.approx(0.10)
+    assert result["value_ece"][Entry(100, "base")] == pytest.approx(0.05)
     assert "value_accuracy_gain" in result
-    assert result["value_accuracy_gain"][(10, "base")] == pytest.approx(0.6)
-    assert result["value_accuracy_gain"][(100, "base")] == pytest.approx(0.7)
+    assert result["value_accuracy_gain"][Entry(10, "base")] == pytest.approx(0.6)
+    assert result["value_accuracy_gain"][Entry(100, "base")] == pytest.approx(0.7)
 
 
 # --- Position snapshot tests ---
@@ -663,8 +675,8 @@ def test_snapshots_returned(monkeypatch):
     config = TrainConfig(game="connect4")
     Game = config.Game
 
-    entries = [(1, "base"), (10, "base")]
-    anchor = (10, "base")
+    entries = [Entry(1, "base"), Entry(10, "base")]
+    anchor = Entry(10, "base")
 
     metrics, snapshots = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
@@ -694,8 +706,8 @@ def test_value_ece_in_metrics(monkeypatch):
     config = TrainConfig(game="connect4")
     Game = config.Game
 
-    entries = [(1, "base"), (10, "base"), (25, "base")]
-    anchor = (25, "base")
+    entries = [Entry(1, "base"), Entry(10, "base"), Entry(25, "base")]
+    anchor = Entry(25, "base")
 
     metrics, _ = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
@@ -724,8 +736,8 @@ def test_value_accuracy_gain_in_metrics(monkeypatch):
     config = TrainConfig(game="connect4")
     Game = config.Game
 
-    entries = [(1, "base"), (10, "base"), (25, "base")]
-    anchor = (25, "base")
+    entries = [Entry(1, "base"), Entry(10, "base"), Entry(25, "base")]
+    anchor = Entry(25, "base")
 
     metrics, _ = mcts_analysis.run_analysis(
         config, Game, network_path=None, entries=entries, anchor=anchor,
@@ -736,9 +748,9 @@ def test_value_accuracy_gain_in_metrics(monkeypatch):
     vag_means = metrics["pio_value_accuracy_gain_means"]
     assert isinstance(vag_means, dict)
     # vc=1 should NOT be in VIR (it IS the baseline)
-    assert (1, "base") not in vag_means
+    assert Entry(1, "base") not in vag_means
     # vc=10 and vc=25 should be present
-    for entry in [(10, "base"), (25, "base")]:
+    for entry in [Entry(10, "base"), Entry(25, "base")]:
         assert entry in vag_means, f"{entry} missing from pio_value_accuracy_gain_means"
         assert 0.0 <= vag_means[entry] <= 1.0
 
@@ -754,8 +766,8 @@ def test_monrad_tournament_fewer_matchups():
     config = TrainConfig(game="connect4")
     Game = config.Game
 
-    entries = [(1, "base"), (10, "base"), (25, "base"), (50, "base"),
-               (100, "base"), (200, "base"), (400, "base"), (800, "base")]
+    entries = [Entry(1, "base"), Entry(10, "base"), Entry(25, "base"), Entry(50, "base"),
+               Entry(100, "base"), Entry(200, "base"), Entry(400, "base"), Entry(800, "base")]
     count = len(entries)
 
     matchups_played = []
@@ -791,7 +803,7 @@ def test_monrad_tournament_no_self_play_matchup():
     config = TrainConfig(game="connect4")
     Game = config.Game
 
-    entries = [(10, "base"), (50, "base"), (100, "base"), (200, "base")]
+    entries = [Entry(10, "base"), Entry(50, "base"), Entry(100, "base"), Entry(200, "base")]
 
     pairs = []
 
@@ -818,7 +830,7 @@ def test_monrad_tournament_no_repeat_matchup():
     config = TrainConfig(game="connect4")
     Game = config.Game
 
-    entries = [(10, "base"), (50, "base"), (100, "base"), (200, "base")]
+    entries = [Entry(10, "base"), Entry(50, "base"), Entry(100, "base"), Entry(200, "base")]
 
     pairs = []
 
@@ -844,7 +856,7 @@ def test_monrad_tournament_odd_count():
     config = TrainConfig(game="connect4")
     Game = config.Game
 
-    entries = [(10, "base"), (50, "base"), (100, "base")]  # 3 entries (odd)
+    entries = [Entry(10, "base"), Entry(50, "base"), Entry(100, "base")]  # 3 entries (odd)
 
     def mock_pit_agents(config, Game, players, depths, bs, name, **kwargs):
         return [0.5] * Game.NUM_PLAYERS()

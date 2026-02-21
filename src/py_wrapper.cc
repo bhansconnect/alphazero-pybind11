@@ -182,6 +182,10 @@ PYBIND11_MODULE(alphazero, m) {
       .def("add_root_noise", &MCTS::add_root_noise)
       .def("apply_root_policy_temp", &MCTS::apply_root_policy_temp)
       .def("root_n", &MCTS::root_n)
+      .def("find_leaf_batched", &MCTS::find_leaf_batched)
+      .def("process_result_batched", &MCTS::process_result_batched)
+      .def("in_flight_count", &MCTS::in_flight_count)
+      .def("reset_batch", &MCTS::reset_batch)
       .def_static("pick_move", &MCTS::pick_move);
 
   py::class_<S3FIFOCache>(m, "S3FIFOCache")

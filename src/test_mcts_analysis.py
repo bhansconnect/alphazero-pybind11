@@ -459,11 +459,14 @@ def test_elo_per_doubling_uniform():
     assert "elo_per_doubling" in result
     epd = result["elo_per_doubling"]
     assert len(epd) == 3
-    for vc1, vc2, val in epd:
+    for vc1, vc2, val, mode in epd:
         assert val == pytest.approx(100.0, abs=1e-6)
+        assert mode == "base"
 
-    assert result["elo_slope"] == pytest.approx(100.0, abs=1e-6)
-    assert result["elo_r2"] == pytest.approx(1.0, abs=1e-6)
+    assert "elo_regressions" in result
+    slope, r2 = result["elo_regressions"]["base"]
+    assert slope == pytest.approx(100.0, abs=1e-6)
+    assert r2 == pytest.approx(1.0, abs=1e-6)
 
 
 def test_elo_per_doubling_nonuniform():
@@ -491,7 +494,7 @@ def test_elo_per_doubling_none_when_no_elo():
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
     assert "elo_per_doubling" not in result
-    assert "elo_slope" not in result
+    assert "elo_regressions" not in result
 
 
 def test_policy_improvement_basic():

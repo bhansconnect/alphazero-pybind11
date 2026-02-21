@@ -21,6 +21,7 @@ struct DLLEXPORT Node {
   float policy = 0;
   uint32_t move = 0;
   uint32_t n = 0;
+  uint32_t n_in_flight = 0;  // WU-UCT: pending evaluations through this node
   int8_t player = 0;
   std::optional<Vector<float>> scores = std::nullopt;
   std::vector<Node> children{};
@@ -92,9 +93,21 @@ class DLLEXPORT MCTS {
   [[nodiscard]] float root_policy_temp() const noexcept { return root_policy_temp_; }
   [[nodiscard]] bool root_fpu_zero() const noexcept { return root_fpu_zero_; }
 
+  // Batched WU-UCT
+  [[nodiscard]] std::unique_ptr<GameState> find_leaf_batched(const GameState& gs);
+  void process_result_batched(const GameState& gs, uint32_t leaf_index,
+                              Vector<float>& value, Vector<float>& pi,
+                              bool root_noise_enabled = false);
+  [[nodiscard]] uint32_t in_flight_count() const noexcept;
+  void reset_batch() noexcept;
+
   [[nodiscard]] static uint32_t pick_move(const Vector<float>& p);
 
  private:
+  struct InFlightLeaf {
+    std::vector<Node*> path;
+    Node* leaf;
+  };
   float cpuct_;
   int32_t num_players_;
   int32_t num_moves_;
@@ -110,6 +123,7 @@ class DLLEXPORT MCTS {
   bool relative_values_;
   bool root_fpu_zero_;
   bool shaped_dirichlet_;
+  std::vector<InFlightLeaf> in_flight_;
 };
 
 }  // namespace alphazero

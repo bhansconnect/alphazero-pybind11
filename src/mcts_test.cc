@@ -1,6 +1,8 @@
 #include "mcts.h"
 
 #include <iostream>
+#include <set>
+#include <string>
 
 #include "connect4_gs.h"
 #include "gtest/gtest.h"
@@ -533,6 +535,139 @@ TEST(MCTS, PuctInversionNeverExceedsActual) {
         << "\nregular: " << regular.transpose()
         << "\npruned:  " << pruned.transpose();
   }
+}
+
+// NOLINTNEXTLINE
+TEST(MCTS, BatchedBasic) {
+  // Same position as Basic test. Batched search should find the same best move.
+  auto gs = connect4_gs::Connect4GS{};
+  gs.play_move(1);
+  gs.play_move(6);
+  gs.play_move(3);
+  gs.play_move(6);
+  auto mcts = MCTS{2, gs.num_players(), gs.num_moves()};
+  constexpr int BATCH_SIZE = 8;
+  constexpr int TOTAL_SIMS = 800;
+  int sims = 0;
+  while (sims < TOTAL_SIMS) {
+    int batch = std::min(BATCH_SIZE, TOTAL_SIMS - sims);
+    for (int i = 0; i < batch; ++i) {
+      auto leaf = mcts.find_leaf_batched(gs);
+      auto [value, pi] = dumb_eval(*leaf);
+      mcts.process_result_batched(gs, i, value, pi);
+    }
+    mcts.reset_batch();
+    sims += batch;
+  }
+  auto counts = mcts.counts();
+  std::cout << "Batched counts: " << counts << std::endl;
+  EXPECT_EQ(MCTS::pick_move(mcts.probs(0)), 2);
+}
+
+// NOLINTNEXTLINE
+TEST(MCTS, BatchedTerminal) {
+  // Position one move from winning — batch should handle terminal leaves.
+  auto gs = connect4_gs::Connect4GS{};
+  // Build a near-win: P0 has 3 in a row in column 3
+  gs.play_move(3);  // P0
+  gs.play_move(0);  // P1
+  gs.play_move(3);  // P0
+  gs.play_move(0);  // P1
+  gs.play_move(3);  // P0
+  gs.play_move(1);  // P1
+  // P0 can win by playing column 3
+
+  auto mcts = MCTS{2, gs.num_players(), gs.num_moves()};
+  constexpr int BATCH_SIZE = 4;
+  int sims = 0;
+  while (sims < 100) {
+    int batch = std::min(BATCH_SIZE, 100 - sims);
+    for (int i = 0; i < batch; ++i) {
+      auto leaf = mcts.find_leaf_batched(gs);
+      auto [value, pi] = dumb_eval(*leaf);
+      mcts.process_result_batched(gs, i, value, pi);
+    }
+    mcts.reset_batch();
+    sims += batch;
+  }
+  // Should find the winning move (column 3)
+  auto best = MCTS::pick_move(mcts.probs(0));
+  EXPECT_EQ(best, 3);
+}
+
+// NOLINTNEXTLINE
+TEST(MCTS, BatchedSingleEquivalent) {
+  // Batched with batch_size=1 should produce the same best move and
+  // similar visit distribution to unbatched. Exact counts may differ due to
+  // children shuffle ordering (thread_local RNG state differs between runs).
+  auto gs = connect4_gs::Connect4GS{};
+  gs.play_move(1);
+  gs.play_move(6);
+  gs.play_move(3);
+  gs.play_move(6);
+
+  // Unbatched
+  auto mcts_unbatched = MCTS{2, gs.num_players(), gs.num_moves()};
+  while (mcts_unbatched.depth() < 800) {
+    auto leaf = mcts_unbatched.find_leaf(gs);
+    auto [value, pi] = dumb_eval(*leaf);
+    mcts_unbatched.process_result(gs, value, pi);
+  }
+
+  // Batched with batch_size=1
+  auto mcts_batched = MCTS{2, gs.num_players(), gs.num_moves()};
+  while (mcts_batched.depth() < 800) {
+    auto leaf = mcts_batched.find_leaf_batched(gs);
+    auto [value, pi] = dumb_eval(*leaf);
+    mcts_batched.process_result_batched(gs, 0, value, pi);
+    mcts_batched.reset_batch();
+  }
+
+  auto counts_u = mcts_unbatched.counts();
+  auto counts_b = mcts_batched.counts();
+  // Best move should be the same
+  auto best_u = MCTS::pick_move(mcts_unbatched.probs(0));
+  auto best_b = MCTS::pick_move(mcts_batched.probs(0));
+  EXPECT_EQ(best_u, best_b)
+      << "Best move differs.\nunbatched counts: " << counts_u.transpose()
+      << "\nbatched counts:   " << counts_b.transpose();
+
+  // Total visits should match
+  EXPECT_EQ(counts_u.sum(), counts_b.sum());
+}
+
+// NOLINTNEXTLINE
+TEST(MCTS, WUUCTDiversity) {
+  // With batch_size=4, leaves should explore different paths
+  // (WU-UCT exploration penalty should diversify).
+  auto gs = connect4_gs::Connect4GS{};
+  auto mcts = MCTS{2, gs.num_players(), gs.num_moves()};
+
+  // Run one sim to expand root
+  {
+    auto leaf = mcts.find_leaf(gs);
+    auto [v, pi] = dumb_eval(*leaf);
+    mcts.process_result(gs, v, pi);
+  }
+
+  // Now find 4 leaves in a batch
+  std::vector<std::string> leaf_states;
+  for (int i = 0; i < 4; ++i) {
+    auto leaf = mcts.find_leaf_batched(gs);
+    leaf_states.push_back(leaf->dump());
+  }
+  // Process with dummy values and reset
+  for (int i = 0; i < 4; ++i) {
+    auto leaf_gs = gs.copy();
+    auto [v, pi] = dumb_eval(*leaf_gs);
+    mcts.process_result_batched(gs, i, v, pi);
+  }
+  mcts.reset_batch();
+
+  // Verify: at least 3 of the 4 leaves should be distinct game states
+  std::set<std::string> unique_states(leaf_states.begin(), leaf_states.end());
+  EXPECT_GE(unique_states.size(), 3u)
+      << "WU-UCT should diversify leaf selection across children";
 }
 
 }  // namespace

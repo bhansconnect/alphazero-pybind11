@@ -361,13 +361,13 @@ def _entry_mcts_settings(entry, config) -> MctsSettings:
 
 
 def run_tournament(config, Game, network_path, entries, use_playout=False, cache_size=0):
-    """Run round-robin Elo tournament between entry configs.
+    """Run Monrad (Swiss-style) Elo tournament between entry configs.
 
     Each entry is a (visit_count, mode) tuple where mode is "base" or "selfplay".
     Returns (elo_ratings, win_matrix) indexed by entries.
     """
     print("=" * 60)
-    print("Phase: Elo Tournament (Round-Robin)")
+    print("Phase: Elo Tournament (Monrad)")
     print("=" * 60)
 
     count = len(entries)
@@ -390,6 +390,10 @@ def run_tournament(config, Game, network_path, entries, use_playout=False, cache
             return [agent] * num_players
 
     win_matrix = np.full((count, count), np.nan)
+    elo = np.zeros(count)
+    rankings = list(range(count))
+    rounds = int(np.ceil(np.log2(count)))
+    dist = count
 
     # Create a single shared cache for all matchups (same network throughout)
     shared_cache = create_sharded_cache(Game, cache_size) if cache_size > 0 else None
@@ -397,54 +401,91 @@ def run_tournament(config, Game, network_path, entries, use_playout=False, cache
     # Check if any entry uses selfplay mode (needs per-seat overrides)
     has_selfplay = any(mode == "selfplay" for _, mode in entries)
 
-    total_matchups = count * (count - 1) // 2
-    with tqdm.tqdm(total=total_matchups, desc="Tournament") as pbar:
-        for i in range(count):
-            for j in range(i + 1, count):
-                entry_i = entries[i]
-                entry_j = entries[j]
+    for r in tqdm.trange(rounds, desc="Rounds"):
+        dist = math.ceil(dist / 2)
 
-                players = make_players()
-                depths = [entry_j[0]] * num_players
-                depths[0] = entry_i[0]
+        # --- Monrad pairing ---
+        pairings = []
+        current = len(rankings) - 1
+        played = [False] * count
 
-                # All model groups share the same cache (same network)
-                if shared_cache is not None:
-                    caches = [shared_cache] * num_players
-                else:
-                    caches = None
+        while current >= 0:
+            if played[rankings[current]]:
+                current -= 1
+                continue
+            played[rankings[current]] = True
 
-                # Per-player MCTS settings (only needed when selfplay entries exist)
-                kwargs = {}
-                if has_selfplay:
-                    eps_i, rpt_i, rfz_i = _entry_mcts_settings(entry_i, config)
-                    eps_j, rpt_j, rfz_j = _entry_mcts_settings(entry_j, config)
-                    kwargs["player_epsilon"] = [eps_i] + [eps_j] * (num_players - 1)
-                    kwargs["player_mcts_root_temp"] = [rpt_i] + [rpt_j] * (num_players - 1)
-                    kwargs["player_root_fpu_zero"] = [rfz_i] + [rfz_j] * (num_players - 1)
-
-                label_i = entry_label(entry_i)
-                label_j = entry_label(entry_j)
-                name = f"{label_i}-{label_j}"
-                win_rates = pit_agents(
-                    config, Game, players, depths,
-                    TOURNAMENT_BATCH_SIZE, name,
-                    cache_size=0,
-                    caches=caches,
-                    **kwargs,
+            # Find opponent at target distance
+            offset = dist
+            while current - offset >= 0 and (
+                played[rankings[current - offset]]
+                or not math.isnan(
+                    win_matrix[rankings[current], rankings[current - offset]]
                 )
-                win_matrix[i, j] = win_rates[0]
-                win_matrix[j, i] = win_rates[1]
-                pbar.update()
-                wr_str = "-".join(f"{r*100:.1f}%" for r in win_rates)
-                pbar.set_postfix_str(f"{name}: {wr_str}")
+            ):
+                offset += 1
+
+            if current - offset < 0:
+                offset = 1
+                while current - offset >= 0 and (
+                    played[rankings[current - offset]]
+                    or not math.isnan(
+                        win_matrix[rankings[current], rankings[current - offset]]
+                    )
+                ):
+                    offset += 1
+                if current - offset < 0:
+                    offset = 1
+                    while not math.isnan(
+                        win_matrix[rankings[current], rankings[current - offset]]
+                    ):
+                        offset += 1
+
+            played[rankings[current - offset]] = True
+            pairings.append((rankings[current], rankings[current - offset]))
+            current -= 1
+
+        # --- Play matchups with progress bar ---
+        for i, j in tqdm.tqdm(pairings, desc="Matchups", leave=False):
+            entry_i = entries[i]
+            entry_j = entries[j]
+
+            players = make_players()
+            depths = [entry_j[0]] * num_players
+            depths[0] = entry_i[0]
+
+            if shared_cache is not None:
+                caches = [shared_cache] * num_players
+            else:
+                caches = None
+
+            kwargs = {}
+            if has_selfplay:
+                eps_i, rpt_i, rfz_i = _entry_mcts_settings(entry_i, config)
+                eps_j, rpt_j, rfz_j = _entry_mcts_settings(entry_j, config)
+                kwargs["player_epsilon"] = [eps_i] + [eps_j] * (num_players - 1)
+                kwargs["player_mcts_root_temp"] = [rpt_i] + [rpt_j] * (num_players - 1)
+                kwargs["player_root_fpu_zero"] = [rfz_i] + [rfz_j] * (num_players - 1)
+
+            label_i = entry_label(entry_i)
+            label_j = entry_label(entry_j)
+            name = f"{label_i}-{label_j}"
+            win_rates = pit_agents(
+                config, Game, players, depths,
+                TOURNAMENT_BATCH_SIZE, name,
+                cache_size=0,
+                caches=caches,
+                **kwargs,
+            )
+            win_matrix[i, j] = win_rates[0]
+            win_matrix[j, i] = win_rates[1]
+
+        # Update ELO and rankings after each round
+        elo = calc_elo(elo, win_matrix)
+        rankings = list(np.argsort(elo))
 
     # Print shared cache stats
     print_sharded_cache_stats(shared_cache)
-
-    # Compute Elo
-    elo = np.zeros(count)
-    elo = calc_elo(elo, win_matrix)
 
     print("\n--- Tournament Results ---")
     print(f"{'Entry':>10s} {'Elo':>8s}")

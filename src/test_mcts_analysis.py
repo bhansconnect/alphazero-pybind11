@@ -26,6 +26,7 @@ from mcts_analysis import (
     MctsSettings,
     _entry_mcts_settings,
 )
+from policy_metrics import batch_top_k_agreement
 
 
 # --- Statistical function tests (pure math, no GPU) ---
@@ -90,6 +91,45 @@ def test_top_k_agreement_disjoint():
     p = np.array([0.5, 0.3, 0.1, 0.1])
     q = np.array([0.1, 0.1, 0.3, 0.5])
     assert top_k_agreement(p, q, 1) == 0.0  # top-1: p=0, q=3
+
+
+# --- batch_top_k_agreement tests ---
+
+
+def test_batch_top_k_agreement_identical():
+    """Identical distributions -> agreement == 1.0 for any k."""
+    p = np.array([[0.5, 0.3, 0.1, 0.1],
+                  [0.1, 0.6, 0.2, 0.1]])
+    assert batch_top_k_agreement(p, p, 1) == pytest.approx(1.0)
+    assert batch_top_k_agreement(p, p, 3) == pytest.approx(1.0)
+
+
+def test_batch_top_k_agreement_disjoint():
+    """Rows where top-k of p and q have zero overlap -> agreement == 0.0."""
+    # top-2 of p: indices {0,1}; top-2 of q: indices {2,3}
+    p = np.array([[0.5, 0.4, 0.05, 0.05]])
+    q = np.array([[0.05, 0.05, 0.4, 0.5]])
+    assert batch_top_k_agreement(p, q, 2) == pytest.approx(0.0)
+
+
+def test_batch_top_k_agreement_partial():
+    """Partial overlap: top-2 share exactly 1 index -> agreement == 0.5."""
+    # top-2 of p: {0,1}; top-2 of q: {1,2} -> overlap = {1}, 1/2 = 0.5
+    p = np.array([[0.5, 0.4, 0.05, 0.05]])
+    q = np.array([[0.05, 0.4, 0.5, 0.05]])
+    assert batch_top_k_agreement(p, q, 2) == pytest.approx(0.5)
+
+
+def test_batch_top_k_agreement_mixed_rows():
+    """Multiple rows with different agreements -> verify the mean."""
+    # Row 0: top-2 of p={0,1}, top-2 of q={0,1} -> 2/2 = 1.0
+    # Row 1: top-2 of p={0,1}, top-2 of q={2,3} -> 0/2 = 0.0
+    p = np.array([[0.5, 0.4, 0.05, 0.05],
+                  [0.5, 0.4, 0.05, 0.05]])
+    q = np.array([[0.5, 0.4, 0.05, 0.05],
+                  [0.05, 0.05, 0.4, 0.5]])
+    # mean = (1.0 + 0.0) / 2 = 0.5
+    assert batch_top_k_agreement(p, q, 2) == pytest.approx(0.5)
 
 
 # --- calc_temp tests ---

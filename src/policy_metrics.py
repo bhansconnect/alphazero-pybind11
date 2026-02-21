@@ -58,14 +58,11 @@ def batch_top1_agreement(p, q):
 
 def batch_top_k_agreement(p, q, k):
     """Mean top-k overlap fraction across samples."""
-    # Get top-k indices for each row
     top_p = np.argpartition(p, -k, axis=1)[:, -k:]
     top_q = np.argpartition(q, -k, axis=1)[:, -k:]
-    n = p.shape[0]
-    agreements = np.empty(n)
-    for i in range(n):
-        agreements[i] = len(set(top_p[i]) & set(top_q[i])) / k
-    return float(np.mean(agreements))
+    # Broadcasting: (n, k, 1) == (n, 1, k) -> (n, k, k) -> any over last axis -> (n, k)
+    matches = np.any(top_q[:, :, None] == top_p[:, None, :], axis=2)
+    return float(np.mean(np.sum(matches, axis=1) / k))
 
 
 def batch_kl_divergence(p, q, epsilon=1e-10):

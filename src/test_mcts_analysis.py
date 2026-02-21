@@ -698,3 +698,119 @@ def test_value_accuracy_gain_in_metrics(monkeypatch):
     for entry in [(10, "base"), (25, "base")]:
         assert entry in vag_means, f"{entry} missing from pio_value_accuracy_gain_means"
         assert 0.0 <= vag_means[entry] <= 1.0
+
+
+# --- Monrad tournament pairing tests ---
+
+
+def test_monrad_tournament_fewer_matchups():
+    """Monrad tournament plays ceil(log2(N)) rounds, not N*(N-1)/2 matchups."""
+    from unittest.mock import patch
+    import mcts_analysis
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [(1, "base"), (10, "base"), (25, "base"), (50, "base"),
+               (100, "base"), (200, "base"), (400, "base"), (800, "base")]
+    count = len(entries)
+
+    matchups_played = []
+
+    def mock_pit_agents(config, Game, players, depths, bs, name, **kwargs):
+        matchups_played.append(name)
+        return [0.5] * Game.NUM_PLAYERS()
+
+    with patch("mcts_analysis.pit_agents", mock_pit_agents), \
+         patch("mcts_analysis.create_sharded_cache", return_value=None):
+        elo, win_matrix = mcts_analysis.run_tournament(
+            config, Game, network_path=None, entries=entries, cache_size=0,
+        )
+
+    rounds = int(np.ceil(np.log2(count)))
+    max_games_per_round = count // 2
+    round_robin_total = count * (count - 1) // 2  # 28
+
+    # Monrad should play far fewer games than round-robin
+    assert len(matchups_played) <= rounds * max_games_per_round
+    assert len(matchups_played) < round_robin_total
+
+    # Should have valid elo array
+    assert len(elo) == count
+    assert win_matrix.shape == (count, count)
+
+
+def test_monrad_tournament_no_self_play_matchup():
+    """No entry is ever paired against itself."""
+    from unittest.mock import patch
+    import mcts_analysis
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [(10, "base"), (50, "base"), (100, "base"), (200, "base")]
+
+    pairs = []
+
+    def mock_pit_agents(config, Game, players, depths, bs, name, **kwargs):
+        parts = name.split("-")
+        pairs.append((parts[0], parts[1]))
+        return [0.5] * Game.NUM_PLAYERS()
+
+    with patch("mcts_analysis.pit_agents", mock_pit_agents), \
+         patch("mcts_analysis.create_sharded_cache", return_value=None):
+        mcts_analysis.run_tournament(
+            config, Game, network_path=None, entries=entries, cache_size=0,
+        )
+
+    for p1, p2 in pairs:
+        assert p1 != p2, f"Self-play detected: {p1} vs {p2}"
+
+
+def test_monrad_tournament_no_repeat_matchup():
+    """Same pair of entries never plays more than once."""
+    from unittest.mock import patch
+    import mcts_analysis
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [(10, "base"), (50, "base"), (100, "base"), (200, "base")]
+
+    pairs = []
+
+    def mock_pit_agents(config, Game, players, depths, bs, name, **kwargs):
+        parts = name.split("-")
+        pairs.append(tuple(sorted(parts)))
+        return [0.5] * Game.NUM_PLAYERS()
+
+    with patch("mcts_analysis.pit_agents", mock_pit_agents), \
+         patch("mcts_analysis.create_sharded_cache", return_value=None):
+        mcts_analysis.run_tournament(
+            config, Game, network_path=None, entries=entries, cache_size=0,
+        )
+
+    assert len(pairs) == len(set(pairs)), f"Duplicate matchups: {pairs}"
+
+
+def test_monrad_tournament_odd_count():
+    """Odd number of entries doesn't crash (one entry gets a bye each round)."""
+    from unittest.mock import patch
+    import mcts_analysis
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [(10, "base"), (50, "base"), (100, "base")]  # 3 entries (odd)
+
+    def mock_pit_agents(config, Game, players, depths, bs, name, **kwargs):
+        return [0.5] * Game.NUM_PLAYERS()
+
+    with patch("mcts_analysis.pit_agents", mock_pit_agents), \
+         patch("mcts_analysis.create_sharded_cache", return_value=None):
+        elo, win_matrix = mcts_analysis.run_tournament(
+            config, Game, network_path=None, entries=entries, cache_size=0,
+        )
+
+    assert len(elo) == 3
+    assert win_matrix.shape == (3, 3)

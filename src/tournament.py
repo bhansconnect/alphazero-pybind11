@@ -361,11 +361,10 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
         for a in nn_agents:
             cache_dict[a] = create_sharded_cache(Game, per_agent_cache)
 
-    for r in range(rounds):
-        print(f"Round {r + 1}/{rounds}")
+    for r in tqdm.trange(rounds, desc="Rounds"):
         dist = math.ceil(dist / 2)
 
-        with tqdm.trange(count // 2, desc="Games") as pbar:
+        with tqdm.trange(count // 2, desc="Matchups", leave=False) as pbar:
             current = len(rankings) - 1
             played = [False] * count
 
@@ -457,8 +456,8 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
         # Update ELO and rankings
         elo = calc_elo(elo, win_matrix)
         rankings = list(np.argsort(elo))
-        print(f"ELO: {np.array2string(elo, precision=0)}")
-        print(f"Rankings: {rankings}")
+        tqdm.tqdm.write(f"ELO: {np.array2string(elo, precision=0)}")
+        tqdm.tqdm.write(f"Rankings: {rankings}")
 
     # Print shared cache stats
     for agent_name, cache in cache_dict.items():

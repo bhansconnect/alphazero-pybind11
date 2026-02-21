@@ -33,6 +33,9 @@ def save_compressed(tensor, path, half_storage=True, zstd_level=1):
     buffer = io.BytesIO()
     if half_storage:
         tensor = to_half_safe(tensor, get_storage_dtype())
+    # Clone views/slices to avoid serializing the entire backing storage
+    if tensor.storage_offset() or tensor.untyped_storage().size() != tensor.nelement() * tensor.element_size():
+        tensor = tensor.clone()
     torch.save(tensor, buffer)
     with open(path, 'wb') as f:
         f.write(zstd.ZstdCompressor(level=zstd_level, threads=-1).compress(buffer.getvalue()))

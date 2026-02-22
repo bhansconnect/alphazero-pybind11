@@ -48,7 +48,7 @@ def create_sharded_cache(game_class, cache_size, shards=None):
     return alphazero.ShardedS3FIFOCache(cache_size, shards, ghost_size, num_moves, num_values)
 
 
-def print_cache_stats(cache):
+def print_cache_stats(cache, label="Cache"):
     """Print cache hit rate, theoretical hit rate, and churn."""
     if cache is None:
         return
@@ -61,7 +61,7 @@ def print_cache_stats(cache):
     theoretical_hits = hits + reinserts
     theoretical_rate = theoretical_hits / total
     churn = evictions / hits if hits > 0 else 0
-    print(f"Cache: {hits/total:.1%} hit rate, {theoretical_rate:.1%} theoretical, "
+    print(f"{label}: {hits/total:.1%} hit rate, {theoretical_rate:.1%} theoretical, "
           f"{churn:.1%} churn, {cache.size()}/{cache.max_size()} entries")
 
 

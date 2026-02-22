@@ -84,9 +84,9 @@ def entry_label(entry):
 
 
 def _resolve_batch_size(entry):
-    """Resolve batch_size: 0 (auto) -> computed from vc, else as-is."""
+    """Resolve batch_size: 0 (auto) -> sqrt(vc), else as-is."""
     if entry.batch_size == 0:
-        return max(1, min(int(entry.vc * 0.12), 64))
+        return max(1, int(math.sqrt(entry.vc)))
     return entry.batch_size
 
 
@@ -94,6 +94,19 @@ def entry_sort_key(entry):
     """Sort key: by VC, then base before selfplay, then batch_size."""
     e = _to_entry(entry)
     return (e.vc, 0 if e.mode == "base" else 1, e.batch_size)
+
+
+def _load_agent(Game, network_path, use_playout):
+    """Load network agent, or return 'playout'/'random' string for non-NN agents."""
+    if network_path is None and use_playout:
+        return "playout"
+    elif network_path is None:
+        return "random"
+    net_dir = os.path.dirname(network_path)
+    net_file = os.path.basename(network_path)
+    agent = neural_net.NNWrapper.load_checkpoint(Game, net_dir, net_file)
+    agent.enable_inference_optimizations()
+    return agent
 
 
 def calc_temp(config, turn):
@@ -186,6 +199,94 @@ def select_checkpoint(checkpoints):
             print(f"Enter 0-{len(checkpoints)-1}")
         except ValueError:
             print("Invalid input")
+
+
+# --- Benchmark Phase ---
+
+BENCHMARK_POSITIONS = 30
+
+
+def _make_mcts(is_selfplay, config, Game):
+    """Create an MCTS instance with config params for the given mode."""
+    num_players = Game.NUM_PLAYERS()
+    num_moves = Game.NUM_MOVES()
+    relative_values = Game().relative_values()
+    if is_selfplay:
+        return alphazero.MCTS(config.cpuct, num_players, num_moves, 0.25,
+                              config.mcts_root_temp, config.fpu_reduction,
+                              relative_values, config.root_fpu_zero,
+                              config.shaped_dirichlet)
+    return alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.0,
+                          config.fpu_reduction, relative_values,
+                          config.root_fpu_zero, config.shaped_dirichlet)
+
+
+def run_benchmark(config, Game, agent, entries, cache_size=0, tree_reuse=False):
+    """Benchmark: measure sims/s for each entry with independent MCTS + cache."""
+    from play import run_mcts_search
+
+    results = {}  # entry -> {'sims_per_sec': float, 'total_time': float, 'positions': int}
+    bench_entries = [e for e in entries if e.vc > 1]
+    pbar_entry = tqdm.tqdm(bench_entries, desc="Benchmark", unit="entry")
+
+    for entry in pbar_entry:
+        pbar_entry.set_description(f"Bench {entry_label(entry)}")
+        gs = Game()
+        cache = create_cache(Game, cache_size) if not isinstance(agent, str) else None
+        is_sp = entry.mode == "selfplay"
+        mcts = _make_mcts(is_sp, config, Game)
+
+        nn_agent = None if isinstance(agent, str) else agent
+        eval_type = agent if isinstance(agent, str) else "network"
+
+        total_time = 0.0
+        positions = 0
+        pbar_pos = tqdm.tqdm(total=BENCHMARK_POSITIONS, desc="Positions",
+                             unit="pos", leave=False)
+
+        while gs.scores() is None and positions < BENCHMARK_POSITIONS:
+            t0 = _time.time()
+            counts, sims, _ = run_mcts_search(
+                gs, nn_agent, mcts, node_limit=entry.vc,
+                eval_type=eval_type, cache=cache,
+                max_batch_size=entry.batch_size,
+            )
+            total_time += _time.time() - t0
+            positions += 1
+            pbar_pos.update(1)
+
+            action = int(np.argmax(counts))
+            gs.play_move(action)
+
+            if tree_reuse:
+                try:
+                    mcts.update_root(gs, action)
+                except Exception:
+                    mcts = _make_mcts(is_sp, config, Game)
+            else:
+                mcts = _make_mcts(is_sp, config, Game)
+
+        sps = (entry.vc * positions) / total_time if total_time > 0 else 0
+        results[entry] = {
+            'sims_per_sec': sps,
+            'total_time': total_time,
+            'positions': positions,
+        }
+        pbar_pos.close()
+        pbar_entry.set_postfix(sps=f"{sps:,.0f}")
+
+    pbar_entry.close()
+
+    # Print benchmark summary
+    if results:
+        print(f"\n--- Benchmark Timing ---")
+        print(f"{'Entry':>8s} {'Total(s)':>10s} {'Per-pos(s)':>12s} {'Sims/s':>10s}")
+        for entry in sorted(results.keys(), key=entry_sort_key):
+            data = results[entry]
+            per_pos = data['total_time'] / data['positions'] if data['positions'] > 0 else 0
+            print(f"{entry_label(entry):>8s} {data['total_time']:>10.2f} {per_pos:>12.4f} {data['sims_per_sec']:>10.0f}")
+
+    return results
 
 
 # --- Phase 1: Interactive Configuration ---
@@ -372,10 +473,11 @@ def _entry_mcts_settings(entry, config) -> MctsSettings:
     return MctsSettings(0.0, 1.0, False)
 
 
-def run_tournament(config, Game, network_path, entries, use_playout=False, cache_size=0):
+def run_tournament(config, Game, agent, entries, cache_size=0):
     """Run Monrad (Swiss-style) Elo tournament between entry configs.
 
     Each entry is a (visit_count, mode) tuple where mode is "base" or "selfplay".
+    agent: NNWrapper, 'playout', or 'random' (from _load_agent).
     Returns (elo_ratings, win_matrix) indexed by entries.
     """
     entries = [_to_entry(e) for e in entries]
@@ -385,22 +487,16 @@ def run_tournament(config, Game, network_path, entries, use_playout=False, cache
 
     count = len(entries)
 
-    # Load network (shared across players)
+    # Wrap agent for tournament (needs list of players)
     num_players = Game.NUM_PLAYERS()
-    if network_path is None:
-        if use_playout:
-            agent = PlayoutPlayer()
-        else:
-            agent = RandPlayer()
-        def make_players():
-            return [agent] * num_players
+    if agent == "playout":
+        tournament_agent = PlayoutPlayer()
+    elif agent == "random":
+        tournament_agent = RandPlayer()
     else:
-        net_dir = os.path.dirname(network_path)
-        net_file = os.path.basename(network_path)
-        agent = neural_net.NNWrapper.load_checkpoint(Game, net_dir, net_file)
-        agent.enable_inference_optimizations()
-        def make_players():
-            return [agent] * num_players
+        tournament_agent = agent
+    def make_players():
+        return [tournament_agent] * num_players
 
     win_matrix = np.full((count, count), np.nan)
     elo = np.zeros(count)
@@ -550,7 +646,7 @@ def _evaluate_leaves(agent, items, game_states, num_players, num_moves, cache):
         return list(zip(v_np, pi_np))
 
 
-def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
+def run_analysis(config, Game, agent, entries, anchor,
                  cache_size=0, tree_reuse=False):
     """Run policy & value convergence analysis with batched inference.
 
@@ -562,6 +658,8 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
 
     Tree reuse OFF: entries within the same mode share one fresh tree per position.
     Tree reuse ON: each entry gets its own persistent tree across positions.
+
+    agent: NNWrapper, 'playout', or 'random' (from _load_agent).
 
     Returns (metrics, position_snapshots).
     position_snapshots: list of dicts with 'gs', 'player', 'values' keys.
@@ -587,16 +685,6 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     print("=" * 60)
     print(header)
     print("=" * 60)
-
-    if network_path is None and use_playout:
-        agent = "playout"
-    elif network_path is None:
-        agent = "random"
-    else:
-        net_dir = os.path.dirname(network_path)
-        net_file = os.path.basename(network_path)
-        agent = neural_net.NNWrapper.load_checkpoint(Game, net_dir, net_file)
-        agent.enable_inference_optimizations()
 
     num_players = Game.NUM_PLAYERS()
     num_moves = Game.NUM_MOVES()
@@ -675,9 +763,6 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
     print(f"Playing {ANALYSIS_GAMES} games with anchor {entry_label(anchor)} per position...")
 
     total_positions = 0
-    entry_timing = {}  # entry -> cumulative seconds
-    _seq_elapsed_total = 0.0  # total wall time for sequential loops
-    _seq_sims_total = 0       # total simulations across sequential loops
     pbar = tqdm.tqdm(desc="Positions", unit="pos")
 
     while active:
@@ -767,10 +852,6 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
         vc1_captured_base = [False] * n
         vc1_captured_selfplay = [False] * n
 
-        _loop_start = _time.time()
-        _pre_root_n = {id(mcts_obj): mcts_obj.root_n()
-                       for _, _, mcts_obj, _, _, _ in work_items}
-
         # Main simulation loop — interleaved across all trees
         while True:
             miss_items = []  # (gid, key, mcts_obj, leaf, hash, is_sp, slot, gs)
@@ -825,11 +906,6 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
                     _snapshot(slot, Entry(1, "selfplay"), mcts_obj, is_sp)
                     vc1_captured_selfplay[slot] = True
 
-        _seq_elapsed = _time.time() - _loop_start
-        _seq_elapsed_total += _seq_elapsed
-        for _, _, mcts_obj, _, _, _ in work_items:
-            _seq_sims_total += mcts_obj.root_n() - _pre_root_n[id(mcts_obj)]
-
         # Process batched work items — grouped by (mode, batch_size), shared tree
         for gid, key, mcts_obj, target, is_sp, slot in batched_work_items:
             _, mode, batch_size = key  # ("batched", mode, bs)
@@ -837,16 +913,20 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
             sorted_group = sorted(group_entries, key=lambda e: e.vc)
             gs = game_states[gid]
             bs = _resolve_batch_size(group_entries[0])  # all same batch_size
-            _batch_start = _time.time()
-            _entry_done = set()  # track which entries have recorded timing
 
             while mcts_obj.root_n() < target:
-                # Full batch (allow overshoot)
+                # Cache-aware batch: accumulate up to bs GPU misses,
+                # with max 2*bs total attempts. Terminals, cache hits,
+                # and random evals are backpropagated immediately.
                 pending_gpu = []    # (leaf_idx, hash)
                 canonical_list = []
                 playout_leaves = []  # (leaf_idx, leaf) for playout batch
+                max_attempts = 2 * bs
 
-                for _ in range(bs):
+                for attempt in range(max_attempts):
+                    if len(pending_gpu) + len(playout_leaves) >= bs:
+                        break
+
                     leaf = mcts_obj.find_leaf_batched(gs)
                     leaf_idx = mcts_obj.in_flight_count() - 1
 
@@ -901,21 +981,14 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
                 mcts_obj.reset_batch()
 
                 # Snapshot entries whose vc threshold has been reached
-                # and record per-entry timing when first reached
                 rn = mcts_obj.root_n()
                 for entry in sorted_group:
                     if entry.vc <= rn:
                         _snapshot(slot, entry, mcts_obj, is_sp)
-                        if entry not in _entry_done:
-                            _entry_done.add(entry)
-                            entry_timing[entry] = entry_timing.get(entry, 0.0) + (_time.time() - _batch_start)
 
             # Final snapshot for any remaining entries
-            _batch_end = _time.time()
             for entry in sorted_group:
                 _snapshot(slot, entry, mcts_obj, is_sp)
-                if entry not in _entry_done:
-                    entry_timing[entry] = entry_timing.get(entry, 0.0) + (_batch_end - _batch_start)
 
         # Capture Q-values from the base reference tree at anchor_vc
         for slot, gid in enumerate(active):
@@ -998,13 +1071,6 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
 
     pbar.close()
     print(f"Collected {total_positions} positions across {ANALYSIS_GAMES} games")
-
-    # Estimate sequential entry timing from aggregate throughput
-    if _seq_sims_total > 0 and _seq_elapsed_total > 0 and total_positions > 0:
-        seq_sims_per_sec = _seq_sims_total / _seq_elapsed_total
-        for entry in entries:
-            if entry.batch_size == 1 and entry.vc > 1 and entry not in entry_timing:
-                entry_timing[entry] = (entry.vc * total_positions) / seq_sims_per_sec
 
     # Aggregate metrics from all games (keyed by entry tuples)
     all_jsd = {e: [] for e in entries}
@@ -1341,20 +1407,7 @@ def run_analysis(config, Game, network_path, entries, anchor, use_playout=False,
         for entry in sorted(marginal_kl_means.keys(), key=entry_sort_key):
             print(f"{entry_label(entry):>8s} {marginal_kl_means[entry]:>10.4f}")
 
-    # Timing summary
-    if entry_timing:
-        print(f"\n--- Search Timing ---")
-        print(f"{'Entry':>8s} {'Total(s)':>10s} {'Per-pos(s)':>12s} {'Sims/s':>10s}")
-        for entry in sorted(entry_timing.keys(), key=entry_sort_key):
-            t = entry_timing[entry]
-            per_pos = t / total_positions if total_positions > 0 else 0
-            sims_per_sec = (entry.vc * total_positions) / t if t > 0 else 0
-            print(f"{entry_label(entry):>8s} {t:>10.2f} {per_pos:>12.4f} {sims_per_sec:>10.0f}")
-        metrics["entry_timing"] = {entry_label(e): t for e, t in entry_timing.items()}
-        metrics["entry_timing_raw"] = dict(entry_timing)
-
     print_cache_stats(cache)
-    del agent
     gc.collect()
     return metrics, position_snapshots
 
@@ -2066,20 +2119,18 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         fig.savefig(path, dpi=150, bbox_inches="tight")
         print(f"Saved: {path}")
 
-    # Figure: Search Timing (Sims/s and per-position time, color-coded by batch_size)
-    entry_timing_raw = metrics.get("entry_timing_raw", {}) if metrics else {}
-    total_positions = metrics.get("total_positions", 0) if metrics else 0
-    if entry_timing_raw and total_positions > 0:
+    # Figure: Search Timing from benchmark (Sims/s and per-position time)
+    benchmark_timing = metrics.get("benchmark_timing", {}) if metrics else {}
+    if benchmark_timing:
         from matplotlib.cm import get_cmap
         from matplotlib.patches import Patch
 
-        sorted_timing_entries = sorted(entry_timing_raw.keys(), key=entry_sort_key)
+        sorted_timing_entries = sorted(benchmark_timing.keys(), key=entry_sort_key)
         labels = [entry_label(e) for e in sorted_timing_entries]
-        times = [entry_timing_raw[e] for e in sorted_timing_entries]
-        sims_per_sec = [(e.vc * total_positions) / t if t > 0 else 0
-                        for e, t in zip(sorted_timing_entries, times)]
-        per_pos = [t / total_positions if total_positions > 0 else 0
-                   for t in times]
+        sims_per_sec = [benchmark_timing[e]['sims_per_sec'] for e in sorted_timing_entries]
+        per_pos = [benchmark_timing[e]['total_time'] / benchmark_timing[e]['positions']
+                   if benchmark_timing[e]['positions'] > 0 else 0
+                   for e in sorted_timing_entries]
 
         # Color by batch_size
         unique_bs = sorted(set(e.batch_size for e in sorted_timing_entries))
@@ -2173,10 +2224,10 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         if "pio_marginal_kl_all" in metrics:
             for entry, arr in metrics["pio_marginal_kl_all"].items():
                 save_data[f"pio_marginal_kl_all_{entry_label(entry)}"] = arr
-        # Timing data
-        if "entry_timing_raw" in metrics:
-            for entry, t in metrics["entry_timing_raw"].items():
-                save_data[f"timing_{entry_label(entry)}"] = np.array(t)
+        # Benchmark timing data
+        if "benchmark_timing" in metrics:
+            for entry, data in metrics["benchmark_timing"].items():
+                save_data[f"timing_sps_{entry_label(entry)}"] = np.array(data['sims_per_sec'])
 
     # Scaling report data
     if scaling:
@@ -2216,19 +2267,29 @@ def main():
     (config, Game, network_path, entries, anchor, phases, use_playout,
      cache_size, tree_reuse, experiment_dir) = interactive_config()
 
+    agent = _load_agent(Game, network_path, use_playout)
+
     elo = None
     win_matrix = None
     metrics = None
 
     if "tournament" in phases:
-        elo, win_matrix = run_tournament(config, Game, network_path, entries, use_playout,
+        elo, win_matrix = run_tournament(config, Game, agent, entries,
                                          cache_size=cache_size)
 
     if "analysis" in phases:
+        benchmark = run_benchmark(config, Game, agent, entries,
+                                  cache_size=cache_size, tree_reuse=tree_reuse)
         metrics, snapshots = run_analysis(
-            config, Game, network_path, entries, anchor, use_playout,
+            config, Game, agent, entries, anchor,
             cache_size=cache_size, tree_reuse=tree_reuse,
         )
+        # Merge benchmark timing into metrics for visualization
+        if benchmark:
+            metrics["benchmark_timing"] = benchmark
+
+    del agent
+    gc.collect()
 
     save_dir = os.path.join(experiment_dir, "analysis")
     visualize_and_save(entries, anchor, elo=elo, win_matrix=win_matrix,

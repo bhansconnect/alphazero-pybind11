@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import glob
+import math
 import os
 import re
 import sys
@@ -43,7 +44,6 @@ DEFAULT_CPUCT = 1.25
 DEFAULT_FPU_REDUCTION = 0.25
 DEFAULT_TEMPERATURE = 0.5
 DEFAULT_NODE_LIMIT = 100
-AUTO_MAX_BATCH = 64
 
 
 class PlayerConfig:
@@ -61,6 +61,7 @@ class PlayerConfig:
         self.show_hints = False
         self.greedy = False
         self.batch_size = 0  # 0 = auto, 1 = off (sequential), >1 = fixed
+        self._calibrated_timed_bs = None
 
     def __str__(self):
         if not self.is_ai:
@@ -92,9 +93,36 @@ class PlayContext:
         self.auto_full = False
         self.cpuct = DEFAULT_CPUCT
         self.fpu_reduction = DEFAULT_FPU_REDUCTION
+        self.cache_size = cache_size
         self.cache = create_cache(game_class, cache_size)
+        self.player_caches = [None, None]
         self.tree_reuse = True
         self.auto_delay = 0.0
+
+
+def _update_caches(ctx):
+    """Rebuild shared or per-player caches based on current config."""
+    if ctx.cache_size <= 0:
+        ctx.cache = None
+        ctx.player_caches = [None, None]
+        return
+    if any(p.think_time is not None for p in ctx.players):
+        per_size = ctx.cache_size // 2
+        ctx.cache = None
+        ctx.player_caches = [
+            create_cache(ctx.game_class, per_size),
+            create_cache(ctx.game_class, per_size),
+        ]
+    else:
+        ctx.cache = create_cache(ctx.game_class, ctx.cache_size)
+        ctx.player_caches = [None, None]
+
+
+def _get_cache(ctx, player_idx):
+    """Return per-player cache if split, otherwise shared cache."""
+    if ctx.player_caches[player_idx] is not None:
+        return ctx.player_caches[player_idx]
+    return ctx.cache
 
 
 def create_mcts(game_class, cpuct=DEFAULT_CPUCT, fpu_reduction=DEFAULT_FPU_REDUCTION):
@@ -137,39 +165,54 @@ def apply_temperature(probs, temperature):
         return scaled / scaled.sum()
 
 
-def _compute_batch_size(budget, max_batch_size):
-    """Batch size as ~12% of budget, clamped to [1, max_batch_size]."""
-    return min(max(1, int(budget * 0.12)), max_batch_size)
+def _compute_batch_size(budget):
+    """Batch size as sqrt(budget), minimum 1."""
+    return max(1, int(math.sqrt(budget)))
 
 
 def _run_one_batch(gs, agent, mcts, batch_size, eval_type, cache, sims_so_far):
-    """Collect batch_size leaves via WU-UCT, batch-eval cache misses, backprop all."""
+    """Collect leaves via WU-UCT until batch_size GPU misses or 2*batch_size attempts.
+
+    Cache hits and terminals are backpropagated immediately so subsequent
+    find_leaf_batched calls see updated tree statistics.
+
+    Returns actual number of simulations processed (may exceed batch_size due to
+    cache hits/terminals).
+    """
     pending_gpu = []      # [(leaf_index, hash, root_noise)] needing GPU
     canonical_list = []   # numpy canonical states for GPU batch
+    actual_sims = 0
+    max_attempts = 2 * batch_size
 
-    for i in range(batch_size):
+    for attempt in range(max_attempts):
+        if len(pending_gpu) >= batch_size:
+            break
+
         leaf_gs = mcts.find_leaf_batched(gs)
         leaf_idx = mcts.in_flight_count() - 1
-        root_noise = (sims_so_far == 0 and i == 0)
+        root_noise = (sims_so_far + actual_sims == 0 and attempt == 0)
 
         # Terminal: process immediately
         if leaf_gs.scores() is not None:
             v = np.array(leaf_gs.scores())
             pi = np.zeros(gs.num_moves())
             mcts.process_result_batched(gs, leaf_idx, v, pi, root_noise)
+            actual_sims += 1
             continue
 
-        # Playout eval
+        # Playout eval: process immediately
         if eval_type == "playout":
             v, pi = alphazero.playout_eval(leaf_gs)
             mcts.process_result_batched(gs, leaf_idx, np.array(v), np.array(pi), root_noise)
+            actual_sims += 1
             continue
 
-        # Random eval
+        # Random eval: process immediately
         if agent is None:
             v = np.full(gs.num_players() + 1, 1.0 / (gs.num_players() + 1))
             pi = np.ones(gs.num_moves()) / gs.num_moves()
             mcts.process_result_batched(gs, leaf_idx, v, pi, root_noise)
+            actual_sims += 1
             continue
 
         # Cache check
@@ -180,6 +223,7 @@ def _run_one_batch(gs, agent, mcts, batch_size, eval_type, cache, sims_so_far):
                 pi_c, v_c = result
                 mcts.process_result_batched(gs, leaf_idx, np.array(v_c),
                                             np.array(pi_c), root_noise)
+                actual_sims += 1
                 continue
 
         # Cache miss: queue for GPU
@@ -196,9 +240,45 @@ def _run_one_batch(gs, agent, mcts, batch_size, eval_type, cache, sims_so_far):
             if cache is not None:
                 cache.insert(h, pi, v)
             mcts.process_result_batched(gs, leaf_idx, v, pi, rn)
+        actual_sims += len(pending_gpu)
 
     mcts.reset_batch()
-    return batch_size
+    return actual_sims
+
+
+def calibrate_timed_batch(gs, agent, time_limit, eval_type, cache):
+    """One-time calibration to find self-consistent batch size for timed search.
+
+    Tests powers of 2, measuring throughput at each. Returns the largest B where
+    B <= sqrt(throughput * time_limit) (self-consistent: batch size doesn't exceed
+    sqrt of estimated budget at that throughput).
+
+    Returns the chosen batch size (minimum 2).
+    """
+    game_class = type(gs)
+    best_bs = 2
+
+    bs = 2
+    while True:
+        mcts_obj = create_mcts(game_class)
+        t0 = time.time()
+        _run_one_batch(gs, agent, mcts_obj, bs, eval_type, cache, 0)
+        elapsed = time.time() - t0
+
+        if elapsed > 0:
+            throughput = bs / elapsed
+            total_budget = throughput * time_limit
+            ideal_bs = math.sqrt(total_budget)
+
+            if bs <= ideal_bs:
+                best_bs = bs
+            else:
+                # Past the self-consistent point
+                break
+
+        bs *= 2
+
+    return best_bs
 
 
 def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None, eval_type="random",
@@ -214,16 +294,16 @@ def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None, eval_type
     if max_batch_size == 0:
         # Auto mode
         if node_limit is not None:
-            effective_bs = _compute_batch_size(node_limit, AUTO_MAX_BATCH)
+            effective_bs = _compute_batch_size(node_limit)
         else:
-            effective_bs = 1  # time_limit: warmup will estimate
+            effective_bs = max(4, int(math.sqrt(100)))  # safe default for timed auto
     elif max_batch_size == 1:
         effective_bs = 1
     else:
         if node_limit is not None:
-            effective_bs = _compute_batch_size(node_limit, max_batch_size)
+            effective_bs = min(_compute_batch_size(node_limit), max_batch_size)
         else:
-            effective_bs = 1  # start with 1 for time_limit, scale up below
+            effective_bs = max_batch_size
 
     start = time.time()
     sims = 0
@@ -251,38 +331,13 @@ def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None, eval_type
             sims += 1
     else:
         # Batched path
-        # For time_limit mode: warm up with 4 sequential sims, then scale up
-        if time_limit is not None and max_batch_size != 1:
-            warmup = min(4, node_limit) if node_limit else 4
-            for _ in range(warmup):
-                if time.time() - start >= time_limit:
-                    break
-                leaf = mcts.find_leaf(gs)
-                if eval_type == "playout":
-                    v, pi = alphazero.playout_eval(leaf)
-                    v, pi = np.array(v), np.array(pi)
-                elif agent is None:
-                    v = np.full(gs.num_players() + 1, 1.0 / (gs.num_players() + 1))
-                    pi = np.ones(gs.num_moves()) / gs.num_moves()
-                else:
-                    v, pi, _ = cached_inference(cache, leaf, agent)
-                mcts.process_result(gs, v, pi, sims == 0)
-                sims += 1
-            # Estimate total budget and scale batch size
-            elapsed = time.time() - start
-            if elapsed > 0 and sims > 0:
-                rate = sims / elapsed
-                est_budget = int(rate * time_limit)
-                cap = AUTO_MAX_BATCH if max_batch_size == 0 else max_batch_size
-                effective_bs = _compute_batch_size(est_budget, cap)
-
         while True:
             if time_limit is not None and time.time() - start >= time_limit:
                 break
             if node_limit is not None and sims >= node_limit:
                 break
-            _run_one_batch(gs, agent, mcts, effective_bs, eval_type, cache, sims)
-            sims += effective_bs
+            actual = _run_one_batch(gs, agent, mcts, effective_bs, eval_type, cache, sims)
+            sims += actual
 
     counts = np.array(mcts.counts())
     wld = np.array(mcts.root_value())
@@ -304,6 +359,20 @@ def get_ai_probs(ctx, player_idx, valids):
     if should_search and (
         pcfg.network is not None or pcfg.eval_type == "playout" or TORCH_AVAILABLE
     ):
+        # Resolve batch size (pre-game calibration handles reporting)
+        player_cache = _get_cache(ctx, player_idx)
+        batch_size = pcfg.batch_size
+        if batch_size == 0:
+            if pcfg.think_time is not None:
+                if pcfg._calibrated_timed_bs is None:
+                    pcfg._calibrated_timed_bs = calibrate_timed_batch(
+                        ctx.game, pcfg.network, pcfg.think_time,
+                        pcfg.eval_type, player_cache,
+                    )
+                batch_size = pcfg._calibrated_timed_bs
+            elif pcfg.node_limit is not None:
+                batch_size = _compute_batch_size(pcfg.node_limit)
+
         counts, sims, wld = run_mcts_search(
             ctx.game,
             pcfg.network,
@@ -311,14 +380,18 @@ def get_ai_probs(ctx, player_idx, valids):
             time_limit=pcfg.think_time,
             node_limit=pcfg.node_limit,
             eval_type=pcfg.eval_type,
-            cache=ctx.cache,
-            max_batch_size=pcfg.batch_size,
+            cache=player_cache,
+            max_batch_size=batch_size,
         )
         if counts.sum() > 0:
             probs = counts.astype(float) / counts.sum()
         else:
             probs = np.ones(ctx.game.NUM_MOVES()) / ctx.game.NUM_MOVES()
-        source = f"MCTS ({sims} sims)"
+        # Report batch size in source string
+        if batch_size > 1:
+            source = f"MCTS ({sims} sims, bs={batch_size})"
+        else:
+            source = f"MCTS ({sims} sims)"
     else:
         sims = 0
         if pcfg.eval_type == "playout":
@@ -673,7 +746,13 @@ def print_status(ctx):
     for i in range(2):
         print(f"  Player {i}: {ctx.players[i]}")
     reuse_str = "on" if ctx.tree_reuse else "off"
-    cache_str = str(ctx.cache.max_size()) if ctx.cache is not None else "off"
+    if any(c is not None for c in ctx.player_caches):
+        sizes = [str(c.max_size()) if c is not None else "off" for c in ctx.player_caches]
+        cache_str = f"split ({sizes[0]}/{sizes[1]})"
+    elif ctx.cache is not None:
+        cache_str = str(ctx.cache.max_size())
+    else:
+        cache_str = "off"
     delay_str = f", Delay: {ctx.auto_delay}s" if ctx.auto_delay > 0 else ""
     print(f"  Tree reuse: {reuse_str}, Cache: {cache_str}{delay_str}")
 
@@ -724,6 +803,7 @@ def handle_config_command(parts, ctx, game_name, base_dir):
                     except ValueError:
                         print(f"Invalid time: {val}")
                         return "config"
+            _update_caches(ctx)
             print_status(ctx)
     elif cmd == "temp":
         if len(parts) >= (3 if player is not None else 2):
@@ -943,7 +1023,7 @@ def prompt_ai_config(ctx, args):
 
     # Node limit
     node_default = args.nodes if args.nodes is not None else DEFAULT_NODE_LIMIT
-    node_limit = _prompt_value("Node limit per move", node_default, int)
+    node_limit = _prompt_value("Node limit per move", node_default, int, allow_none=True)
     for p in ctx.players:
         if p.is_ai:
             p.node_limit = node_limit
@@ -984,10 +1064,8 @@ def prompt_ai_config(ctx, args):
     # Cache size
     cache_default = args.cache_size
     cache_size = _prompt_value("Cache size", cache_default, int)
-    if cache_size and cache_size > 0:
-        ctx.cache = create_cache(ctx.game_class, cache_size)
-    else:
-        ctx.cache = None
+    ctx.cache_size = cache_size if cache_size and cache_size > 0 else 0
+    _update_caches(ctx)
 
 
 def main():
@@ -1077,6 +1155,21 @@ def main():
             elif result is None:
                 print(f"Unknown command: {cmd}. Type 'help' for available commands.")
 
+    # Pre-game batch size calibration for timed auto players
+    for pi, pcfg in enumerate(ctx.players):
+        if not pcfg.is_ai or pcfg.batch_size != 0:
+            continue
+        if pcfg.think_time is not None and pcfg._calibrated_timed_bs is None:
+            print(f"  P{pi} calibrating timed batch size...")
+            pcfg._calibrated_timed_bs = calibrate_timed_batch(
+                ctx.game, pcfg.network, pcfg.think_time,
+                pcfg.eval_type, _get_cache(ctx, pi),
+            )
+            print(f"  P{pi} batch size: {pcfg._calibrated_timed_bs} (calibrated for {pcfg.think_time}s)")
+        elif pcfg.node_limit is not None:
+            bs = _compute_batch_size(pcfg.node_limit)
+            print(f"  P{pi} batch size: {bs} (sqrt of {pcfg.node_limit} nodes)")
+
     print("\nStarting game...")
 
     # Game loop
@@ -1094,7 +1187,10 @@ def main():
                 print(f"\nPlayer {winners[0]} wins!")
             else:
                 print("\nDraw!")
-            if ctx.cache is not None:
+            if any(c is not None for c in ctx.player_caches):
+                for i, c in enumerate(ctx.player_caches):
+                    print_cache_stats(c, label=f"P{i} cache")
+            elif ctx.cache is not None:
                 print_cache_stats(ctx.cache)
             break
 

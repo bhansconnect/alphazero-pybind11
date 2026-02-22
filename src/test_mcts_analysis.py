@@ -25,6 +25,8 @@ from mcts_analysis import (
     compute_scaling_report,
     MctsSettings,
     _entry_mcts_settings,
+    _resolve_batch_size,
+    run_benchmark,
     Entry,
 )
 from policy_metrics import batch_top_k_agreement
@@ -285,8 +287,8 @@ def test_anchor_selfplay_is_reference(monkeypatch):
     anchor = Entry(10, "selfplay")
 
     metrics, snapshots = mcts_analysis.run_analysis(
-        config, Game, network_path=None, entries=entries, anchor=anchor,
-        use_playout=False, cache_size=0, tree_reuse=False,
+        config, Game, agent="random", entries=entries, anchor=anchor,
+        cache_size=0, tree_reuse=False,
     )
 
     jsd_means = metrics["jsd_means"]
@@ -319,8 +321,8 @@ def test_anchor_base_is_reference(monkeypatch):
     anchor = Entry(10, "base")
 
     metrics, snapshots = mcts_analysis.run_analysis(
-        config, Game, network_path=None, entries=entries, anchor=anchor,
-        use_playout=False, cache_size=0, tree_reuse=False,
+        config, Game, agent="random", entries=entries, anchor=anchor,
+        cache_size=0, tree_reuse=False,
     )
 
     jsd_means = metrics["jsd_means"]
@@ -405,8 +407,8 @@ def test_pio_metrics_present(monkeypatch):
     anchor = Entry(25, "base")
 
     metrics, snapshots = mcts_analysis.run_analysis(
-        config, Game, network_path=None, entries=entries, anchor=anchor,
-        use_playout=False, cache_size=0, tree_reuse=False,
+        config, Game, agent="random", entries=entries, anchor=anchor,
+        cache_size=0, tree_reuse=False,
     )
 
     pio_metric_names = ["pio_kl", "pio_top1_flip", "pio_entropy_raw", "pio_entropy_mcts",
@@ -454,8 +456,8 @@ def test_pio_vc1_injected_when_absent(monkeypatch):
     anchor = Entry(25, "base")
 
     metrics, snapshots = mcts_analysis.run_analysis(
-        config, Game, network_path=None, entries=entries, anchor=anchor,
-        use_playout=False, cache_size=0, tree_reuse=False,
+        config, Game, agent="random", entries=entries, anchor=anchor,
+        cache_size=0, tree_reuse=False,
     )
 
     # entries in metrics should NOT include vc=1 (not modified)
@@ -479,8 +481,8 @@ def test_pio_vc1_not_duplicated_when_present(monkeypatch):
     anchor = Entry(25, "base")
 
     metrics, snapshots = mcts_analysis.run_analysis(
-        config, Game, network_path=None, entries=entries, anchor=anchor,
-        use_playout=False, cache_size=0, tree_reuse=False,
+        config, Game, agent="random", entries=entries, anchor=anchor,
+        cache_size=0, tree_reuse=False,
     )
 
     total_positions = metrics["total_positions"]
@@ -679,8 +681,8 @@ def test_snapshots_returned(monkeypatch):
     anchor = Entry(10, "base")
 
     metrics, snapshots = mcts_analysis.run_analysis(
-        config, Game, network_path=None, entries=entries, anchor=anchor,
-        use_playout=False, cache_size=0, tree_reuse=False,
+        config, Game, agent="random", entries=entries, anchor=anchor,
+        cache_size=0, tree_reuse=False,
     )
 
     # Snapshots are one per turn (not per sub-move), so <= total_positions
@@ -710,8 +712,8 @@ def test_value_ece_in_metrics(monkeypatch):
     anchor = Entry(25, "base")
 
     metrics, _ = mcts_analysis.run_analysis(
-        config, Game, network_path=None, entries=entries, anchor=anchor,
-        use_playout=False, cache_size=0, tree_reuse=False,
+        config, Game, agent="random", entries=entries, anchor=anchor,
+        cache_size=0, tree_reuse=False,
     )
 
     assert "value_ece" in metrics
@@ -740,8 +742,8 @@ def test_value_accuracy_gain_in_metrics(monkeypatch):
     anchor = Entry(25, "base")
 
     metrics, _ = mcts_analysis.run_analysis(
-        config, Game, network_path=None, entries=entries, anchor=anchor,
-        use_playout=False, cache_size=0, tree_reuse=False,
+        config, Game, agent="random", entries=entries, anchor=anchor,
+        cache_size=0, tree_reuse=False,
     )
 
     assert "pio_value_accuracy_gain_means" in metrics
@@ -779,7 +781,7 @@ def test_monrad_tournament_fewer_matchups():
     with patch("mcts_analysis.pit_agents", mock_pit_agents), \
          patch("mcts_analysis.create_sharded_cache", return_value=None):
         elo, win_matrix = mcts_analysis.run_tournament(
-            config, Game, network_path=None, entries=entries, cache_size=0,
+            config, Game, agent="random", entries=entries, cache_size=0,
         )
 
     rounds = int(np.ceil(np.log2(count)))
@@ -815,7 +817,7 @@ def test_monrad_tournament_no_self_play_matchup():
     with patch("mcts_analysis.pit_agents", mock_pit_agents), \
          patch("mcts_analysis.create_sharded_cache", return_value=None):
         mcts_analysis.run_tournament(
-            config, Game, network_path=None, entries=entries, cache_size=0,
+            config, Game, agent="random", entries=entries, cache_size=0,
         )
 
     for p1, p2 in pairs:
@@ -842,7 +844,7 @@ def test_monrad_tournament_no_repeat_matchup():
     with patch("mcts_analysis.pit_agents", mock_pit_agents), \
          patch("mcts_analysis.create_sharded_cache", return_value=None):
         mcts_analysis.run_tournament(
-            config, Game, network_path=None, entries=entries, cache_size=0,
+            config, Game, agent="random", entries=entries, cache_size=0,
         )
 
     assert len(pairs) == len(set(pairs)), f"Duplicate matchups: {pairs}"
@@ -864,8 +866,53 @@ def test_monrad_tournament_odd_count():
     with patch("mcts_analysis.pit_agents", mock_pit_agents), \
          patch("mcts_analysis.create_sharded_cache", return_value=None):
         elo, win_matrix = mcts_analysis.run_tournament(
-            config, Game, network_path=None, entries=entries, cache_size=0,
+            config, Game, agent="random", entries=entries, cache_size=0,
         )
 
     assert len(elo) == 3
     assert win_matrix.shape == (3, 3)
+
+
+# --- _resolve_batch_size tests ---
+
+
+def test_resolve_batch_size_sqrt():
+    """Auto (batch_size=0) resolves to sqrt(vc)."""
+    assert _resolve_batch_size(Entry(100, "base", 0)) == 10
+    assert _resolve_batch_size(Entry(25, "base", 0)) == 5
+    assert _resolve_batch_size(Entry(400, "selfplay", 0)) == 20
+    assert _resolve_batch_size(Entry(1, "base", 0)) == 1
+
+
+def test_resolve_batch_size_explicit():
+    """Explicit batch_size values returned as-is."""
+    assert _resolve_batch_size(Entry(100, "base", 1)) == 1
+    assert _resolve_batch_size(Entry(100, "base", 8)) == 8
+    assert _resolve_batch_size(Entry(100, "base", 32)) == 32
+
+
+# --- run_benchmark tests ---
+
+
+def test_run_benchmark_basic(monkeypatch):
+    """run_benchmark returns sims/s > 0 for entries with vc > 1."""
+    import mcts_analysis
+    monkeypatch.setattr(mcts_analysis, "BENCHMARK_POSITIONS", 5)
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [Entry(1, "base"), Entry(10, "base"), Entry(25, "base")]
+
+    results = run_benchmark(config, Game, agent="random", entries=entries,
+                            cache_size=0, tree_reuse=False)
+
+    # vc=1 is skipped
+    assert Entry(1, "base") not in results
+    # vc=10 and vc=25 should have results
+    for entry in [Entry(10, "base"), Entry(25, "base")]:
+        assert entry in results
+        data = results[entry]
+        assert data['sims_per_sec'] > 0
+        assert data['total_time'] > 0
+        assert data['positions'] > 0

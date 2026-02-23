@@ -29,6 +29,7 @@ from game_runner import glob_file_triples, _load_and_select, calc_hist_size
 from neural_net import NNArgs, NNWrapper, NNArch, get_device
 from policy_metrics import (
     batch_top1_agreement, batch_top_k_agreement, batch_kl_divergence,
+    batch_policy_entropy,
 )
 
 
@@ -47,6 +48,8 @@ class BenchResult:
     top1_agree: Optional[float] = None
     top3_agree: Optional[float] = None
     kl_div: Optional[float] = None
+    target_entropy: Optional[float] = None
+    kl_gap: Optional[float] = None
 
 
 def parse_config_string(s):
@@ -449,6 +452,8 @@ def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
     net_pi = np.concatenate(all_net_pi, axis=0)
     tgt_pi = np.concatenate(all_tgt_pi, axis=0)
 
+    target_entropy = batch_policy_entropy(tgt_pi)
+
     return {
         "v_loss": v_loss,
         "pi_loss": pi_loss,
@@ -456,6 +461,8 @@ def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
         "top1_agree": batch_top1_agreement(net_pi, tgt_pi),
         "top3_agree": batch_top_k_agreement(net_pi, tgt_pi, 3),
         "kl_div": batch_kl_divergence(tgt_pi, net_pi),
+        "target_entropy": target_entropy,
+        "kl_gap": pi_loss - target_entropy,
     }
 
 
@@ -554,6 +561,7 @@ def print_results_table(results):
     header = (f"{'Config':<22} {'Params':>10} {'Mem MB':>8} {'Infer ms':>9} "
               f"{'V Loss':>8} {'Pi Loss':>9} {'Total':>8} "
               f"{'Top1%':>7} {'Top3%':>7} {'KL':>8} "
+              f"{'TgtEnt':>8} {'KLGap':>8} "
               f"{'Steps':>6} {'Time':>6}")
     print(header)
     print("-" * len(header))
@@ -564,6 +572,7 @@ def print_results_table(results):
             line = (f"{r.label:<22} {r.params:>10,} {'OOM':>8s} {r.infer_ms:>9.1f} "
                     f"{'OOM':>8s} {'OOM':>9s} {'OOM':>8s} "
                     f"{'':>7s} {'':>7s} {'':>8s} "
+                    f"{'':>8s} {'':>8s} "
                     f"{'-':>6s} {'-':>6s}")
             print(line)
         else:
@@ -571,9 +580,12 @@ def print_results_table(results):
             top1 = f"{r.top1_agree * 100:>6.1f}%" if r.top1_agree is not None else f"{'N/A':>7s}"
             top3 = f"{r.top3_agree * 100:>6.1f}%" if r.top3_agree is not None else f"{'N/A':>7s}"
             kl = f"{r.kl_div:>8.4f}" if r.kl_div is not None else f"{'N/A':>8s}"
+            te = f"{r.target_entropy:>8.4f}" if r.target_entropy is not None else f"{'N/A':>8s}"
+            kg = f"{r.kl_gap:>8.4f}" if r.kl_gap is not None else f"{'N/A':>8s}"
             line = (f"{r.label:<22} {r.params:>10,} {r.mem_mb:>8.1f} {r.infer_ms:>9.1f} "
                     f"{r.v_loss:>8.4f} {r.pi_loss:>9.4f} {r.total_loss:>8.4f} "
                     f"{top1} {top3} {kl} "
+                    f"{te} {kg} "
                     f"{r.steps:>6} {r.time_min:>5.1f}m{star}")
             print(line)
             vi += 1
@@ -967,7 +979,8 @@ def main():
             metrics = eval_loss(nn_train, train_c, train_v, train_pi, args.batch_size, device)
             print(f"  V Loss: {metrics['v_loss']:.4f}  Pi Loss: {metrics['pi_loss']:.4f}  "
                   f"Total: {metrics['total_loss']:.4f}  "
-                  f"Top1: {metrics['top1_agree']*100:.1f}%  KL: {metrics['kl_div']:.4f}")
+                  f"Top1: {metrics['top1_agree']*100:.1f}%  KL: {metrics['kl_div']:.4f}  "
+                  f"TE: {metrics['target_entropy']:.4f}  KL gap: {metrics['kl_gap']:.4f}")
 
             br = BenchResult(
                 label=label, params=params, mem_mb=mem_mb, infer_ms=infer_ms,
@@ -976,6 +989,7 @@ def main():
                 steps=args.steps, time_min=time_min, losses_log=losses_log,
                 top1_agree=metrics['top1_agree'], top3_agree=metrics['top3_agree'],
                 kl_div=metrics['kl_div'],
+                target_entropy=metrics['target_entropy'], kl_gap=metrics['kl_gap'],
             )
             results.append(br)
         except RuntimeError as e:

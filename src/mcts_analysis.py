@@ -1518,6 +1518,14 @@ def compute_scaling_report(entries, anchor, elo=None, metrics=None):
                     utilization[entry] = (reward - vc1_reward) / denom
                 result["mcts_utilization"] = utilization
 
+    # 7. Training Signal: target entropy + KL gap vs visit count
+    pio_entropy = metrics.get("pio_entropy_mcts_means", {})
+    pio_kl_data = metrics.get("pio_kl_means", {})
+    if pio_entropy:
+        result["training_signal_entropy"] = dict(pio_entropy)
+    if pio_kl_data:
+        result["training_signal_kl"] = dict(pio_kl_data)
+
     return result
 
 
@@ -1542,7 +1550,9 @@ def print_scaling_report(scaling, entries, anchor):
     has_vag = "value_accuracy_gain" in scaling
     has_cs = "capacity_score" in scaling
     has_mu = "mcts_utilization" in scaling
-    if has_pi or has_ece or has_vag or has_cs or has_mu:
+    has_tse = "training_signal_entropy" in scaling
+    has_tsk = "training_signal_kl" in scaling
+    if has_pi or has_ece or has_vag or has_cs or has_mu or has_tse or has_tsk:
         header = f"\n  {'Visits':>8s}"
         if has_pi:
             header += f" {'PolImpr':>8s}"
@@ -1554,6 +1564,10 @@ def print_scaling_report(scaling, entries, anchor):
             header += f" {'CapScore':>8s}"
         if has_mu:
             header += f" {'MCTSUtil':>8s}"
+        if has_tse:
+            header += f" {'TgtEntr':>8s}"
+        if has_tsk:
+            header += f" {'KLGap':>8s}"
         print(header)
 
         sorted_entries = sorted(
@@ -1563,6 +1577,8 @@ def print_scaling_report(scaling, entries, anchor):
                 scaling.get("value_accuracy_gain", {}).keys(),
                 scaling.get("capacity_score", {}).keys(),
                 scaling.get("mcts_utilization", {}).keys(),
+                scaling.get("training_signal_entropy", {}).keys(),
+                scaling.get("training_signal_kl", {}).keys(),
             ),
             key=entry_sort_key,
         )
@@ -1582,6 +1598,12 @@ def print_scaling_report(scaling, entries, anchor):
                 row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
             if has_mu:
                 v = scaling["mcts_utilization"].get(entry)
+                row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
+            if has_tse:
+                v = scaling["training_signal_entropy"].get(entry)
+                row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
+            if has_tsk:
+                v = scaling["training_signal_kl"].get(entry)
                 row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
             print(row)
 
@@ -1840,20 +1862,25 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         axes[1, 1].set_title("Value MAE vs Game Outcome")
         axes[1, 1].grid(True, alpha=0.3)
 
-        # Bottom-right: Calibration curve for anchor entry
-        if anchor in calibration_data:
-            bin_pred, bin_actual, bin_count = calibration_data[anchor]
-            sizes = 20 + 200 * (bin_count / bin_count.max())
-            axes[1, 2].scatter(bin_pred, bin_actual, s=sizes, color="tab:blue",
-                               edgecolors="gray", zorder=3, alpha=0.8)
+        # Bottom-right: Calibration curves for all entries
+        if calibration_data:
+            cal_entries = sorted(calibration_data.keys(), key=entry_sort_key)
+            cmap = plt.cm.viridis
+            n_cal = len(cal_entries)
+            for idx, entry in enumerate(cal_entries):
+                bin_pred, bin_actual, bin_count = calibration_data[entry]
+                color = cmap(idx / max(n_cal - 1, 1))
+                axes[1, 2].plot(bin_pred, bin_actual, "o-", color=color,
+                                markersize=3, linewidth=1.2, alpha=0.8,
+                                label=entry_label(entry))
             axes[1, 2].plot([0, 1], [0, 1], "k--", alpha=0.5, label="perfect")
             axes[1, 2].set_xlabel("Predicted Value")
             axes[1, 2].set_ylabel("Actual Win Rate")
-            axes[1, 2].set_title(f"Calibration Curve ({entry_label(anchor)})")
+            axes[1, 2].set_title("Calibration Curves")
             axes[1, 2].set_xlim(-0.05, 1.05)
             axes[1, 2].set_ylim(-0.05, 1.05)
             axes[1, 2].set_aspect("equal")
-            axes[1, 2].legend(fontsize=8)
+            axes[1, 2].legend(fontsize=6, loc="upper left")
             axes[1, 2].grid(True, alpha=0.3)
         else:
             axes[1, 2].set_visible(False)
@@ -2020,7 +2047,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
     if scaling:
         print_scaling_report(scaling, entries, anchor)
 
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig, axes = plt.subplots(2, 3, figsize=(21, 10))
 
         # Top-left: Elo per Doubling (bar chart)
         if "elo_per_doubling" in scaling:
@@ -2051,7 +2078,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         else:
             axes[0, 0].set_visible(False)
 
-        # Top-right: Capacity Score
+        # Top-center: Capacity Score
         if "capacity_score" in scaling:
             cs = scaling["capacity_score"]
             cs_entries = sorted(cs.keys(), key=entry_sort_key)
@@ -2063,6 +2090,20 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             axes[0, 1].grid(True, alpha=0.3)
         else:
             axes[0, 1].set_visible(False)
+
+        # Top-right: Training Signal — Target Entropy H(pi_mcts)
+        if "training_signal_entropy" in scaling:
+            tse = scaling["training_signal_entropy"]
+            tse_entries = sorted(tse.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[0, 2], tse_entries, [tse[e] for e in tse_entries],
+                          base_color="tab:purple", sp_color="tab:pink")
+            _set_entry_xticks(axes[0, 2], tse_entries)
+            axes[0, 2].set_xlabel("MCTS Visit Count")
+            axes[0, 2].set_ylabel("Target Entropy H(pi_mcts)")
+            axes[0, 2].set_title("Training Signal: Target Entropy")
+            axes[0, 2].grid(True, alpha=0.3)
+        else:
+            axes[0, 2].set_visible(False)
 
         # Bottom-left: MCTS Utilization
         if "mcts_utilization" in scaling:
@@ -2080,7 +2121,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         else:
             axes[1, 0].set_visible(False)
 
-        # Bottom-right: Value Calibration & Accuracy Gain (dual y-axis)
+        # Bottom-center: Value Calibration & Accuracy Gain (dual y-axis)
         has_ece = "value_ece" in scaling
         has_vag = "value_accuracy_gain" in scaling
         if has_ece or has_vag:
@@ -2112,6 +2153,20 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             ax_left.grid(True, alpha=0.3)
         else:
             axes[1, 1].set_visible(False)
+
+        # Bottom-right: Training Signal — KL Gap KL(pi_mcts || pi_raw)
+        if "training_signal_kl" in scaling:
+            tsk = scaling["training_signal_kl"]
+            tsk_entries = sorted(tsk.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[1, 2], tsk_entries, [tsk[e] for e in tsk_entries],
+                          base_color="tab:red", sp_color="tab:orange")
+            _set_entry_xticks(axes[1, 2], tsk_entries)
+            axes[1, 2].set_xlabel("MCTS Visit Count")
+            axes[1, 2].set_ylabel("KL Gap (pi_mcts || pi_raw)")
+            axes[1, 2].set_title("Training Signal: KL Gap")
+            axes[1, 2].grid(True, alpha=0.3)
+        else:
+            axes[1, 2].set_visible(False)
 
         fig.suptitle("Scaling Readiness Report", fontsize=14)
         fig.tight_layout()

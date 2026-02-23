@@ -496,6 +496,11 @@ class NNWrapper:
                 v_val = l_v.item()
                 pi_val = l_pi.item()
 
+                with torch.no_grad():
+                    mask = target_pis > 0
+                    target_entropy_val = -(target_pis[mask] * torch.log(target_pis[mask])).sum().item() / target_pis.size(0)
+                kl_gap_val = pi_val - target_entropy_val
+
                 run.track(
                     v_val,
                     name="loss",
@@ -516,6 +521,20 @@ class NNWrapper:
                     epoch=epoch,
                     step=total_train_steps + current_step,
                     context={"type": "total"},
+                )
+                run.track(
+                    target_entropy_val,
+                    name="loss",
+                    epoch=epoch,
+                    step=total_train_steps + current_step,
+                    context={"type": "target_entropy"},
+                )
+                run.track(
+                    kl_gap_val,
+                    name="loss",
+                    epoch=epoch,
+                    step=total_train_steps + current_step,
+                    context={"type": "kl_gap"},
                 )
 
                 # record loss and update progress bar.

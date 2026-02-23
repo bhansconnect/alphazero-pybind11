@@ -157,7 +157,7 @@ class DLLEXPORT PlayManager {
   void push_inference(const uint32_t i) noexcept { awaiting_mcts_.push(i); }
   [[nodiscard]] GameData& game_data(uint32_t i) noexcept { return games_[i]; }
   [[nodiscard]] const PlayParams& params() const noexcept { return params_; }
-  uint64_t avg_game_length() const noexcept {
+  float avg_game_length() const noexcept {
     return static_cast<float>(game_length_) /
            static_cast<float>(games_completed_);
   }

@@ -50,6 +50,10 @@ class NNArgs:
     head_pool: bool = True
     v_fc_hidden: int = -1    # -1 = auto-derive as head_channels * 8
     pi_fc_hidden: int = -1   # -1 = auto-derive as head_channels * 8
+    v_head_convs: int = 0    # extra conv layers in value head (0 = current behavior)
+    pi_head_convs: int = 0   # extra conv layers in policy head (0 = current behavior)
+    v_fc_layers: int = 1     # hidden FC layers in value head (1 = current behavior)
+    pi_fc_layers: int = 0    # hidden FC layers in policy head (0 = current single-projection)
 
     def __post_init__(self):
         if self.v_fc_hidden == -1:
@@ -70,6 +74,10 @@ def nnargs_from_config(config):
         star_gambit_spatial=config.star_gambit_spatial,
         head_channels=config.head_channels,
         head_pool=config.head_pool,
+        v_head_convs=config.v_head_convs,
+        pi_head_convs=config.pi_head_convs,
+        v_fc_layers=config.v_fc_layers,
+        pi_fc_layers=config.pi_fc_layers,
     )
 
 
@@ -163,7 +171,11 @@ class NNArch(nn.Module):
         self.dense_net = args.dense_net
         self.star_gambit_spatial = args.star_gambit_spatial
         self.head_pool = args.head_pool
+        self.pi_fc_layers = args.pi_fc_layers
         HC = args.head_channels
+
+        if args.pi_fc_layers > 0 and args.star_gambit_spatial:
+            raise ValueError("pi_fc_layers not supported with star_gambit_spatial policy head")
 
         if not self.dense_net:
             self.conv1 = conv(
@@ -201,6 +213,18 @@ class NNArch(nn.Module):
 
         self.v_bn = nn.BatchNorm2d(HC)
         self.v_relu = nn.ReLU(inplace=True)
+
+        # Extra value head conv layers (cheap per-head backbone extensions)
+        if args.v_head_convs > 0:
+            v_conv_layers = []
+            for _ in range(args.v_head_convs):
+                v_conv_layers.extend([
+                    conv(HC, HC, kernel_size=args.kernel_size),
+                    nn.BatchNorm2d(HC),
+                    nn.ReLU(inplace=True),
+                ])
+            self.v_extra_convs = nn.Sequential(*v_conv_layers)
+
         if args.head_pool:
             self.v_pool = nn.AdaptiveAvgPool2d(1)
             v_fc1_in = HC
@@ -209,11 +233,33 @@ class NNArch(nn.Module):
         self.v_flatten = nn.Flatten()
         self.v_fc1 = nn.Linear(v_fc1_in, args.v_fc_hidden)
         self.v_fc1_relu = nn.ReLU(inplace=True)
+
+        # Extra value FC hidden layers
+        if args.v_fc_layers > 1:
+            v_fc_extra = []
+            for _ in range(args.v_fc_layers - 1):
+                v_fc_extra.extend([
+                    nn.Linear(args.v_fc_hidden, args.v_fc_hidden),
+                    nn.ReLU(inplace=True),
+                ])
+            self.v_fc_extra = nn.Sequential(*v_fc_extra)
+
         self.v_fc2 = nn.Linear(args.v_fc_hidden, game.NUM_PLAYERS() + 1)
         self.v_softmax = nn.LogSoftmax(1)
 
         self.pi_bn = nn.BatchNorm2d(HC)
         self.pi_relu = nn.ReLU(inplace=True)
+
+        # Extra policy head conv layers
+        if args.pi_head_convs > 0:
+            pi_conv_layers = []
+            for _ in range(args.pi_head_convs):
+                pi_conv_layers.extend([
+                    conv(HC, HC, kernel_size=args.kernel_size),
+                    nn.BatchNorm2d(HC),
+                    nn.ReLU(inplace=True),
+                ])
+            self.pi_extra_convs = nn.Sequential(*pi_conv_layers)
 
         if self.star_gambit_spatial:
             # Star Gambit spatial policy head:
@@ -244,7 +290,21 @@ class NNArch(nn.Module):
         else:
             # Standard fully-connected policy head
             self.pi_flatten = nn.Flatten()
-            self.pi_fc1 = nn.Linear(in_x * in_y * HC, game.NUM_MOVES())
+            if args.pi_fc_layers > 0:
+                # Multi-layer policy FC head
+                self.pi_fc1 = nn.Linear(in_x * in_y * HC, args.pi_fc_hidden)
+                if args.pi_fc_layers > 1:
+                    pi_fc_extra = []
+                    for _ in range(args.pi_fc_layers - 1):
+                        pi_fc_extra.extend([
+                            nn.Linear(args.pi_fc_hidden, args.pi_fc_hidden),
+                            nn.ReLU(inplace=True),
+                        ])
+                    self.pi_fc_extra = nn.Sequential(*pi_fc_extra)
+                self.pi_fc_out = nn.Linear(args.pi_fc_hidden, game.NUM_MOVES())
+            else:
+                # Single projection (current default)
+                self.pi_fc1 = nn.Linear(in_x * in_y * HC, game.NUM_MOVES())
             self.pi_softmax = nn.LogSoftmax(1)
 
     def forward(self, s):
@@ -257,17 +317,23 @@ class NNArch(nn.Module):
         v = self.v_conv(s)
         v = self.v_bn(v)
         v = self.v_relu(v)
+        if hasattr(self, 'v_extra_convs'):
+            v = self.v_extra_convs(v)
         if self.head_pool:
             v = self.v_pool(v)
         v = self.v_flatten(v)
         v = self.v_fc1(v)
         v = self.v_fc1_relu(v)
+        if hasattr(self, 'v_fc_extra'):
+            v = self.v_fc_extra(v)
         v = self.v_fc2(v)
         v = self.v_softmax(v)
 
         pi = self.pi_conv(s)
         pi = self.pi_bn(pi)
         pi = self.pi_relu(pi)
+        if hasattr(self, 'pi_extra_convs'):
+            pi = self.pi_extra_convs(pi)
 
         if self.star_gambit_spatial:
             # Spatial policy head for Star Gambit
@@ -289,6 +355,14 @@ class NNArch(nn.Module):
 
             # Concatenate: spatial + global
             pi = torch.cat([pi_spatial, pi_global], dim=1)  # (B, H*W*10 + 19)
+            pi = self.pi_softmax(pi)
+        elif self.pi_fc_layers > 0:
+            pi = self.pi_flatten(pi)
+            pi = self.pi_fc1(pi)
+            pi = torch.relu(pi)
+            if hasattr(self, 'pi_fc_extra'):
+                pi = self.pi_fc_extra(pi)
+            pi = self.pi_fc_out(pi)
             pi = self.pi_softmax(pi)
         else:
             pi = self.pi_flatten(pi)
@@ -669,6 +743,12 @@ class NNWrapper:
             args_dict["head_pool"] = False
             args_dict["v_fc_hidden"] = 256   # was hardcoded 32 * 8
             args_dict["pi_fc_hidden"] = 64   # was hardcoded 32 * 2
+
+        # Head conv and FC depth (defaults match original architecture)
+        args_dict.setdefault("v_head_convs", 0)
+        args_dict.setdefault("pi_head_convs", 0)
+        args_dict.setdefault("v_fc_layers", 1)
+        args_dict.setdefault("pi_fc_layers", 0)
 
         args = NNArgs(**args_dict)
 

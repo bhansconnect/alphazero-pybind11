@@ -89,6 +89,36 @@ def parse_config_string(s):
             rest = rest[hm.end():]
             continue
 
+        vm = re.match(r'vconv(\d+)', rest)
+        if vm:
+            kwargs['v_head_convs'] = int(vm.group(1))
+            rest = rest[vm.end():]
+            continue
+
+        pm = re.match(r'pconv(\d+)', rest)
+        if pm:
+            kwargs['pi_head_convs'] = int(pm.group(1))
+            rest = rest[pm.end():]
+            continue
+
+        vfm = re.match(r'vfc(\d+)', rest)
+        if vfm:
+            kwargs['v_fc_layers'] = int(vfm.group(1))
+            rest = rest[vfm.end():]
+            continue
+
+        pfm = re.match(r'pfc(\d+)', rest)
+        if pfm:
+            kwargs['pi_fc_layers'] = int(pfm.group(1))
+            rest = rest[pfm.end():]
+            continue
+
+        cvm = re.match(r'cv([\d.]+)', rest)
+        if cvm:
+            kwargs['cv'] = float(cvm.group(1))
+            rest = rest[cvm.end():]
+            continue
+
         if rest.startswith('resnet'):
             kwargs['dense_net'] = False
             rest = rest[6:]
@@ -106,7 +136,7 @@ def _expand_optional_group(grp):
     '-hc32,64' -> ['', '-hc32', '-hc64']
     '-resnet'  -> ['', '-resnet']  (no comma values, unchanged)
     """
-    m = re.match(r'^(-[a-zA-Z]+)([\d,]+)$', grp)
+    m = re.match(r'^(-[a-zA-Z]+)([\d.,]+)$', grp)
     if m and ',' in m.group(2):
         prefix = m.group(1)
         values = m.group(2).split(',')
@@ -568,7 +598,7 @@ def collect_configs(config, args):
     """Interactive config input loop. Returns list of (label, NNArgs)."""
     Game = config.Game
 
-    print("Config format: {depth}d{channels}c[-k{N}][-hc{N}][-resnet]")
+    print("Config format: {depth}d{channels}c[-k{N}][-hc{N}][-vconv{N}][-pconv{N}][-vfc{N}][-pfc{N}][-cv{F}][-resnet]")
     print("  Comma-separated values expand as cross-product:")
     print("    4,6d16,24c          -> 4 configs (2 depths x 2 channels)")
     print("    4,6,8d16,24,32c     -> 9 configs")
@@ -579,8 +609,13 @@ def collect_configs(config, args):
     print("  Modifiers (all optional, dash-separated):")
     print("    -k{N}      kernel size (default: 3)")
     print("    -hc{N}     head channels (default: 32)")
+    print("    -vconv{N}  extra value head conv layers (default: 0)")
+    print("    -pconv{N}  extra policy head conv layers (default: 0)")
+    print("    -vfc{N}    value FC hidden layers (default: 1)")
+    print("    -pfc{N}    policy FC hidden layers (default: 0)")
+    print("    -cv{F}     value loss coefficient (default: from config)")
     print("    -resnet    use ResNet instead of DenseNet")
-    print("  Examples: 6d24c  4d32c-k5  6d24c-hc64  4,6,8d16,24,32c-resnet")
+    print("  Examples: 6d24c  4d32c-k5  6d24c-vconv2-vfc2  4d16c-cv2.0")
     print()
     print("Add configs (empty or 'go' to start):")
 
@@ -603,7 +638,8 @@ def collect_configs(config, args):
                     continue
                 kwargs['star_gambit_spatial'] = config.star_gambit_spatial
                 kwargs['head_pool'] = config.head_pool
-                nn_args = NNArgs(lr=args.lr, cv=config.cv, **kwargs)
+                cv = kwargs.pop('cv', config.cv)
+                nn_args = NNArgs(lr=args.lr, cv=cv, **kwargs)
                 tmp_model = NNArch(Game, nn_args)
                 params = count_params(tmp_model)
                 del tmp_model

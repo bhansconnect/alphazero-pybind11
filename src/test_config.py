@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import alphazero
 from config import TrainConfig, GAME_REGISTRY, load_config, find_latest_checkpoint
+import neural_net
 
 
 # ---------------------------------------------------------------------------
@@ -519,3 +520,41 @@ def test_list_cli_override_warns(tmp_path, capsys):
     load_config(yaml_path, {"lr_steps": "[[0, 0.01]]"})
     captured = capsys.readouterr()
     assert "cannot override list field 'lr_steps' via CLI" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# nnargs_from_config
+# ---------------------------------------------------------------------------
+
+
+def test_nnargs_from_config_head_fields(tmp_path):
+    """nnargs_from_config propagates head architecture fields from YAML."""
+    yaml_path = str(tmp_path / "config.yaml")
+    with open(yaml_path, "w") as f:
+        f.write(
+            "game: connect4\n"
+            "v_head_convs: 2\n"
+            "pi_head_convs: 3\n"
+            "v_fc_layers: 2\n"
+            "pi_fc_layers: 1\n"
+        )
+    config = load_config(yaml_path, {})
+    nnargs = neural_net.nnargs_from_config(config)
+    assert nnargs.v_head_convs == 2
+    assert nnargs.pi_head_convs == 3
+    assert nnargs.v_fc_layers == 2
+    assert nnargs.pi_fc_layers == 1
+
+
+def test_nnargs_from_config_cli_override(tmp_path):
+    """nnargs_from_config picks up head fields set via CLI overrides."""
+    yaml_path = str(tmp_path / "config.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\n")
+    config = load_config(yaml_path, {"v_head_convs": "1", "pi_fc_layers": "2"})
+    nnargs = neural_net.nnargs_from_config(config)
+    assert nnargs.v_head_convs == 1
+    assert nnargs.pi_fc_layers == 2
+    # defaults preserved for fields not overridden
+    assert nnargs.pi_head_convs == 0
+    assert nnargs.v_fc_layers == 1

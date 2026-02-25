@@ -41,6 +41,10 @@ class TrainConfig:
     star_gambit_spatial: bool = False
     head_channels: int = 32
     head_pool: bool = True
+    v_head_convs: int = 0
+    pi_head_convs: int = 0
+    v_fc_layers: int = 1
+    pi_fc_layers: int = 0
 
     # MCTS
     cpuct: float = 1.25

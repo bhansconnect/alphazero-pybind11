@@ -1848,17 +1848,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
     @tracy_zone
     def create_init_net():
-        nnargs = neural_net.NNArgs(
-            num_channels=config.channels,
-            depth=config.depth,
-            kernel_size=config.kernel_size,
-            dense_net=config.dense_net,
-            lr=config.lr,
-            cv=config.cv,
-            star_gambit_spatial=config.star_gambit_spatial,
-            head_channels=config.head_channels,
-            head_pool=config.head_pool,
-        )
+        nnargs = neural_net.nnargs_from_config(config)
         nn = neural_net.NNWrapper(Game, nnargs)
         nn.save_checkpoint(paths["checkpoint"], f"0000-{experiment_name}.pt",
                            zstd_level=config.zstd_level)

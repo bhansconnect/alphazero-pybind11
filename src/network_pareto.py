@@ -36,6 +36,7 @@ class BenchResult:
     mem_mb: float
     infer_ms: float
     v_loss: float
+    v_loss_raw: float
     pi_loss: float
     total_loss: float
     steps: int
@@ -558,6 +559,7 @@ def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
             n_total += bs
 
     v_loss = (v_total / n_batches).item()
+    v_loss_raw = v_loss / nn_wrapper.cv
     pi_loss = (pi_total / n_batches).item()
     top1 = top1_matches.item() / n_total
     top3 = top3_matches.item() / (n_total * 3)
@@ -566,6 +568,7 @@ def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
 
     return {
         "v_loss": v_loss,
+        "v_loss_raw": v_loss_raw,
         "pi_loss": pi_loss,
         "total_loss": v_loss + pi_loss,
         "top1_agree": top1,
@@ -675,7 +678,7 @@ def print_results_table(results):
         valid_pareto = np.array([], dtype=bool)
 
     header = (f"{'Config':<22} {'Params':>10} {'Mem MB':>8} {'Infer ms':>9} "
-              f"{'V Loss':>8} {'Pi Loss':>9} {'Total':>8} "
+              f"{'V Raw':>8} {'Pi Loss':>9} {'Total':>8} "
               f"{'Top1%':>7} {'Top3%':>7} {'KL':>8} "
               f"{'TgtEnt':>8} {'KLGap':>8} "
               f"{'Steps':>6} {'Time':>6}")
@@ -699,7 +702,7 @@ def print_results_table(results):
             te = f"{r.target_entropy:>8.4f}" if r.target_entropy is not None else f"{'N/A':>8s}"
             kg = f"{r.kl_gap:>8.4f}" if r.kl_gap is not None else f"{'N/A':>8s}"
             line = (f"{r.label:<22} {r.params:>10,} {r.mem_mb:>8.1f} {r.infer_ms:>9.1f} "
-                    f"{r.v_loss:>8.4f} {r.pi_loss:>9.4f} {r.total_loss:>8.4f} "
+                    f"{r.v_loss_raw:>8.4f} {r.pi_loss:>9.4f} {r.total_loss:>8.4f} "
                     f"{top1} {top3} {kl} "
                     f"{te} {kg} "
                     f"{r.steps:>6} {r.time_min:>5.1f}m{star}")
@@ -804,7 +807,7 @@ def save_charts(results, save_dir):
     fig, ax = plt.subplots(figsize=(10, 7))
     series = [
         ('Total', [r.total_loss for r in valid], 'tab:blue', 'o'),
-        ('Value', [r.v_loss for r in valid], 'tab:red', 's'),
+        ('Value', [r.v_loss_raw for r in valid], 'tab:red', 's'),
         ('Policy', [r.pi_loss for r in valid], 'tab:green', '^'),
     ]
     for name, vals, color, marker in series:
@@ -891,6 +894,7 @@ def save_results_npz(results, save_dir):
     data["mem_mb"] = np.array([r.mem_mb for r in results])
     data["infer_ms"] = np.array([r.infer_ms for r in results])
     data["v_loss"] = np.array([r.v_loss for r in results])
+    data["v_loss_raw"] = np.array([r.v_loss_raw for r in results])
     data["pi_loss"] = np.array([r.pi_loss for r in results])
     data["total_loss"] = np.array([r.total_loss for r in results])
     data["steps"] = np.array([r.steps for r in results])
@@ -1095,14 +1099,19 @@ def main():
 
             print("  Final eval + metrics (train)...")
             metrics = eval_loss(nn_train, train_c, train_v, train_pi, args.batch_size, device)
-            print(f"  V Loss: {metrics['v_loss']:.4f}  Pi Loss: {metrics['pi_loss']:.4f}  "
+            if nn_args.cv != 1.0:
+                v_str = f"V Loss: {metrics['v_loss_raw']:.4f} (cv{nn_args.cv:g}: {metrics['v_loss']:.4f})"
+            else:
+                v_str = f"V Loss: {metrics['v_loss']:.4f}"
+            print(f"  {v_str}  Pi Loss: {metrics['pi_loss']:.4f}  "
                   f"Total: {metrics['total_loss']:.4f}  "
                   f"Top1: {metrics['top1_agree']*100:.1f}%  KL: {metrics['kl_div']:.4f}  "
                   f"TE: {metrics['target_entropy']:.4f}  KL gap: {metrics['kl_gap']:.4f}")
 
             br = BenchResult(
                 label=label, params=params, mem_mb=mem_mb, infer_ms=infer_ms,
-                v_loss=metrics['v_loss'], pi_loss=metrics['pi_loss'],
+                v_loss=metrics['v_loss'], v_loss_raw=metrics['v_loss_raw'],
+                pi_loss=metrics['pi_loss'],
                 total_loss=metrics['total_loss'],
                 steps=actual_steps, time_min=time_min, losses_log=losses_log,
                 top1_agree=metrics['top1_agree'], top3_agree=metrics['top3_agree'],
@@ -1115,7 +1124,8 @@ def main():
                 print(f"  OOM! Skipping {label}.")
                 results.append(BenchResult(
                     label=label, params=params, mem_mb=float('inf'), infer_ms=infer_ms,
-                    v_loss=float('inf'), pi_loss=float('inf'), total_loss=float('inf'),
+                    v_loss=float('inf'), v_loss_raw=float('inf'),
+                    pi_loss=float('inf'), total_loss=float('inf'),
                     steps=0, time_min=0.0,
                 ))
             else:

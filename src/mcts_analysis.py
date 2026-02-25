@@ -1757,7 +1757,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         ax.set_xticklabels([str(v) for v in unique_vcs])
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
-        path = os.path.join(save_dir, "elo_vs_visits.png")
+        path = os.path.join(save_dir, "mcts_elo_vs_visits.png")
         fig.savefig(path, dpi=150)
         print(f"Saved: {path}")
         fig_num += 1
@@ -1790,7 +1790,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             _plot_metric_panel(ax, name, title, base_color, sorted_entries, means, all_data)
 
         fig.tight_layout()
-        path = os.path.join(save_dir, "policy_metrics.png")
+        path = os.path.join(save_dir, "mcts_policy_metrics.png")
         fig.savefig(path, dpi=150)
         print(f"Saved: {path}")
         fig_num += 1
@@ -1886,7 +1886,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             axes[1, 2].set_visible(False)
 
         fig.tight_layout()
-        path = os.path.join(save_dir, "value_analysis.png")
+        path = os.path.join(save_dir, "mcts_value_analysis.png")
         fig.savefig(path, dpi=150)
         print(f"Saved: {path}")
 
@@ -1947,7 +1947,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             axes[panel].grid(True, alpha=0.3)
 
         fig.tight_layout()
-        path = os.path.join(save_dir, "policy_regret.png")
+        path = os.path.join(save_dir, "mcts_policy_regret.png")
         fig.savefig(path, dpi=150)
         print(f"Saved: {path}")
 
@@ -1986,7 +1986,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
 
         fig.suptitle("PIO Gap Analysis (MCTS vs Raw Network)", fontsize=14, y=1.02)
         fig.tight_layout()
-        path = os.path.join(save_dir, "pio_gap_summary.png")
+        path = os.path.join(save_dir, "mcts_pio_gap_summary.png")
         fig.savefig(path, dpi=150, bbox_inches="tight")
         print(f"Saved: {path}")
 
@@ -2038,7 +2038,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             axes[panel].grid(True, alpha=0.3)
 
         fig.tight_layout()
-        path = os.path.join(save_dir, "pio_marginal_returns.png")
+        path = os.path.join(save_dir, "mcts_pio_marginal_returns.png")
         fig.savefig(path, dpi=150)
         print(f"Saved: {path}")
 
@@ -2170,7 +2170,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
 
         fig.suptitle("Scaling Readiness Report", fontsize=14)
         fig.tight_layout()
-        path = os.path.join(save_dir, "scaling_report.png")
+        path = os.path.join(save_dir, "mcts_scaling_report.png")
         fig.savefig(path, dpi=150, bbox_inches="tight")
         print(f"Saved: {path}")
 
@@ -2219,7 +2219,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         fig.legend(handles=legend_elements, loc="upper right", fontsize=9,
                    title="Batch Size")
         fig.tight_layout(rect=[0, 0, 0.92, 1])
-        path = os.path.join(save_dir, "search_timing.png")
+        path = os.path.join(save_dir, "mcts_search_timing.png")
         fig.savefig(path, dpi=150, bbox_inches="tight")
         print(f"Saved: {path}")
 
@@ -2308,7 +2308,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         for entry, val in metrics["value_ece"].items():
             save_data[f"value_ece_{entry_label(entry)}"] = np.array(val)
 
-    npz_path = os.path.join(save_dir, "threshold_data.npz")
+    npz_path = os.path.join(save_dir, "mcts_results.npz")
     np.savez(npz_path, **save_data)
     print(f"Saved: {npz_path}")
 

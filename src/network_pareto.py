@@ -27,10 +27,6 @@ import numpy as np
 from config import load_config, find_latest_checkpoint
 from game_runner import glob_file_triples, _load_and_select, calc_hist_size
 from neural_net import NNArgs, NNWrapper, NNArch, get_device
-from policy_metrics import (
-    batch_top1_agreement, batch_top_k_agreement, batch_kl_divergence,
-    batch_policy_entropy,
-)
 
 
 @dataclass
@@ -375,8 +371,8 @@ def benchmark_inference(nn_wrapper, game, batch_size):
 
 
 def train_config(nn_wrapper, all_c, all_v, all_pi, batch_indices, lr, steps,
-                 log_interval, device):
-    """Train a single config on pre-generated batches. Returns (losses_log, final_time)."""
+                 log_interval, device, early_stop=True):
+    """Train a single config on pre-generated batches. Returns (losses_log, elapsed, actual_steps)."""
     nn_wrapper.nnet.train()
     optimizer = torch.optim.SGD(
         nn_wrapper.nnet.parameters(), lr=lr, momentum=0.9, weight_decay=1e-3
@@ -388,6 +384,19 @@ def train_config(nn_wrapper, all_c, all_v, all_pi, batch_indices, lr, steps,
     v_sum = 0.0
     pi_sum = 0.0
 
+    # Early stopping via EMA plateau detection
+    convergence_threshold = 0.005
+    convergence_patience = 4
+    min_steps = steps // 4
+    ema_beta = 0.75
+    ema_loss = None
+    best_ema_loss = None
+    patience_counter = 0
+    chunk_v = 0.0
+    chunk_pi = 0.0
+    chunk_count = 0
+
+    actual_steps = steps
     t0 = time.perf_counter()
     for step_i, idx in enumerate(batch_indices):
         c_batch = all_c[idx].to(device, non_blocking=non_blocking)
@@ -407,29 +416,74 @@ def train_config(nn_wrapper, all_c, all_v, all_pi, batch_indices, lr, steps,
         pi_val = l_pi.item()
         v_sum += v_val
         pi_sum += pi_val
+        chunk_v += v_val
+        chunk_pi += pi_val
+        chunk_count += 1
 
         step_num = step_i + 1
         if step_num % log_interval == 0 or step_num == steps:
             losses_log.append((step_num, v_sum / step_num, pi_sum / step_num, (v_sum + pi_sum) / step_num))
 
+            # Early stopping check at log_interval boundaries
+            if early_stop and step_num >= min_steps and step_num % log_interval == 0:
+                chunk_avg = (chunk_v + chunk_pi) / chunk_count
+
+                if ema_loss is None:
+                    ema_loss = chunk_avg
+                else:
+                    ema_loss = ema_beta * ema_loss + (1 - ema_beta) * chunk_avg
+
+                if best_ema_loss is None:
+                    best_ema_loss = ema_loss
+                else:
+                    rel_improvement = (best_ema_loss - ema_loss) / (best_ema_loss + 1e-8)
+                    if rel_improvement < convergence_threshold:
+                        patience_counter += 1
+                    else:
+                        patience_counter = 0
+                        best_ema_loss = ema_loss
+
+                    if patience_counter >= convergence_patience:
+                        print(f"  Early stop at step {step_num}/{steps} "
+                              f"(ema_loss={ema_loss:.4f})")
+                        actual_steps = step_num
+                        break
+
+            # Reset chunk accumulators
+            if step_num % log_interval == 0:
+                chunk_v = 0.0
+                chunk_pi = 0.0
+                chunk_count = 0
+
     elapsed = time.perf_counter() - t0
-    return losses_log, elapsed
+    return losses_log, elapsed, actual_steps
 
 
 def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
     """Full eval-mode pass over the dataset with policy metrics.
 
-    Returns dict: {v_loss, pi_loss, total_loss, top1_agree, top3_agree, kl_div}.
+    All metrics are computed incrementally on GPU with torch ops — no numpy
+    concatenation, no per-batch GPU→CPU syncs. Only .item() at the very end.
+
+    Returns dict: {v_loss, pi_loss, total_loss, top1_agree, top3_agree, kl_div,
+                    target_entropy, kl_gap}.
     """
+    nn_wrapper.enable_inference_optimizations()
     nn_wrapper.nnet.eval()
     non_blocking = device.type == 'cuda'
+    use_amp = device.type in ('cuda', 'mps')
     n = all_c.shape[0]
-    v_total = 0.0
-    pi_total = 0.0
-    n_batches = 0
 
-    all_net_pi = []
-    all_tgt_pi = []
+    # Running accumulators (GPU tensors)
+    v_total = torch.zeros(1, device=device)
+    pi_total = torch.zeros(1, device=device)
+    top1_matches = torch.zeros(1, device=device, dtype=torch.long)
+    top3_matches = torch.zeros(1, device=device, dtype=torch.long)
+    kl_sum = torch.zeros(1, device=device)
+    entropy_sum = torch.zeros(1, device=device)
+    n_total = 0
+    n_batches = 0
+    eps = 1e-10
 
     with torch.no_grad():
         for start in range(0, n, batch_size):
@@ -437,30 +491,56 @@ def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
             c = all_c[start:end].to(device, non_blocking=non_blocking)
             v = all_v[start:end].to(device, non_blocking=non_blocking)
             pi = all_pi[start:end].to(device, non_blocking=non_blocking)
+            bs = end - start
 
-            out_v, out_pi = nn_wrapper.nnet(c)
-            v_total += nn_wrapper.loss_v(v, out_v).item()
-            pi_total += nn_wrapper.loss_pi(pi, out_pi).item()
+            if use_amp:
+                with torch.amp.autocast(device.type, dtype=torch.float16):
+                    out_v, out_pi = nn_wrapper.nnet(c)
+                out_v = out_v.float()
+                out_pi = out_pi.float()
+            else:
+                out_v, out_pi = nn_wrapper.nnet(c)
+
+            v_total += nn_wrapper.loss_v(v, out_v)
+            pi_total += nn_wrapper.loss_pi(pi, out_pi)
             n_batches += 1
 
-            all_net_pi.append(torch.exp(out_pi).cpu().numpy())
-            all_tgt_pi.append(pi.cpu().numpy())
+            # net_prob = exp(log_softmax output)
+            net_prob = torch.exp(out_pi)
 
-    v_loss = v_total / n_batches
-    pi_loss = pi_total / n_batches
+            # Top-1 agreement
+            top1_matches += (out_pi.argmax(1) == pi.argmax(1)).sum()
 
-    net_pi = np.concatenate(all_net_pi, axis=0)
-    tgt_pi = np.concatenate(all_tgt_pi, axis=0)
+            # Top-3 agreement: count overlap between top-3 sets
+            _, net_top3 = torch.topk(out_pi, 3, dim=1)  # (bs, 3)
+            _, tgt_top3 = torch.topk(pi, 3, dim=1)       # (bs, 3)
+            # (bs, 3, 1) == (bs, 1, 3) -> (bs, 3, 3) -> any over last -> (bs, 3)
+            matches = (net_top3.unsqueeze(2) == tgt_top3.unsqueeze(1)).any(dim=2)
+            top3_matches += matches.sum()
 
-    target_entropy = batch_policy_entropy(tgt_pi)
+            # KL(target || network), masked where target > 0
+            mask = pi > 0
+            kl_sum += (pi[mask] * torch.log(pi[mask] / (net_prob[mask] + eps))).sum()
+
+            # Target entropy H(pi), masked where pi > 0
+            entropy_sum += (-pi[mask] * torch.log(pi[mask])).sum()
+
+            n_total += bs
+
+    v_loss = (v_total / n_batches).item()
+    pi_loss = (pi_total / n_batches).item()
+    top1 = top1_matches.item() / n_total
+    top3 = top3_matches.item() / (n_total * 3)
+    kl = kl_sum.item() / n_total
+    target_entropy = entropy_sum.item() / n_total
 
     return {
         "v_loss": v_loss,
         "pi_loss": pi_loss,
         "total_loss": v_loss + pi_loss,
-        "top1_agree": batch_top1_agreement(net_pi, tgt_pi),
-        "top3_agree": batch_top_k_agreement(net_pi, tgt_pi, 3),
-        "kl_div": batch_kl_divergence(tgt_pi, net_pi),
+        "top1_agree": top1,
+        "top3_agree": top3,
+        "kl_div": kl,
         "target_entropy": target_entropy,
         "kl_gap": pi_loss - target_entropy,
     }
@@ -887,6 +967,7 @@ def main():
     parser.add_argument("--max-samples", type=int, default=200_000, help="Max samples to load (default: 200000)")
     parser.add_argument("--log-interval", type=int, default=100, help="Log loss every N steps (default: 100)")
     parser.add_argument("--no-charts", action="store_true", help="Disable chart generation")
+    parser.add_argument("--no-early-stop", action="store_true", help="Disable early stopping on plateau")
     args = parser.parse_args()
 
     if not os.path.isdir(args.source_dir):
@@ -965,9 +1046,10 @@ def main():
             if device.type == 'cuda':
                 torch.cuda.reset_peak_memory_stats()
             nn_train = NNWrapper(Game, nn_args)
-            losses_log, elapsed = train_config(
+            losses_log, elapsed, actual_steps = train_config(
                 nn_train, train_c, train_v, train_pi, batch_indices,
-                args.lr, args.steps, args.log_interval, device
+                args.lr, args.steps, args.log_interval, device,
+                early_stop=not args.no_early_stop,
             )
             mem_mb = 0
             if device.type == 'cuda':
@@ -986,7 +1068,7 @@ def main():
                 label=label, params=params, mem_mb=mem_mb, infer_ms=infer_ms,
                 v_loss=metrics['v_loss'], pi_loss=metrics['pi_loss'],
                 total_loss=metrics['total_loss'],
-                steps=args.steps, time_min=time_min, losses_log=losses_log,
+                steps=actual_steps, time_min=time_min, losses_log=losses_log,
                 top1_agree=metrics['top1_agree'], top3_agree=metrics['top3_agree'],
                 kl_div=metrics['kl_div'],
                 target_entropy=metrics['target_entropy'], kl_gap=metrics['kl_gap'],

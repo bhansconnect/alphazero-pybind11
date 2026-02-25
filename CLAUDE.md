@@ -21,11 +21,8 @@ NINJA=$(pwd)/.venv/bin/ninja uv pip install --python .venv/bin/python --no-build
 ## Build Commands
 
 ```bash
-# Initial setup
-uv run meson setup build --buildtype release
-
-# Build and test C++
-uv run ninja -C build test
+# Build and test C++ (build/cp311 is created by the editable install above)
+uv run ninja -C build/cp311 test
 
 # Rebuild Python package after C++ changes
 NINJA=$(pwd)/.venv/bin/ninja uv pip install --python .venv/bin/python --no-build-isolation -e .
@@ -62,13 +59,13 @@ NINJA=$(pwd)/.venv/bin/ninja uv pip install --python .venv/bin/python --no-build
    - Create library target
    - Add to `link_with` in `extension_module`
 3. Export in `src/py_wrapper.cc`
-4. Rebuild: `uv run ninja -C build`
+4. Rebuild: `uv run ninja -C build/cp311`
 
 ## Testing
 
 ```bash
 # C++ tests
-uv run ninja -C build test
+uv run ninja -C build/cp311 test
 
 # Python unit tests (fast)
 uv run python -m pytest src/test_config.py src/test_game_ui.py src/test_mcts_analysis.py -v
@@ -96,10 +93,10 @@ The codebase includes optional Tracy profiler integration for performance analys
 
 ```bash
 # Reconfigure with Tracy enabled
-uv run meson setup build -Dtracy_enabled=true --buildtype=release --reconfigure
+uv run meson setup build/cp311 -Dtracy_enabled=true --buildtype=release --reconfigure
 
 # Build
-uv run ninja -C build
+uv run ninja -C build/cp311
 
 # Reinstall Python package
 NINJA=$(pwd)/.venv/bin/ninja uv pip install --python .venv/bin/python --no-build-isolation -e .

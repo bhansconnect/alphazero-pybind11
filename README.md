@@ -34,11 +34,8 @@ That's it. `uv sync` automatically downloads Python 3.11 and installs all depend
 ### Build the C++ Tests
 
 ```bash
-# Setup meson (one time)
-uv run meson setup build --buildtype release
-
-# Build and run C++ tests
-uv run ninja -C build test
+# Build and run C++ tests (build/cp311 is created by the editable install above)
+uv run ninja -C build/cp311 test
 ```
 
 ## How to Use
@@ -76,7 +73,7 @@ uv run python src/play.py
 uv run python test_all.py
 
 # C++ tests only
-uv run ninja -C build test
+uv run ninja -C build/cp311 test
 
 # Python unit tests only
 uv run python -m pytest src/test_config.py src/test_game_ui.py src/test_mcts_analysis.py src/test_history.py -v

@@ -14,7 +14,7 @@ import itertools
 import math
 import os
 import re
-import readline  # noqa: F401 - Enable line editing in input()
+import readline
 import sys
 import time
 from dataclasses import dataclass, field
@@ -331,6 +331,9 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
                  lr, log_interval, device, label, early_stop=True):
     """Train a single config by streaming through file triples.
 
+    Uses bootstrap-style LR schedule: constant LR with patience-based drops,
+    then early stop after final drop plateaus.
+
     Returns (losses_log, elapsed, actual_steps).
     """
     target_steps = int(epochs * n_samples / batch_size)
@@ -342,24 +345,30 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
     optimizer = torch.optim.SGD(
         nn_wrapper.nnet.parameters(), lr=lr, momentum=0.9, weight_decay=1e-3
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=target_steps, eta_min=0)
 
     non_blocking = device.type == 'cuda'
     losses_log = []  # (step, v_loss, pi_loss, total)
     v_sum = 0.0
     pi_sum = 0.0
 
-    # Early stopping via EMA plateau detection
+    # Bootstrap-style LR patience + early stopping
+    lr_drop_factor = 0.3
+    lr_max_drops = 3
+    lr_patience = 4
     convergence_threshold = 0.005
-    convergence_patience = 4
-    min_steps = target_steps // 4
-    ema_beta = 0.75
+    convergence_patience = 5
+    eval_interval = min(log_interval, max(target_steps, 1))
+    ema_beta = 1 - 1 / max(lr_patience, 1)
     ema_loss = None
     best_ema_loss = None
-    patience_counter = 0
+    lr_patience_counter = 0
+    convergence_patience_counter = 0
+    lr_drops = 0
+    final_lr_dropped = False
     chunk_v = 0.0
     chunk_pi = 0.0
     chunk_count = 0
+    current_lr = lr
 
     actual_steps = target_steps
     pbar = tqdm_module.tqdm(total=target_steps, desc=f"  {label}", leave=False)
@@ -379,7 +388,6 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
         loss = l_v + l_pi
         loss.backward()
         optimizer.step()
-        scheduler.step()
 
         v_val = l_v.item()
         pi_val = l_pi.item()
@@ -391,40 +399,67 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
 
         step_num = step_i + 1
         pbar.update()
+        pbar.set_postfix(
+            loss=f"{(chunk_v + chunk_pi) / chunk_count:.4f}",
+            ema=f"{ema_loss:.4f}" if ema_loss is not None else "—",
+            lr=f"{current_lr:.5f}",
+        )
 
         if step_num % log_interval == 0 or step_num == target_steps:
             losses_log.append((step_num, v_sum / step_num, pi_sum / step_num, (v_sum + pi_sum) / step_num))
 
-            # Early stopping check at log_interval boundaries
-            if early_stop and step_num >= min_steps and step_num % log_interval == 0:
-                chunk_avg = (chunk_v + chunk_pi) / chunk_count
+        # LR / early stopping check at eval_interval boundaries
+        if early_stop and chunk_count >= eval_interval:
+            chunk_avg = (chunk_v + chunk_pi) / chunk_count
+            chunk_v = 0.0
+            chunk_pi = 0.0
+            chunk_count = 0
 
-                if ema_loss is None:
-                    ema_loss = chunk_avg
+            if ema_loss is None:
+                ema_loss = chunk_avg
+            else:
+                ema_loss = ema_beta * ema_loss + (1 - ema_beta) * chunk_avg
+
+            if best_ema_loss is None:
+                best_ema_loss = ema_loss
+                continue
+
+            rel_improvement = (best_ema_loss - ema_loss) / (best_ema_loss + 1e-8)
+            plateaued = rel_improvement < convergence_threshold
+
+            if final_lr_dropped:
+                if plateaued:
+                    convergence_patience_counter += 1
                 else:
-                    ema_loss = ema_beta * ema_loss + (1 - ema_beta) * chunk_avg
-
-                if best_ema_loss is None:
+                    convergence_patience_counter = 0
                     best_ema_loss = ema_loss
+            else:
+                if plateaued:
+                    lr_patience_counter += 1
                 else:
-                    rel_improvement = (best_ema_loss - ema_loss) / (best_ema_loss + 1e-8)
-                    if rel_improvement < convergence_threshold:
-                        patience_counter += 1
-                    else:
-                        patience_counter = 0
-                        best_ema_loss = ema_loss
+                    lr_patience_counter = 0
+                    best_ema_loss = ema_loss
 
-                    if patience_counter >= convergence_patience:
-                        pbar.write(f"  Early stop at step {step_num}/{target_steps} "
-                                   f"(ema_loss={ema_loss:.4f})")
-                        actual_steps = step_num
-                        break
+            # LR drop
+            if lr_patience_counter >= lr_patience and lr_drops < lr_max_drops:
+                current_lr *= lr_drop_factor
+                lr_drops += 1
+                for pg in optimizer.param_groups:
+                    pg['lr'] = current_lr
+                lr_patience_counter = 0
+                best_ema_loss = ema_loss
+                pbar.write(f"  LR drop #{lr_drops}: lr={current_lr:.6f} "
+                           f"(ema={ema_loss:.4f})")
+                if lr_drops >= lr_max_drops:
+                    final_lr_dropped = True
+                    convergence_patience_counter = 0
 
-            # Reset chunk accumulators
-            if step_num % log_interval == 0:
-                chunk_v = 0.0
-                chunk_pi = 0.0
-                chunk_count = 0
+            # Early stop after final LR drop
+            if final_lr_dropped and convergence_patience_counter >= convergence_patience:
+                pbar.write(f"  Early stop at step {step_num}/{target_steps} "
+                           f"(ema_loss={ema_loss:.4f}, lr={current_lr:.6f})")
+                actual_steps = step_num
+                break
 
     pbar.close()
     elapsed = time.perf_counter() - t0
@@ -621,13 +656,36 @@ def is_pareto_optimal(points):
     return is_optimal
 
 
+_HISTORY_FILE = os.path.expanduser("~/.cache/network_pareto_history")
+
+
+def _setup_readline():
+    """Load persistent readline history for config input."""
+    os.makedirs(os.path.dirname(_HISTORY_FILE), exist_ok=True)
+    try:
+        readline.read_history_file(_HISTORY_FILE)
+    except FileNotFoundError:
+        pass
+    readline.set_history_length(200)
+
+
+def _save_readline():
+    """Save readline history."""
+    try:
+        readline.write_history_file(_HISTORY_FILE)
+    except OSError:
+        pass
+
+
 def collect_configs(config, args):
     """Interactive config input loop. Returns list of (label, NNArgs)."""
     Game = config.Game
 
+    _setup_readline()
+
     print("Config format: {depth}d{channels}c[-k{N}][-hc{N}][-vconv{N}][-pconv{N}][-vfc{N}][-pfc{N}][-cv{F}][-resnet]")
-    print("  Comma-separated values expand as cross-product:")
-    print("    4,6d16,24c          -> 4 configs (2 depths x 2 channels)")
+    print("  Comma-separated configs:       6d32c-vconv1,4d64c-resnet-vconv1")
+    print("  Comma-separated cross-product: 4,6d16,24c -> 4 configs")
     print("    4,6,8d16,24,32c     -> 9 configs")
     print("    4,6d16c-k3,5        -> 4 configs")
     print("  Parenthesized modifiers are optional (with and without):")
@@ -687,6 +745,7 @@ def collect_configs(config, args):
             except Exception as e:
                 print(f"  Error creating network: {e}")
 
+    _save_readline()
     return configs
 
 

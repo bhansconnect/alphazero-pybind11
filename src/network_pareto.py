@@ -11,21 +11,22 @@ Usage:
 
 import argparse
 import itertools
+import math
 import os
-import random
 import re
 import readline  # noqa: F401 - Enable line editing in input()
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 import torch
+import tqdm as tqdm_module
 import numpy as np
+from torch.utils.data import DataLoader
 
 from config import load_config, find_latest_checkpoint
-from game_runner import glob_file_triples, _load_and_select, calc_hist_size
+from game_runner import glob_file_triples, calc_hist_size, StreamingCompressedDataset
 from neural_net import NNArgs, NNWrapper, NNArch, get_device
 
 
@@ -258,78 +259,14 @@ def load_config_only(source_dir):
     return config
 
 
-def _load_iter_range(hist_dir, iter_range, max_samples, num_workers):
-    """Load data from a range of iterations. Returns (c, v, pi) tensors or None if empty."""
-    file_triples = []
-    for i in iter_range:
-        triples = glob_file_triples(hist_dir, f"{i:04d}-*-canonical-*.ptz")
-        if not triples:
-            triples = glob_file_triples(hist_dir, f"{i:04d}-*-canonical-*.pt")
-        file_triples.extend(triples)
+def load_file_triples(source_dir, config=None):
+    """Find all training data file triples from the history window.
 
-    if not file_triples:
-        return None, None, None
-
-    sizes = [size for _, _, _, size in file_triples]
-    total_size = sum(sizes)
-
-    # Pre-select sample indices
-    if total_size <= max_samples:
-        selected_per_file = [list(range(s)) for s in sizes]
-        samples_selected = total_size
-    else:
-        rng = random.Random(42)
-        all_indices = sorted(rng.sample(range(total_size), max_samples))
-        cum_sizes = []
-        cum = 0
-        for s in sizes:
-            cum_sizes.append(cum)
-            cum += s
-        selected_per_file = [[] for _ in range(len(file_triples))]
-        fi = 0
-        for idx_val in all_indices:
-            while fi < len(cum_sizes) - 1 and idx_val >= cum_sizes[fi + 1]:
-                fi += 1
-            selected_per_file[fi].append(idx_val - cum_sizes[fi])
-        samples_selected = max_samples
-
-    # Load files and extract selected indices (parallel)
-    work_items = [
-        (c_path, v_path, pi_path, selected_per_file[i])
-        for i, (c_path, v_path, pi_path, _) in enumerate(file_triples)
-        if selected_per_file[i]
-    ]
-
-    acc_c, acc_v, acc_pi = [], [], []
-    if num_workers <= 1:
-        for item in work_items:
-            c, v, pi = _load_and_select(item)
-            acc_c.append(c); acc_v.append(v); acc_pi.append(pi)
-    else:
-        results = [None] * len(work_items)
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            future_to_idx = {executor.submit(_load_and_select, item): i for i, item in enumerate(work_items)}
-            for future in as_completed(future_to_idx):
-                results[future_to_idx[future]] = future.result()
-        for c, v, pi in results:
-            acc_c.append(c); acc_v.append(v); acc_pi.append(pi)
-
-    all_c = torch.cat(acc_c).float()
-    all_v = torch.cat(acc_v).float()
-    all_pi = torch.cat(acc_pi).float()
-    return all_c, all_v, all_pi
-
-
-def load_data(source_dir, max_samples, num_workers, config=None):
-    """Load training data from an experiment directory.
-
-    Returns (config, train_c, train_v, train_pi).
+    Returns (config, file_triples, n_samples).
     """
     if config is None:
         config = load_config_only(source_dir)
     paths = config.resolve_paths(source_dir)
-
-    # Find latest iteration
     iteration = find_latest_checkpoint(paths["checkpoint"])
     if iteration == 0:
         print(f"Error: no checkpoints found in {paths['checkpoint']}")
@@ -337,33 +274,22 @@ def load_data(source_dir, max_samples, num_workers, config=None):
 
     hist_size = calc_hist_size(config, iteration)
     hist_dir = paths["history"]
-
     window_start = max(0, iteration - hist_size)
-    window_end = iteration  # inclusive
 
-    train_range = range(window_start, window_end + 1)
+    file_triples = []
+    for i in range(window_start, iteration + 1):
+        triples = glob_file_triples(hist_dir, f"{i:04d}-*-canonical-*.ptz")
+        if not triples:
+            triples = glob_file_triples(hist_dir, f"{i:04d}-*-canonical-*.pt")
+        file_triples.extend(triples)
 
-    # Load training data (full window)
-    print(f"Loading training data...")
-    train_c, train_v, train_pi = _load_iter_range(
-        hist_dir, train_range, max_samples, num_workers)
-    if train_c is None:
+    if not file_triples:
         print(f"Error: no training data files found in {source_dir}")
         sys.exit(1)
-    print(f"Train: {train_c.shape[0]:,} samples (iters {train_range.start}-{train_range.stop - 1})")
 
-    return config, train_c, train_v, train_pi
-
-
-def pregenerate_batches(n_samples, batch_size, steps):
-    """Pre-generate batch index tensors with a fixed seed."""
-    rng = torch.Generator()
-    rng.manual_seed(123)
-    indices_list = []
-    for _ in range(steps):
-        idx = torch.randint(0, n_samples, (batch_size,), generator=rng)
-        indices_list.append(idx)
-    return indices_list
+    n_samples = sum(s for _, _, _, s in file_triples)
+    print(f"Window: iters {window_start}-{iteration}, {len(file_triples)} files, {n_samples:,} samples")
+    return config, file_triples, n_samples
 
 
 def benchmark_inference(nn_wrapper, game, batch_size):
@@ -401,14 +327,22 @@ def benchmark_inference(nn_wrapper, game, batch_size):
         return elapsed
 
 
-def train_config(nn_wrapper, all_c, all_v, all_pi, batch_indices, lr, steps,
-                 log_interval, device, early_stop=True):
-    """Train a single config on pre-generated batches. Returns (losses_log, elapsed, actual_steps)."""
+def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
+                 lr, log_interval, device, label, early_stop=True):
+    """Train a single config by streaming through file triples.
+
+    Returns (losses_log, elapsed, actual_steps).
+    """
+    target_steps = int(epochs * n_samples / batch_size)
+    passes = max(1, math.ceil(epochs))
+    dataset = StreamingCompressedDataset(file_triples, batch_size, passes=passes)
+    dl = DataLoader(dataset, batch_size=None, num_workers=0)
+
     nn_wrapper.nnet.train()
     optimizer = torch.optim.SGD(
         nn_wrapper.nnet.parameters(), lr=lr, momentum=0.9, weight_decay=1e-3
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=steps, eta_min=0)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=target_steps, eta_min=0)
 
     non_blocking = device.type == 'cuda'
     losses_log = []  # (step, v_loss, pi_loss, total)
@@ -418,7 +352,7 @@ def train_config(nn_wrapper, all_c, all_v, all_pi, batch_indices, lr, steps,
     # Early stopping via EMA plateau detection
     convergence_threshold = 0.005
     convergence_patience = 4
-    min_steps = steps // 4
+    min_steps = target_steps // 4
     ema_beta = 0.75
     ema_loss = None
     best_ema_loss = None
@@ -427,12 +361,16 @@ def train_config(nn_wrapper, all_c, all_v, all_pi, batch_indices, lr, steps,
     chunk_pi = 0.0
     chunk_count = 0
 
-    actual_steps = steps
+    actual_steps = target_steps
+    pbar = tqdm_module.tqdm(total=target_steps, desc=f"  {label}", leave=False)
     t0 = time.perf_counter()
-    for step_i, idx in enumerate(batch_indices):
-        c_batch = all_c[idx].to(device, non_blocking=non_blocking)
-        v_batch = all_v[idx].to(device, non_blocking=non_blocking)
-        pi_batch = all_pi[idx].to(device, non_blocking=non_blocking)
+    for step_i, (c_batch, v_batch, pi_batch) in enumerate(dl):
+        if step_i >= target_steps:
+            break
+
+        c_batch = c_batch.float().to(device, non_blocking=non_blocking)
+        v_batch = v_batch.float().to(device, non_blocking=non_blocking)
+        pi_batch = pi_batch.float().to(device, non_blocking=non_blocking)
 
         optimizer.zero_grad()
         out_v, out_pi = nn_wrapper.nnet(c_batch)
@@ -452,7 +390,9 @@ def train_config(nn_wrapper, all_c, all_v, all_pi, batch_indices, lr, steps,
         chunk_count += 1
 
         step_num = step_i + 1
-        if step_num % log_interval == 0 or step_num == steps:
+        pbar.update()
+
+        if step_num % log_interval == 0 or step_num == target_steps:
             losses_log.append((step_num, v_sum / step_num, pi_sum / step_num, (v_sum + pi_sum) / step_num))
 
             # Early stopping check at log_interval boundaries
@@ -475,8 +415,8 @@ def train_config(nn_wrapper, all_c, all_v, all_pi, batch_indices, lr, steps,
                         best_ema_loss = ema_loss
 
                     if patience_counter >= convergence_patience:
-                        print(f"  Early stop at step {step_num}/{steps} "
-                              f"(ema_loss={ema_loss:.4f})")
+                        pbar.write(f"  Early stop at step {step_num}/{target_steps} "
+                                   f"(ema_loss={ema_loss:.4f})")
                         actual_steps = step_num
                         break
 
@@ -486,6 +426,7 @@ def train_config(nn_wrapper, all_c, all_v, all_pi, batch_indices, lr, steps,
                 chunk_pi = 0.0
                 chunk_count = 0
 
+    pbar.close()
     elapsed = time.perf_counter() - t0
     return losses_log, elapsed, actual_steps
 
@@ -554,6 +495,89 @@ def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
             kl_sum += (pi[mask] * torch.log(pi[mask] / (net_prob[mask] + eps))).sum()
 
             # Target entropy H(pi), masked where pi > 0
+            entropy_sum += (-pi[mask] * torch.log(pi[mask])).sum()
+
+            n_total += bs
+
+    v_loss = (v_total / n_batches).item()
+    v_loss_raw = v_loss / nn_wrapper.cv
+    pi_loss = (pi_total / n_batches).item()
+    top1 = top1_matches.item() / n_total
+    top3 = top3_matches.item() / (n_total * 3)
+    kl = kl_sum.item() / n_total
+    target_entropy = entropy_sum.item() / n_total
+
+    return {
+        "v_loss": v_loss,
+        "v_loss_raw": v_loss_raw,
+        "pi_loss": pi_loss,
+        "total_loss": v_loss + pi_loss,
+        "top1_agree": top1,
+        "top3_agree": top3,
+        "kl_div": kl,
+        "target_entropy": target_entropy,
+        "kl_gap": pi_loss - target_entropy,
+    }
+
+
+def eval_loss_streaming(nn_wrapper, file_triples, batch_size, device):
+    """Full eval-mode pass over all data by streaming from file triples.
+
+    Same metrics as eval_loss() but streams one file at a time to avoid
+    loading the full dataset into memory.
+
+    Returns dict: {v_loss, pi_loss, total_loss, top1_agree, top3_agree, kl_div,
+                    target_entropy, kl_gap}.
+    """
+    nn_wrapper.enable_inference_optimizations()
+    nn_wrapper.nnet.eval()
+    non_blocking = device.type == 'cuda'
+    use_amp = device.type in ('cuda', 'mps')
+
+    dataset = StreamingCompressedDataset(file_triples, batch_size, passes=1)
+    dl = DataLoader(dataset, batch_size=None, num_workers=0)
+
+    # Running accumulators (GPU tensors)
+    v_total = torch.zeros(1, device=device)
+    pi_total = torch.zeros(1, device=device)
+    top1_matches = torch.zeros(1, device=device, dtype=torch.long)
+    top3_matches = torch.zeros(1, device=device, dtype=torch.long)
+    kl_sum = torch.zeros(1, device=device)
+    entropy_sum = torch.zeros(1, device=device)
+    n_total = 0
+    n_batches = 0
+    eps = 1e-10
+
+    with torch.no_grad():
+        for c, v, pi in dl:
+            c = c.float().to(device, non_blocking=non_blocking)
+            v = v.float().to(device, non_blocking=non_blocking)
+            pi = pi.float().to(device, non_blocking=non_blocking)
+            bs = c.shape[0]
+
+            if use_amp:
+                with torch.amp.autocast(device.type, dtype=torch.float16):
+                    out_v, out_pi = nn_wrapper.nnet(c)
+                out_v = out_v.float()
+                out_pi = out_pi.float()
+            else:
+                out_v, out_pi = nn_wrapper.nnet(c)
+
+            v_total += nn_wrapper.loss_v(v, out_v)
+            pi_total += nn_wrapper.loss_pi(pi, out_pi)
+            n_batches += 1
+
+            net_prob = torch.exp(out_pi)
+
+            top1_matches += (out_pi.argmax(1) == pi.argmax(1)).sum()
+
+            _, net_top3 = torch.topk(out_pi, 3, dim=1)
+            _, tgt_top3 = torch.topk(pi, 3, dim=1)
+            matches = (net_top3.unsqueeze(2) == tgt_top3.unsqueeze(1)).any(dim=2)
+            top3_matches += matches.sum()
+
+            mask = pi > 0
+            kl_sum += (pi[mask] * torch.log(pi[mask] / (net_prob[mask] + eps))).sum()
             entropy_sum += (-pi[mask] * torch.log(pi[mask])).sum()
 
             n_total += bs
@@ -1002,9 +1026,8 @@ def main():
     parser = argparse.ArgumentParser(description="Network capacity fitting benchmark")
     parser.add_argument("source_dir", help="Experiment directory with training data")
     parser.add_argument("--batch-size", type=int, default=1024, help="Batch size (default: 1024)")
-    parser.add_argument("--steps", type=int, default=2000, help="Training steps per config (default: 2000)")
+    parser.add_argument("--epochs", type=float, default=1.0, help="Training epochs over the window (default: 1.0)")
     parser.add_argument("--lr", type=float, default=0.01, help="Initial learning rate (default: 0.01)")
-    parser.add_argument("--max-samples", type=int, default=200_000, help="Max samples to load (default: 200000)")
     parser.add_argument("--log-interval", type=int, default=100, help="Log loss every N steps (default: 100)")
     parser.add_argument("--no-charts", action="store_true", help="Disable chart generation")
     parser.add_argument("--no-early-stop", action="store_true", help="Disable early stopping on plateau")
@@ -1047,32 +1070,20 @@ def main():
         infer_results[label] = (params, infer_ms)
         print(f"  {label:<22} {params:>10,} params  {infer_ms:>7.1f} ms")
 
-    # 3b. Interactive selection with time estimates
+    # 3b. Load file triples (lightweight — just discovers files, no loading)
+    print()
+    config, file_triples, n_samples = load_file_triples(args.source_dir, config=config)
+    target_steps = int(args.epochs * n_samples / args.batch_size)
+    print(f"Training: {args.epochs} epochs = {target_steps} steps (bs={args.batch_size})")
+
+    # 3c. Interactive selection with time estimates
     configs, infer_results = select_configs_for_training(
-        configs, infer_results, args.steps)
+        configs, infer_results, target_steps)
     if not configs:
         print("No configs selected. Exiting.")
         sys.exit(0)
 
-    # 4. Load training data
-    print()
-    num_workers = os.cpu_count() or 4
-    config, train_c, train_v, train_pi = load_data(
-        args.source_dir, args.max_samples, num_workers, config=config)
-    n_train = train_c.shape[0]
-    print(f"Train dataset: {n_train:,} samples")
-
-    # 5. Pre-generate batch indices
-    print(f"Pre-generating {args.steps} batches (bs={args.batch_size})...")
-    batch_indices = pregenerate_batches(n_train, args.batch_size, args.steps)
-
-    # Move data to pinned memory for faster transfers
-    if device.type == 'cuda':
-        train_c = train_c.pin_memory()
-        train_v = train_v.pin_memory()
-        train_pi = train_pi.pin_memory()
-
-    # 6. Train + eval each config (with OOM recovery)
+    # 4. Train + eval each config (with OOM recovery)
     results: List[BenchResult] = []
 
     for label, nn_args in configs:
@@ -1087,8 +1098,8 @@ def main():
                 torch.cuda.reset_peak_memory_stats()
             nn_train = NNWrapper(Game, nn_args)
             losses_log, elapsed, actual_steps = train_config(
-                nn_train, train_c, train_v, train_pi, batch_indices,
-                args.lr, args.steps, args.log_interval, device,
+                nn_train, file_triples, n_samples, args.epochs, args.batch_size,
+                args.lr, args.log_interval, device, label,
                 early_stop=not args.no_early_stop,
             )
             mem_mb = 0
@@ -1097,8 +1108,8 @@ def main():
             time_min = elapsed / 60
             print(f"  Time: {time_min:.1f}m  Peak memory: {mem_mb:.0f} MB")
 
-            print("  Final eval + metrics (train)...")
-            metrics = eval_loss(nn_train, train_c, train_v, train_pi, args.batch_size, device)
+            print("  Final eval + metrics...")
+            metrics = eval_loss_streaming(nn_train, file_triples, args.batch_size, device)
             if nn_args.cv != 1.0:
                 v_str = f"V Loss: {metrics['v_loss_raw']:.4f} (cv{nn_args.cv:g}: {metrics['v_loss']:.4f})"
             else:

@@ -656,7 +656,16 @@ def collect_configs(config, args):
             break
         if not line or line.lower() == 'go':
             break
-        expanded = expand_config_string(line)
+        # Detect comma-separated list of complete configs vs cross-product syntax.
+        # If splitting on comma yields multiple parts that each start with NdNc,
+        # treat as a list of individual configs. Otherwise use cross-product expansion.
+        parts = [p.strip() for p in line.split(',')]
+        if len(parts) > 1 and all(re.match(r'^\d+d\d+c', p) for p in parts):
+            expanded = []
+            for p in parts:
+                expanded.extend(expand_config_string(p))
+        else:
+            expanded = expand_config_string(line)
         for single in expanded:
             try:
                 label, kwargs = parse_config_string(single)

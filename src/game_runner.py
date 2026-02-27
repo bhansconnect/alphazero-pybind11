@@ -1679,30 +1679,31 @@ def _default_lr_state(config):
 
 
 def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, phase_name):
-    """Run one epoch of bootstrap training with step-level LR patience and early stopping.
+    """Run one epoch of bootstrap training with continuous LR patience and early stopping.
+
+    Compares EMA now vs lookback_steps ago every step. After sustained plateau,
+    drops LR (up to max_drops times), then early stops after final drop plateaus.
 
     Returns (steps_trained, early_stopped).
     """
     bbs = config.train_batch_size
     total_steps = sum(int(math.ceil(s / bbs)) for _, _, _, s in files)
-    eval_interval = min(config.bootstrap_eval_interval, max(total_steps, 1))
+    lookback_steps = min(config.bootstrap_eval_interval, max(total_steps, 1))
 
     lr = config.bootstrap_lr
     nn.set_lr(lr)
     lr_drops = 0
-    lr_patience_counter = 0
-    convergence_patience_counter = 0
     final_lr_dropped = False
-    ema_beta = 1 - 1 / max(config.bootstrap_lr_patience, 1)
+    ema_beta = 0.99
     ema_loss = None
-    best_ema_loss = None
+    ema_history = []
+    plateau_steps = 0
+    lr_patience = lookback_steps * config.bootstrap_lr_patience
+    convergence_patience = lookback_steps * config.bootstrap_convergence_patience
 
     streaming_ds = StreamingCompressedDataset(files, bbs, passes=1)
     dl = DataLoader(streaming_ds, batch_size=None, num_workers=0)
 
-    chunk_v_loss = 0.0
-    chunk_pi_loss = 0.0
-    chunk_steps = 0
     current_step = 0
     early_stopped = False
 
@@ -1725,75 +1726,52 @@ def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, 
 
         v_val = l_v.item()
         pi_val = l_pi.item()
-        chunk_v_loss += v_val
-        chunk_pi_loss += pi_val
-        chunk_steps += 1
         current_step += 1
+        step_loss = v_val + pi_val
+        ema_loss = step_loss if ema_loss is None else ema_beta * ema_loss + (1 - ema_beta) * step_loss
 
         run.track(v_val, name="loss", epoch=source_n,
                   step=total_train_steps + current_step, context={"type": "value"})
         run.track(pi_val, name="loss", epoch=source_n,
                   step=total_train_steps + current_step, context={"type": "policy"})
-        run.track(v_val + pi_val, name="loss", epoch=source_n,
+        run.track(step_loss, name="loss", epoch=source_n,
                   step=total_train_steps + current_step, context={"type": "total"})
 
         pbar.update()
         pbar.set_postfix(
-            loss=f"{(chunk_v_loss + chunk_pi_loss) / chunk_steps:.4f}",
-            ema=f"{ema_loss:.4f}" if ema_loss is not None else "—",
-            pat=f"{lr_patience_counter}/{config.bootstrap_lr_patience}" if not final_lr_dropped
-                else f"{convergence_patience_counter}/{config.bootstrap_convergence_patience}",
+            ema=f"{ema_loss:.4f}",
+            plat=f"{plateau_steps}",
             lr=f"{lr:.6f}",
         )
 
-        # Evaluate at interval boundaries or end of epoch
-        if chunk_steps >= eval_interval or current_step == total_steps:
-            avg_loss = (chunk_v_loss + chunk_pi_loss) / chunk_steps
-            chunk_v_loss = 0.0
-            chunk_pi_loss = 0.0
-            chunk_steps = 0
+        # Continuous plateau detection: compare EMA now vs lookback_steps ago
+        ema_history.append(ema_loss)
+        if len(ema_history) <= lookback_steps:
+            continue
 
-            if ema_loss is None:
-                ema_loss = avg_loss
-            else:
-                ema_loss = ema_beta * ema_loss + (1 - ema_beta) * avg_loss
+        past_ema = ema_history[-lookback_steps - 1]
+        rel_improvement = (past_ema - ema_loss) / (past_ema + 1e-8)
+        if rel_improvement < config.bootstrap_convergence_threshold:
+            plateau_steps += 1
+        else:
+            plateau_steps = 0
 
-            if best_ema_loss is None:
-                best_ema_loss = ema_loss
-                continue
+        patience = convergence_patience if final_lr_dropped else lr_patience
 
-            rel_improvement = (best_ema_loss - ema_loss) / (best_ema_loss + 1e-8)
-            plateaued = rel_improvement < config.bootstrap_convergence_threshold
-
-            if final_lr_dropped:
-                if plateaued:
-                    convergence_patience_counter += 1
-                else:
-                    convergence_patience_counter = 0
-                    best_ema_loss = ema_loss
-            else:
-                if plateaued:
-                    lr_patience_counter += 1
-                else:
-                    lr_patience_counter = 0
-                    best_ema_loss = ema_loss
-
-            # LR drop
-            if lr_patience_counter >= config.bootstrap_lr_patience and lr_drops < config.bootstrap_lr_max_drops:
+        if plateau_steps >= patience:
+            if not final_lr_dropped and lr_drops < config.bootstrap_lr_max_drops:
+                # LR drop
                 lr *= config.bootstrap_lr_drop_factor
                 lr_drops += 1
                 nn.set_lr(lr)
-                lr_patience_counter = 0
-                best_ema_loss = ema_loss  # Reset baseline for new LR
-                pbar.write(f"  LR drop #{lr_drops}: lr={lr:.6f} (loss={avg_loss:.4f}, ema={ema_loss:.4f})")
+                plateau_steps = 0
+                pbar.write(f"  LR drop #{lr_drops}: lr={lr:.6f} (ema={ema_loss:.4f})")
                 if lr_drops >= config.bootstrap_lr_max_drops:
                     final_lr_dropped = True
-                    convergence_patience_counter = 0
-
-            # Early stop
-            if final_lr_dropped and convergence_patience_counter >= config.bootstrap_convergence_patience:
+            else:
+                # Early stop
                 pbar.write(f"  {phase_name} converged at step {current_step}/{total_steps} "
-                           f"(loss={avg_loss:.4f}, lr={lr:.6f})")
+                           f"(ema={ema_loss:.4f}, lr={lr:.6f})")
                 early_stopped = True
                 break
 

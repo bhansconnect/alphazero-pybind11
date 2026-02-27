@@ -1768,6 +1768,9 @@ def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, 
             if final_lr_dropped:
                 if plateaued:
                     convergence_patience_counter += 1
+                else:
+                    convergence_patience_counter = 0
+                    best_ema_loss = ema_loss
             else:
                 if plateaued:
                     lr_patience_counter += 1
@@ -1781,6 +1784,7 @@ def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, 
                 lr_drops += 1
                 nn.set_lr(lr)
                 lr_patience_counter = 0
+                best_ema_loss = ema_loss  # Reset baseline for new LR
                 pbar.write(f"  LR drop #{lr_drops}: lr={lr:.6f} (loss={avg_loss:.4f}, ema={ema_loss:.4f})")
                 if lr_drops >= config.bootstrap_lr_max_drops:
                     final_lr_dropped = True
@@ -1917,6 +1921,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         current_best = 0
         total_train_steps = 0
         lr_state = _default_lr_state(config)
+        if bootstrap_from:
+            lr_state['last_best_iter'] = source_n
 
         # Handle bootstrap from existing experiment
         if bootstrap_from:

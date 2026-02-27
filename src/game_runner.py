@@ -109,6 +109,15 @@ def _load_triple_float(triple):
     return (load_compressed(c_path).float(), load_compressed(v_path).float(), load_compressed(pi_path).float())
 
 
+def _load_and_shuffle(c_path, v_path, pi_path, size):
+    """Load a file triple and randomly permute samples. Used for streaming dataset prefetch."""
+    c = _load_hist_tensor(c_path)
+    v = _load_hist_tensor(v_path)
+    pi = _load_hist_tensor(pi_path)
+    perm = torch.randperm(size)
+    return c[perm], v[perm], pi[perm]
+
+
 def _parallel_load_triples(triples, num_workers, desc="Loading Data"):
     """Load file triples in parallel, preserving input order.
 
@@ -1368,19 +1377,23 @@ class StreamingCompressedDataset(IterableDataset):
         for _ in range(self.passes):
             file_order = list(range(len(self.file_triples)))
             random.shuffle(file_order)
-            for fi in file_order:
-                c_path, v_path, pi_path, size = self.file_triples[fi]
-                c = _load_hist_tensor(c_path)
-                v = _load_hist_tensor(v_path)
-                pi = _load_hist_tensor(pi_path)
-                perm = torch.randperm(size)
-                c = c[perm]
-                v = v[perm]
-                pi = pi[perm]
-                for start in range(0, size, self.batch_size):
-                    end = min(start + self.batch_size, size)
-                    yield c[start:end], v[start:end], pi[start:end]
-                del c, v, pi
+            if not file_order:
+                return
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                # Submit first file load immediately
+                ft = self.file_triples[file_order[0]]
+                future = executor.submit(_load_and_shuffle, *ft)
+                for i, fi in enumerate(file_order):
+                    c, v, pi = future.result()
+                    # Prefetch next file while we yield batches from current
+                    if i + 1 < len(file_order):
+                        ft = self.file_triples[file_order[i + 1]]
+                        future = executor.submit(_load_and_shuffle, *ft)
+                    size = self.file_triples[fi][3]
+                    for start in range(0, size, self.batch_size):
+                        end = min(start + self.batch_size, size)
+                        yield c[start:end], v[start:end], pi[start:end]
+                    del c, v, pi
 
 
 @tracy_zone
@@ -1765,7 +1778,7 @@ def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, 
                 lr_drops += 1
                 nn.set_lr(lr)
                 plateau_steps = 0
-                pbar.write(f"  LR drop #{lr_drops}: lr={lr:.6f} (ema={ema_loss:.4f})")
+                pbar.write(f"  LR drop #{lr_drops} at step {current_step}: lr={lr:.6f} (ema={ema_loss:.4f})")
                 if lr_drops >= config.bootstrap_lr_max_drops:
                     final_lr_dropped = True
             else:

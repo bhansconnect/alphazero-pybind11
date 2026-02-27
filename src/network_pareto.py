@@ -424,7 +424,7 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
                 for pg in optimizer.param_groups:
                     pg['lr'] = current_lr
                 plateau_steps = 0
-                pbar.write(f"  LR drop #{lr_drops}: lr={current_lr:.6f} "
+                pbar.write(f"  LR drop #{lr_drops} at step {step_num}: lr={current_lr:.6f} "
                            f"(ema={ema_loss:.4f})")
                 if lr_drops >= lr_max_drops:
                     final_lr_dropped = True

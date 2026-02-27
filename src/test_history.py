@@ -1157,17 +1157,16 @@ def test_bootstrap_retrain_with_reservoir(tmp_path):
 # ============================================================
 
 
-def test_bootstrap_train_phase_early_stop(tmp_path):
-    """_bootstrap_train_phase returns positive steps with aggressive early stopping."""
-    cs = Game.CANONICAL_SHAPE()
-
-    # Create 2 small files
+def _make_bootstrap_triples(tmp_path, n_files, samples_per_file, game=Game):
+    """Helper to create test file triples for bootstrap tests."""
+    os.makedirs(tmp_path, exist_ok=True)
+    cs = game.CANONICAL_SHAPE()
     file_triples = []
-    for i in range(2):
-        n = 100
+    for i in range(n_files):
+        n = samples_per_file
         c = torch.randn(n, cs[0], cs[1], cs[2])
-        v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
-        pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+        v = torch.softmax(torch.randn(n, game.NUM_PLAYERS() + 1), dim=1)
+        pi = torch.softmax(torch.randn(n, game.NUM_MOVES()), dim=1)
         c_path = str(tmp_path / f"{i:04d}-0000-canonical-{n}.ptz")
         v_path = str(tmp_path / f"{i:04d}-0000-v-{n}.ptz")
         pi_path = str(tmp_path / f"{i:04d}-0000-pi-{n}.ptz")
@@ -1175,22 +1174,34 @@ def test_bootstrap_train_phase_early_stop(tmp_path):
         save_compressed(v, v_path)
         save_compressed(pi, pi_path)
         file_triples.append((c_path, v_path, pi_path, n))
+    return file_triples
+
+
+class DummyRun:
+    def track(*a, **kw):
+        pass
+
+
+def test_bootstrap_train_phase_early_stop(tmp_path):
+    """_bootstrap_train_phase early stops on random data with aggressive settings."""
+    file_triples = _make_bootstrap_triples(tmp_path, n_files=4, samples_per_file=200)
 
     config = TrainConfig(
         game="connect4",
-        bootstrap_eval_interval=1,
-        bootstrap_lr_patience=1,
-        bootstrap_convergence_patience=1,
+        train_batch_size=32,
+        bootstrap_eval_interval=5,
+        bootstrap_lr_patience=2,
+        bootstrap_convergence_patience=2,
         bootstrap_lr_max_drops=1,
     )
 
     nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
     nn = NNWrapper(Game, nnargs)
 
-    class DummyRun:
-        def track(*a, **kw):
-            pass
-
+    # total_steps = ceil(800/32) = 25 steps
+    # lookback=5, lr_patience=5*2=10, convergence_patience=5*2=10
+    # After 5 warmup + 10 plateau: LR drop at step ~15
+    # After 10 more plateau: early stop at step ~25 (or data exhausted)
     steps, early_stopped = _bootstrap_train_phase(
         nn, file_triples, config, DummyRun(), source_n=0,
         total_train_steps=0, phase_name="test",
@@ -1198,91 +1209,113 @@ def test_bootstrap_train_phase_early_stop(tmp_path):
     assert steps > 0
 
 
-def test_ema_smoothing_prevents_oscillation_from_resetting_patience():
-    """EMA smoothing detects plateau in oscillating losses but not in genuinely improving ones."""
-    patience = 4
+def test_lookback_plateau_detection_oscillating():
+    """Lookback plateau detection triggers on oscillating losses."""
+    lookback = 10
     threshold = 0.005
-    beta = 1 - 1 / max(patience, 1)  # 0.75
+    beta = 0.99
 
-    # --- Oscillating losses (flat around 1.0, noisy) should trigger patience ---
-    oscillating = [1.0, 0.98, 1.01, 0.97, 1.02, 0.96, 1.01, 0.97, 1.02, 0.98, 1.01, 0.99]
+    # Oscillating losses around 1.0 — no real improvement over any lookback window
+    oscillating = [1.0 + 0.02 * ((-1) ** i) for i in range(100)]
     ema = None
-    best_ema = None
-    lr_patience_counter = 0
+    ema_history = []
+    plateau_steps = 0
 
     for loss in oscillating:
-        if ema is None:
-            ema = loss
-        else:
-            ema = beta * ema + (1 - beta) * loss
-
-        if best_ema is None:
-            best_ema = ema
+        ema = loss if ema is None else beta * ema + (1 - beta) * loss
+        ema_history.append(ema)
+        if len(ema_history) <= lookback:
             continue
-
-        rel_improvement = (best_ema - ema) / (best_ema + 1e-8)
-        plateaued = rel_improvement < threshold
-
-        if plateaued:
-            lr_patience_counter += 1
+        past_ema = ema_history[-lookback - 1]
+        rel_improvement = (past_ema - ema) / (past_ema + 1e-8)
+        if rel_improvement < threshold:
+            plateau_steps += 1
         else:
-            lr_patience_counter = 0
-            best_ema = ema
+            plateau_steps = 0
 
-    assert lr_patience_counter >= patience, (
-        f"Oscillating losses should trigger patience, but counter={lr_patience_counter}"
+    assert plateau_steps >= 40, (
+        f"Oscillating losses should sustain plateau, but plateau_steps={plateau_steps}"
     )
 
-    # --- Genuinely improving losses should NOT accumulate patience ---
-    improving = [1.0, 0.97, 0.94, 0.91, 0.88, 0.85, 0.82, 0.79, 0.76, 0.73]
+
+def test_lookback_plateau_detection_improving():
+    """Lookback plateau detection does NOT trigger on genuinely improving losses."""
+    lookback = 10
+    threshold = 0.005
+    beta = 0.99
+
+    # Steadily improving: 3% drop every step
+    improving = [1.0 * (0.97 ** i) for i in range(100)]
     ema = None
-    best_ema = None
-    lr_patience_counter = 0
+    ema_history = []
+    plateau_steps = 0
+    max_plateau = 0
 
     for loss in improving:
-        if ema is None:
-            ema = loss
-        else:
-            ema = beta * ema + (1 - beta) * loss
-
-        if best_ema is None:
-            best_ema = ema
+        ema = loss if ema is None else beta * ema + (1 - beta) * loss
+        ema_history.append(ema)
+        if len(ema_history) <= lookback:
             continue
-
-        rel_improvement = (best_ema - ema) / (best_ema + 1e-8)
-        plateaued = rel_improvement < threshold
-
-        if plateaued:
-            lr_patience_counter += 1
+        past_ema = ema_history[-lookback - 1]
+        rel_improvement = (past_ema - ema) / (past_ema + 1e-8)
+        if rel_improvement < threshold:
+            plateau_steps += 1
         else:
-            lr_patience_counter = 0
-            best_ema = ema
+            plateau_steps = 0
+        max_plateau = max(max_plateau, plateau_steps)
 
-    assert lr_patience_counter == 0, (
-        f"Improving losses should not accumulate patience, but counter={lr_patience_counter}"
+    assert max_plateau == 0, (
+        f"Improving losses should never plateau, but max_plateau={max_plateau}"
+    )
+
+
+def test_lookback_plateau_resets_on_improvement():
+    """Plateau counter resets to 0 when improvement resumes."""
+    lookback = 5
+    threshold = 0.005
+    beta = 0.99
+
+    # Flat for 20 steps, then sharp improvement, then flat again
+    losses = [1.0] * 20 + [1.0 - 0.05 * i for i in range(10)] + [0.5] * 20
+    ema = None
+    ema_history = []
+    plateau_steps = 0
+    plateau_at_step_19 = None
+    plateau_at_step_30 = None
+
+    for i, loss in enumerate(losses):
+        ema = loss if ema is None else beta * ema + (1 - beta) * loss
+        ema_history.append(ema)
+        if len(ema_history) <= lookback:
+            continue
+        past_ema = ema_history[-lookback - 1]
+        rel_improvement = (past_ema - ema) / (past_ema + 1e-8)
+        if rel_improvement < threshold:
+            plateau_steps += 1
+        else:
+            plateau_steps = 0
+        if i == 19:
+            plateau_at_step_19 = plateau_steps
+        if i == 30:
+            plateau_at_step_30 = plateau_steps
+
+    # During flat phase, plateau should accumulate
+    assert plateau_at_step_19 > 5, (
+        f"Should have accumulated plateau during flat phase, got {plateau_at_step_19}"
+    )
+    # During improvement phase, plateau should have reset
+    assert plateau_at_step_30 == 0, (
+        f"Should have reset plateau during improvement, got {plateau_at_step_30}"
     )
 
 
 def test_bootstrap_lr_drops_with_default_patience(tmp_path):
-    """With patience=4 (default), LR should still drop on random data."""
-    cs = Game.CANONICAL_SHAPE()
+    """LR drops on random data with default-like patience settings."""
+    file_triples = _make_bootstrap_triples(tmp_path, n_files=4, samples_per_file=500)
 
-    # Create enough samples so that with batch_size=32 and eval_interval=10,
-    # we get many eval chunks (need > patience + 1 chunks for LR to drop)
-    file_triples = []
-    for i in range(4):
-        n = 500
-        c = torch.randn(n, cs[0], cs[1], cs[2])
-        v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
-        pi = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
-        c_path = str(tmp_path / f"{i:04d}-0000-canonical-{n}.ptz")
-        v_path = str(tmp_path / f"{i:04d}-0000-v-{n}.ptz")
-        pi_path = str(tmp_path / f"{i:04d}-0000-pi-{n}.ptz")
-        save_compressed(c, c_path)
-        save_compressed(v, v_path)
-        save_compressed(pi, pi_path)
-        file_triples.append((c_path, v_path, pi_path, n))
-
+    # 2000 samples / bs=32 = 63 steps total
+    # lookback=10, lr_patience=10*4=40
+    # After 10 warmup + 40 plateau = step 50: first LR drop
     config = TrainConfig(
         game="connect4",
         train_batch_size=32,
@@ -1295,10 +1328,6 @@ def test_bootstrap_lr_drops_with_default_patience(tmp_path):
     nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
     nn = NNWrapper(Game, nnargs)
 
-    class DummyRun:
-        def track(*a, **kw):
-            pass
-
     initial_lr = config.bootstrap_lr
     steps, early_stopped = _bootstrap_train_phase(
         nn, file_triples, config, DummyRun(), source_n=0,
@@ -1308,6 +1337,98 @@ def test_bootstrap_lr_drops_with_default_patience(tmp_path):
     final_lr = nn.optimizer.param_groups[0]["lr"]
     assert final_lr < initial_lr, (
         f"Expected at least one LR drop, but lr stayed at {final_lr}"
+    )
+
+
+def test_bootstrap_full_lr_drops_and_early_stop(tmp_path):
+    """With enough data, all LR drops fire and early stopping triggers."""
+    file_triples = _make_bootstrap_triples(tmp_path, n_files=8, samples_per_file=500)
+
+    # 4000 samples / bs=32 = 125 steps
+    # lookback=5, lr_patience=5*2=10, convergence_patience=5*2=10
+    # max_drops=2: step 15 drop1, step 25 drop2 (final), step 35 early stop
+    config = TrainConfig(
+        game="connect4",
+        train_batch_size=32,
+        bootstrap_eval_interval=5,
+        bootstrap_lr_patience=2,
+        bootstrap_lr_max_drops=2,
+        bootstrap_convergence_patience=2,
+    )
+
+    nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
+    nn = NNWrapper(Game, nnargs)
+
+    initial_lr = config.bootstrap_lr
+    total_steps = sum(int(math.ceil(s / 32)) for _, _, _, s in file_triples)
+
+    steps, early_stopped = _bootstrap_train_phase(
+        nn, file_triples, config, DummyRun(), source_n=0,
+        total_train_steps=0, phase_name="test",
+    )
+    assert early_stopped, "Should have early stopped after all LR drops + convergence"
+    assert steps < total_steps, (
+        f"Early stop should happen before data exhaustion: {steps} < {total_steps}"
+    )
+
+    # Should have dropped LR twice: initial * 0.3 * 0.3
+    expected_lr = initial_lr * config.bootstrap_lr_drop_factor ** 2
+    final_lr = nn.optimizer.param_groups[0]["lr"]
+    assert abs(final_lr - expected_lr) < 1e-8, (
+        f"Expected 2 LR drops: {expected_lr:.6f}, got {final_lr:.6f}"
+    )
+
+
+def test_bootstrap_no_early_stop_on_learnable_data(tmp_path):
+    """Training on learnable (not random) data should train longer than random."""
+    cs = Game.CANONICAL_SHAPE()
+
+    # Create "learnable" data: constant targets so the network can memorize
+    file_triples = []
+    for i in range(4):
+        n = 200
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        # Fixed targets — network should keep improving
+        v = torch.zeros(n, Game.NUM_PLAYERS() + 1)
+        v[:, 0] = 1.0  # always player 0 wins
+        pi = torch.zeros(n, Game.NUM_MOVES())
+        pi[:, 0] = 1.0  # always move 0
+        c_path = str(tmp_path / f"{i:04d}-0000-canonical-{n}.ptz")
+        v_path = str(tmp_path / f"{i:04d}-0000-v-{n}.ptz")
+        pi_path = str(tmp_path / f"{i:04d}-0000-pi-{n}.ptz")
+        save_compressed(c, c_path)
+        save_compressed(v, v_path)
+        save_compressed(pi, pi_path)
+        file_triples.append((c_path, v_path, pi_path, n))
+
+    config = TrainConfig(
+        game="connect4",
+        train_batch_size=32,
+        bootstrap_eval_interval=5,
+        bootstrap_lr_patience=2,
+        bootstrap_lr_max_drops=2,
+        bootstrap_convergence_patience=2,
+    )
+
+    # Train on random data
+    nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
+    nn_random = NNWrapper(Game, nnargs)
+    random_triples = _make_bootstrap_triples(tmp_path / "random", n_files=4, samples_per_file=200)
+    random_steps, _ = _bootstrap_train_phase(
+        nn_random, random_triples, config, DummyRun(), source_n=0,
+        total_train_steps=0, phase_name="random",
+    )
+
+    # Train on learnable data
+    nn_learnable = NNWrapper(Game, nnargs)
+    learnable_steps, _ = _bootstrap_train_phase(
+        nn_learnable, file_triples, config, DummyRun(), source_n=0,
+        total_train_steps=0, phase_name="learnable",
+    )
+
+    # Learnable data should sustain learning longer (more steps before plateau)
+    assert learnable_steps >= random_steps, (
+        f"Learnable data should train at least as long: {learnable_steps} vs {random_steps} (random)"
     )
 
 

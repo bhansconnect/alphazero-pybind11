@@ -1085,17 +1085,20 @@ def run_analysis(config, Game, agent, entries, anchor,
     # Expected reward: V(pi_entry) = sum(pi_entry * Q_base_ref)
     expected_reward = {e: [] for e in entries}
 
-    # PIO gap accumulators (only for entries with vc > 1)
-    pio_entries = [e for e in entries if e.vc > 1]
-    pio_kl = {e: [] for e in pio_entries}
-    pio_top1_flip = {e: [] for e in pio_entries}
-    pio_entropy_raw = {e: [] for e in pio_entries}
-    pio_entropy_mcts = {e: [] for e in pio_entries}
-    pio_entropy_reduction = {e: [] for e in pio_entries}
-    pio_value_correction = {e: [] for e in pio_entries}
-    pio_value_sign_flip = {e: [] for e in pio_entries}
-    pio_value_accuracy_gain = {e: [] for e in pio_entries}
-    pio_correction_quality = {e: [] for e in pio_entries}
+    # Signal metrics — all entries except anchor (compare each vs vc=1 raw baseline)
+    all_entries = entries  # includes injected vc=1 if present
+    signal_entries = [e for e in all_entries if e.vc > 1]
+    signal_pressure = {e: [] for e in signal_entries}     # KL(pi_entry || pi_raw)
+    signal_benefit = {e: [] for e in signal_entries}       # reward(entry) - reward(raw)
+    signal_ceiling = []                                     # KL(pi_anchor || pi_raw) per position
+    signal_entropy_mcts = {e: [] for e in signal_entries}  # H(pi_entry) for training signal
+
+    # Value gap metrics (entry vs anchor)
+    gap_value_mae = {e: [] for e in signal_entries}
+    gap_value_accuracy = {e: [] for e in signal_entries}
+
+    # Keep value accuracy gain (renamed from pio_value_accuracy_gain)
+    pio_value_accuracy_gain = {e: [] for e in signal_entries}
 
     for gid in range(ANALYSIS_GAMES):
         scores = game_scores[gid]
@@ -1135,44 +1138,49 @@ def run_analysis(config, Game, agent, entries, anchor,
                     v_pi = float(np.sum(policies_at_pos[entry] * q_values))
                     expected_reward[entry].append(v_pi)
 
-            # PIO gap metrics: compare each entry (vc > 1) against vc=1 baseline
-            for entry in pio_entries:
-                baseline_entry = Entry(1, "base")
-                if entry not in policies_at_pos or baseline_entry not in policies_at_pos:
-                    continue
-                pi_mcts = policies_at_pos[entry]
-                pi_raw = policies_at_pos[baseline_entry]
+            # Signal metrics: compare each entry (vc > 1) against vc=1 raw baseline
+            raw_entry = Entry(1, "base")
+            if raw_entry in policies_at_pos:
+                pi_raw = policies_at_pos[raw_entry]
+                reward_raw = float(np.sum(pi_raw * q_values))
 
-                # KL(pi_mcts || pi_raw)
-                pio_kl[entry].append(kl_divergence(pi_mcts, pi_raw))
+                # Signal ceiling: KL(pi_anchor || pi_raw)
+                if anchor in policies_at_pos:
+                    pi_anchor_pos = policies_at_pos[anchor]
+                    signal_ceiling.append(kl_divergence(pi_anchor_pos, pi_raw))
 
-                # Top-1 flip
-                move_mcts = int(np.argmax(pi_mcts))
-                move_raw = int(np.argmax(pi_raw))
-                flipped = move_mcts != move_raw
-                pio_top1_flip[entry].append(float(flipped))
+                for entry in signal_entries:
+                    if entry not in policies_at_pos:
+                        continue
+                    pi_entry = policies_at_pos[entry]
 
-                # Entropy
-                h_raw = policy_entropy(pi_raw)
-                h_mcts = policy_entropy(pi_mcts)
-                pio_entropy_raw[entry].append(h_raw)
-                pio_entropy_mcts[entry].append(h_mcts)
-                pio_entropy_reduction[entry].append(h_raw - h_mcts)
+                    # Training Pressure: KL(pi_entry || pi_raw)
+                    pressure = kl_divergence(pi_entry, pi_raw)
+                    signal_pressure[entry].append(pressure)
 
-                # Value correction
-                if entry in values_at_pos and baseline_entry in values_at_pos:
-                    v_mcts = values_at_pos[entry]
-                    v_raw = values_at_pos[baseline_entry]
-                    pio_value_correction[entry].append(abs(v_mcts - v_raw))
-                    pio_value_sign_flip[entry].append(float((v_raw - 0.5) * (v_mcts - 0.5) < 0))
-                    # Value accuracy gain: does search make the value more accurate?
-                    pio_value_accuracy_gain[entry].append(
-                        float(abs(v_mcts - outcome) < abs(v_raw - outcome))
-                    )
+                    # Training Benefit: reward(entry) - reward(raw)
+                    reward_entry = float(np.sum(pi_entry * q_values))
+                    signal_benefit[entry].append(reward_entry - reward_raw)
 
-                # Correction quality: when top-1 flips, is Q[move_mcts] > Q[move_raw]?
-                if flipped:
-                    pio_correction_quality[entry].append(float(q_values[move_mcts] > q_values[move_raw]))
+                    # Entropy of MCTS policy (for training signal in scaling report)
+                    signal_entropy_mcts[entry].append(policy_entropy(pi_entry))
+
+                    # Value gap vs anchor
+                    v_anchor = values_at_pos.get(anchor)
+                    if entry in values_at_pos and v_anchor is not None:
+                        v_entry = values_at_pos[entry]
+                        gap_value_mae[entry].append(abs(v_entry - v_anchor))
+                        gap_value_accuracy[entry].append(
+                            float(abs(v_entry - outcome) < abs(v_anchor - outcome))
+                        )
+
+                    # Value accuracy gain: does search make value more accurate than raw?
+                    v_raw = values_at_pos.get(raw_entry)
+                    if entry in values_at_pos and v_raw is not None:
+                        v_entry = values_at_pos[entry]
+                        pio_value_accuracy_gain[entry].append(
+                            float(abs(v_entry - outcome) < abs(v_raw - outcome))
+                        )
 
     position_outcomes = np.array(position_outcomes)
     position_max_values = np.array(position_max_values)
@@ -1300,31 +1308,107 @@ def run_analysis(config, Game, agent, entries, anchor,
     metrics["regret_means"] = regret_means
     metrics["regret_all"] = regret_all
 
-    # PIO gap metrics aggregation
-    pio_metric_names = ["pio_kl", "pio_top1_flip", "pio_entropy_raw", "pio_entropy_mcts",
-                        "pio_entropy_reduction", "pio_value_correction",
-                        "pio_value_sign_flip", "pio_value_accuracy_gain",
-                        "pio_correction_quality"]
-    pio_metric_data = {
-        "pio_kl": pio_kl, "pio_top1_flip": pio_top1_flip,
-        "pio_entropy_raw": pio_entropy_raw, "pio_entropy_mcts": pio_entropy_mcts,
-        "pio_entropy_reduction": pio_entropy_reduction,
-        "pio_value_correction": pio_value_correction,
-        "pio_value_sign_flip": pio_value_sign_flip,
-        "pio_value_accuracy_gain": pio_value_accuracy_gain,
-        "pio_correction_quality": pio_correction_quality,
-    }
-    for name in pio_metric_names:
+    # Signal metrics aggregation
+    for name, data in [("signal_pressure", signal_pressure),
+                       ("signal_benefit", signal_benefit),
+                       ("signal_entropy_mcts", signal_entropy_mcts),
+                       ("gap_value_mae", gap_value_mae),
+                       ("gap_value_accuracy", gap_value_accuracy),
+                       ("pio_value_accuracy_gain", pio_value_accuracy_gain)]:
         means = {}
         all_vals = {}
-        for entry in pio_entries:
-            data = pio_metric_data[name]
+        for entry in signal_entries:
             if entry in data and len(data[entry]) > 0:
                 arr = np.array(data[entry])
                 means[entry] = float(np.mean(arr))
                 all_vals[entry] = arr
         metrics[f"{name}_means"] = means
         metrics[f"{name}_all"] = all_vals
+
+    # Signal ceiling
+    metrics["signal_ceiling"] = np.array(signal_ceiling) if signal_ceiling else np.array([])
+    metrics["signal_ceiling_mean"] = float(np.mean(signal_ceiling)) if signal_ceiling else 0.0
+
+    # Signal Efficiency: benefit / pressure (per position, then average)
+    signal_efficiency_means = {}
+    signal_efficiency_all = {}
+    for entry in signal_entries:
+        if entry in signal_pressure and entry in signal_benefit:
+            p = np.array(signal_pressure.get(entry, []))
+            b = np.array(signal_benefit.get(entry, []))
+            if len(p) > 0 and len(b) > 0:
+                n = min(len(p), len(b))
+                mask = p[:n] > 1e-8
+                if mask.any():
+                    eff = b[:n][mask] / p[:n][mask]
+                    signal_efficiency_means[entry] = float(np.mean(eff))
+                    signal_efficiency_all[entry] = eff
+    metrics["signal_efficiency_means"] = signal_efficiency_means
+    metrics["signal_efficiency_all"] = signal_efficiency_all
+
+    # Signal Utilization: KL(entry) / KL(anchor) per position
+    signal_utilization_means = {}
+    signal_utilization_all = {}
+    ceiling = metrics["signal_ceiling"]
+    for entry in signal_entries:
+        if entry in signal_pressure:
+            p = np.array(signal_pressure.get(entry, []))
+            if len(p) > 0 and len(ceiling) > 0:
+                n = min(len(p), len(ceiling))
+                mask = ceiling[:n] > 1e-8
+                if mask.any():
+                    util = p[:n][mask] / ceiling[:n][mask]
+                    signal_utilization_means[entry] = float(np.mean(util))
+                    signal_utilization_all[entry] = util
+    metrics["signal_utilization_means"] = signal_utilization_means
+    metrics["signal_utilization_all"] = signal_utilization_all
+
+    # Noise metrics: correction recall and consistency between consecutive VC pairs
+    noise_recall = {}
+    noise_consistency = {}
+
+    for mode in ("base", "selfplay"):
+        mode_entries = sorted([e for e in all_entries if e.mode == mode], key=entry_sort_key)
+        if Entry(1, "base") not in mode_entries and mode == "base":
+            mode_entries = [Entry(1, "base")] + mode_entries
+
+        for i in range(1, len(mode_entries)):
+            for j in range(i + 1, len(mode_entries)):
+                e_lower, e_higher = mode_entries[i], mode_entries[j]
+                if j != i + 1:
+                    continue
+
+                recall_vals = []
+                consistency_vals = []
+                for gid in range(ANALYSIS_GAMES):
+                    for _, _, policies_at_pos, _ in game_positions[gid]:
+                        raw_entry = Entry(1, "base")
+                        if raw_entry not in policies_at_pos:
+                            continue
+                        if e_lower not in policies_at_pos or e_higher not in policies_at_pos:
+                            continue
+                        move_raw = int(np.argmax(policies_at_pos[raw_entry]))
+                        move_lower = int(np.argmax(policies_at_pos[e_lower]))
+                        move_higher = int(np.argmax(policies_at_pos[e_higher]))
+
+                        higher_flips = (move_higher != move_raw)
+                        lower_flips = (move_lower != move_raw)
+
+                        if higher_flips:
+                            recall_vals.append(float(lower_flips))
+
+                        if higher_flips and lower_flips:
+                            consistency_vals.append(float(move_lower == move_higher))
+
+                if recall_vals:
+                    noise_recall[e_lower] = np.array(recall_vals)
+                if consistency_vals:
+                    noise_consistency[e_lower] = np.array(consistency_vals)
+
+    metrics["noise_recall_means"] = {e: float(np.mean(v)) for e, v in noise_recall.items()}
+    metrics["noise_recall_all"] = noise_recall
+    metrics["noise_consistency_means"] = {e: float(np.mean(v)) for e, v in noise_consistency.items()}
+    metrics["noise_consistency_all"] = noise_consistency
 
     # Marginal KL: KL(pi_N2 || pi_N1) for consecutive visit-count pairs within each mode
     pio_marginal_kl = {}
@@ -1389,16 +1473,35 @@ def run_analysis(config, Game, agent, entries, anchor,
         for entry in sorted(regret_means.keys(), key=entry_sort_key):
             print(f"{entry_label(entry):>8s} {regret_means[entry]:>10.4f}")
 
-    # PIO gap summary
-    pio_kl_means = metrics.get("pio_kl_means", {})
-    if pio_kl_means:
-        print(f"\n--- PIO Gap Analysis (vs raw network, vc=1 base) ---")
-        print(f"{'Visits':>8s} {'KL':>10s} {'Top1Flip':>10s} {'EntReduc':>10s} {'ValCorr':>10s} {'ValFlip':>10s} {'ValGain':>10s} {'CorrQual':>10s}")
-        for entry in sorted(pio_kl_means.keys(), key=entry_sort_key):
-            def _fmt(name):
-                v = metrics.get(f"{name}_means", {}).get(entry)
+    # Training signal analysis summary
+    sp_means = metrics.get("signal_pressure_means", {})
+    if sp_means:
+        print(f"\n--- Training Signal Analysis (vs raw network, vc=1 base) ---")
+        print(f"{'Visits':>8s} {'Pressure':>10s} {'Benefit':>10s} {'Efficncy':>10s} {'Utiliztn':>10s}")
+        for entry in sorted(sp_means.keys(), key=entry_sort_key):
+            pressure = sp_means.get(entry)
+            benefit = metrics.get("signal_benefit_means", {}).get(entry)
+            efficiency = metrics.get("signal_efficiency_means", {}).get(entry)
+            utilization = metrics.get("signal_utilization_means", {}).get(entry)
+            def _fmt_v(v):
                 return f"{v:>10.4f}" if v is not None else f"{'N/A':>10s}"
-            print(f"{entry_label(entry):>8s} {_fmt('pio_kl')}{_fmt('pio_top1_flip')}{_fmt('pio_entropy_reduction')}{_fmt('pio_value_correction')}{_fmt('pio_value_sign_flip')}{_fmt('pio_value_accuracy_gain')}{_fmt('pio_correction_quality')}")
+            print(f"{entry_label(entry):>8s} {_fmt_v(pressure)}{_fmt_v(benefit)}{_fmt_v(efficiency)}{_fmt_v(utilization)}")
+        ceiling_mean = metrics.get("signal_ceiling_mean", 0.0)
+        print(f"  Signal Ceiling (anchor): {ceiling_mean:.4f}")
+
+    # Correction noise analysis summary
+    nr_means = metrics.get("noise_recall_means", {})
+    nc_means = metrics.get("noise_consistency_means", {})
+    if nr_means or nc_means:
+        all_noise_entries = sorted(set(nr_means.keys()) | set(nc_means.keys()), key=entry_sort_key)
+        print(f"\n--- Correction Noise Analysis ---")
+        print(f"{'Visits':>8s} {'Recall':>10s} {'Consist':>10s}")
+        for entry in all_noise_entries:
+            recall = nr_means.get(entry)
+            consist = nc_means.get(entry)
+            def _fmt_pct(v):
+                return f"{v*100:>9.1f}%" if v is not None else f"{'N/A':>10s}"
+            print(f"{entry_label(entry):>8s} {_fmt_pct(recall)}{_fmt_pct(consist)}")
 
     marginal_kl_means = metrics.get("pio_marginal_kl_means", {})
     if marginal_kl_means:
@@ -1421,11 +1524,14 @@ def compute_scaling_report(entries, anchor, elo=None, metrics=None):
     Returns dict with:
       elo_per_doubling: list of (vc1, vc2, elo_per_2x, mode) quads
       elo_regressions: {mode: (slope, r2)}
-      policy_improvement: {entry: float}  (pio_top1_flip, ascending with VC)
-      capacity_score: {entry: float}  (vc > 1 only, pio_top1_flip * correction_quality)
+      signal_utilization: {entry: float}  (KL_entry / KL_anchor, THE key metric)
+      signal_pressure: {entry: float}  (KL(pi_entry || pi_raw))
+      signal_efficiency: {entry: float}  (benefit / pressure)
       mcts_utilization: {entry: float}
       value_ece: {entry: float}  (Expected Calibration Error, lower is better)
       value_accuracy_gain: {entry: float}  (rate where search improves value, vc > 1 only)
+      noise_recall: {entry: float}  (correction recall vs next higher VC)
+      noise_consistency: {entry: float}  (correction consistency vs next higher VC)
     """
     entries = [_to_entry(e) for e in entries]
     anchor = _to_entry(anchor)
@@ -1470,39 +1576,34 @@ def compute_scaling_report(entries, anchor, elo=None, metrics=None):
     if metrics is None:
         return result
 
-    # 2. Policy Improvement: pio_top1_flip (ascending with VC — measures how much
-    #    MCTS improves over raw network policy)
-    pio_flip = metrics.get("pio_top1_flip_means", {})
-    if pio_flip:
-        result["policy_improvement"] = dict(pio_flip)
+    # 2. Signal Utilization: fraction of anchor's training pressure captured
+    signal_util = metrics.get("signal_utilization_means", {})
+    if signal_util:
+        result["signal_utilization"] = dict(signal_util)
 
-    # 3. Capacity Score: pio_top1_flip * correction_quality (vc > 1 only)
-    #    Measures both how much search changes the policy AND whether those changes
-    #    are correct (ascending with VC when search is beneficial)
-    correction_quality = metrics.get("pio_correction_quality_means", {})
-    if pio_flip and correction_quality:
-        capacity = {}
-        for entry in correction_quality:
-            e = _to_entry(entry)
-            if e.vc > 1 and entry in pio_flip:
-                capacity[entry] = pio_flip[entry] * correction_quality[entry]
-        if capacity:
-            result["capacity_score"] = capacity
+    # 3. Signal Pressure: KL(pi_entry || pi_raw)
+    signal_pressure = metrics.get("signal_pressure_means", {})
+    if signal_pressure:
+        result["signal_pressure"] = dict(signal_pressure)
 
-    # 4. Value calibration (ECE) — lower is better
+    # 4. Signal Efficiency: benefit / pressure
+    signal_eff = metrics.get("signal_efficiency_means", {})
+    if signal_eff:
+        result["signal_efficiency"] = dict(signal_eff)
+
+    # 5. Value calibration (ECE) — lower is better
     value_ece = metrics.get("value_ece", {})
     if value_ece:
         result["value_ece"] = dict(value_ece)
 
-    # 5. Value accuracy gain — rate where search improves value (vc > 1 only)
+    # 6. Value accuracy gain — rate where search improves value (vc > 1 only)
     vag = metrics.get("pio_value_accuracy_gain_means", {})
     if vag:
         result["value_accuracy_gain"] = dict(vag)
 
-    # 6. MCTS Utilization: (reward_entry - reward_vc1) / (reward_anchor - reward_vc1)
+    # 7. MCTS Utilization: (reward_entry - reward_vc1) / (reward_anchor - reward_vc1)
     reward_means = metrics.get("reward_means", {})
     if reward_means:
-        # Find vc=1 baseline reward (prefer base mode)
         vc1_reward = None
         for mode in ("base", "selfplay"):
             key = Entry(1, mode)
@@ -1518,13 +1619,18 @@ def compute_scaling_report(entries, anchor, elo=None, metrics=None):
                     utilization[entry] = (reward - vc1_reward) / denom
                 result["mcts_utilization"] = utilization
 
-    # 7. Training Signal: target entropy + KL gap vs visit count
-    pio_entropy = metrics.get("pio_entropy_mcts_means", {})
-    pio_kl_data = metrics.get("pio_kl_means", {})
+    # 8. Training Signal: target entropy
+    pio_entropy = metrics.get("signal_entropy_mcts_means", {})
     if pio_entropy:
         result["training_signal_entropy"] = dict(pio_entropy)
-    if pio_kl_data:
-        result["training_signal_kl"] = dict(pio_kl_data)
+
+    # 9. Noise metrics
+    noise_recall = metrics.get("noise_recall_means", {})
+    if noise_recall:
+        result["noise_recall"] = dict(noise_recall)
+    noise_consistency = metrics.get("noise_consistency_means", {})
+    if noise_consistency:
+        result["noise_consistency"] = dict(noise_consistency)
 
     return result
 
@@ -1545,47 +1651,61 @@ def print_scaling_report(scaling, entries, anchor):
                 print(f"    Log-linear fit{label}: slope={slope:.1f} Elo/2x, R2={r2:.3f}")
 
     # Per-entry table
-    has_pi = "policy_improvement" in scaling
+    has_su = "signal_utilization" in scaling
+    has_sp = "signal_pressure" in scaling
+    has_se = "signal_efficiency" in scaling
     has_ece = "value_ece" in scaling
     has_vag = "value_accuracy_gain" in scaling
-    has_cs = "capacity_score" in scaling
     has_mu = "mcts_utilization" in scaling
     has_tse = "training_signal_entropy" in scaling
-    has_tsk = "training_signal_kl" in scaling
-    if has_pi or has_ece or has_vag or has_cs or has_mu or has_tse or has_tsk:
+    has_nr = "noise_recall" in scaling
+    has_nc = "noise_consistency" in scaling
+    if has_su or has_sp or has_se or has_ece or has_vag or has_mu or has_tse or has_nr or has_nc:
         header = f"\n  {'Visits':>8s}"
-        if has_pi:
-            header += f" {'PolImpr':>8s}"
+        if has_sp:
+            header += f" {'Pressure':>8s}"
+        if has_se:
+            header += f" {'Efficncy':>8s}"
+        if has_su:
+            header += f" {'SigUtil':>8s}"
         if has_ece:
             header += f" {'ECE':>8s}"
         if has_vag:
             header += f" {'ValGain':>8s}"
-        if has_cs:
-            header += f" {'CapScore':>8s}"
         if has_mu:
             header += f" {'MCTSUtil':>8s}"
         if has_tse:
             header += f" {'TgtEntr':>8s}"
-        if has_tsk:
-            header += f" {'KLGap':>8s}"
+        if has_nr:
+            header += f" {'Recall':>8s}"
+        if has_nc:
+            header += f" {'Consist':>8s}"
         print(header)
 
         sorted_entries = sorted(
             set().union(
-                scaling.get("policy_improvement", {}).keys(),
+                scaling.get("signal_utilization", {}).keys(),
+                scaling.get("signal_pressure", {}).keys(),
+                scaling.get("signal_efficiency", {}).keys(),
                 scaling.get("value_ece", {}).keys(),
                 scaling.get("value_accuracy_gain", {}).keys(),
-                scaling.get("capacity_score", {}).keys(),
                 scaling.get("mcts_utilization", {}).keys(),
                 scaling.get("training_signal_entropy", {}).keys(),
-                scaling.get("training_signal_kl", {}).keys(),
+                scaling.get("noise_recall", {}).keys(),
+                scaling.get("noise_consistency", {}).keys(),
             ),
             key=entry_sort_key,
         )
         for entry in sorted_entries:
             row = f"  {entry_label(entry):>8s}"
-            if has_pi:
-                v = scaling["policy_improvement"].get(entry)
+            if has_sp:
+                v = scaling["signal_pressure"].get(entry)
+                row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
+            if has_se:
+                v = scaling["signal_efficiency"].get(entry)
+                row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
+            if has_su:
+                v = scaling["signal_utilization"].get(entry)
                 row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
             if has_ece:
                 v = scaling["value_ece"].get(entry)
@@ -1593,17 +1713,17 @@ def print_scaling_report(scaling, entries, anchor):
             if has_vag:
                 v = scaling["value_accuracy_gain"].get(entry)
                 row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
-            if has_cs:
-                v = scaling["capacity_score"].get(entry)
-                row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
             if has_mu:
                 v = scaling["mcts_utilization"].get(entry)
                 row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
             if has_tse:
                 v = scaling["training_signal_entropy"].get(entry)
                 row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
-            if has_tsk:
-                v = scaling["training_signal_kl"].get(entry)
+            if has_nr:
+                v = scaling["noise_recall"].get(entry)
+                row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
+            if has_nc:
+                v = scaling["noise_consistency"].get(entry)
                 row += f" {v:>8.4f}" if v is not None else f" {'N/A':>8s}"
             print(row)
 
@@ -1620,8 +1740,7 @@ def _has_display():
 
 # Metrics that are binary or discrete rates — bar charts with Wilson CI instead of boxplots
 _rate_metrics = {"top1", "top3", "top9",
-                 "pio_top1_flip", "pio_value_sign_flip", "pio_value_accuracy_gain",
-                 "pio_correction_quality"}
+                 "gap_value_accuracy", "pio_value_accuracy_gain"}
 
 
 def _wilson_ci(k, n, z=1.96):
@@ -1951,25 +2070,27 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         fig.savefig(path, dpi=150)
         print(f"Saved: {path}")
 
-    # Figure 5: PIO Gap Summary (2x4 grid)
-    has_pio = metrics and metrics.get("pio_kl_means")
-    if has_pio:
-        pio_panel_info = [
-            ("pio_kl", "KL(pi_mcts || pi_raw)", "lightblue"),
-            ("pio_top1_flip", "Top-1 Flip Rate", "lightgreen"),
-            ("pio_entropy_reduction", "Entropy Reduction", "lightyellow"),
-            ("pio_value_correction", "|V_mcts - V_raw|", "lightsalmon"),
-            ("pio_value_sign_flip", "Value Sign Flip Rate", "plum"),
-            ("pio_value_accuracy_gain", "Value Accuracy Gain", "lightcyan"),
-            ("pio_correction_quality", "Correction Quality", "lightskyblue"),
+    # Figure 5: Training Signal Analysis (2x3 grid)
+    has_signal = metrics and metrics.get("signal_pressure_means")
+    if has_signal:
+        signal_panel_info = [
+            ("signal_pressure", "Training Pressure KL(pi_entry || pi_raw)", "lightblue"),
+            ("signal_benefit", "Training Benefit (reward improvement)", "lightgreen"),
+            ("signal_efficiency", "Signal Efficiency (benefit/pressure)", "lightyellow"),
+            ("signal_utilization", "Signal Utilization (KL/ceiling)", "lightsalmon"),
         ]
-        n_panels = len(pio_panel_info)
-        n_cols = 4
+        noise_panel_info = [
+            ("noise_recall", "Correction Recall", "plum"),
+            ("noise_consistency", "Correction Consistency", "lightskyblue"),
+        ]
+        all_panel_info = signal_panel_info + noise_panel_info
+        n_panels = len(all_panel_info)
+        n_cols = 3
         n_rows = (n_panels + n_cols - 1) // n_cols
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(24, 5 * n_rows))
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(18, 5 * n_rows))
         axes = axes.flatten()
 
-        for idx, (name, title, base_color) in enumerate(pio_panel_info):
+        for idx, (name, title, base_color) in enumerate(all_panel_info):
             ax = axes[idx]
             means = metrics.get(f"{name}_means", {})
             all_data = metrics.get(f"{name}_all", {})
@@ -1981,12 +2102,12 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             _plot_metric_panel(ax, name, title, base_color, sorted_entries, means, all_data)
 
         # Hide unused axes
-        for idx in range(len(pio_panel_info), len(axes)):
+        for idx in range(len(all_panel_info), len(axes)):
             axes[idx].set_visible(False)
 
-        fig.suptitle("PIO Gap Analysis (MCTS vs Raw Network)", fontsize=14, y=1.02)
+        fig.suptitle("Training Signal Analysis (MCTS vs Raw Network)", fontsize=14, y=1.02)
         fig.tight_layout()
-        path = os.path.join(save_dir, "mcts_pio_gap_summary.png")
+        path = os.path.join(save_dir, "mcts_signal_analysis.png")
         fig.savefig(path, dpi=150, bbox_inches="tight")
         print(f"Saved: {path}")
 
@@ -2078,15 +2199,16 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         else:
             axes[0, 0].set_visible(False)
 
-        # Top-center: Capacity Score
-        if "capacity_score" in scaling:
-            cs = scaling["capacity_score"]
-            cs_entries = sorted(cs.keys(), key=entry_sort_key)
-            _plot_by_mode(axes[0, 1], cs_entries, [cs[e] for e in cs_entries])
-            _set_entry_xticks(axes[0, 1], cs_entries)
+        # Top-center: Signal Utilization
+        if "signal_utilization" in scaling:
+            su = scaling["signal_utilization"]
+            su_entries = sorted(su.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[0, 1], su_entries, [su[e] for e in su_entries])
+            _set_entry_xticks(axes[0, 1], su_entries)
+            axes[0, 1].axhline(y=1.0, color="gray", linestyle="--", alpha=0.5)
             axes[0, 1].set_xlabel("MCTS Visit Count")
-            axes[0, 1].set_ylabel("Capacity Score")
-            axes[0, 1].set_title("Capacity Score (Top-1 Flip x Correction Quality)")
+            axes[0, 1].set_ylabel("Signal Utilization")
+            axes[0, 1].set_title("Signal Utilization (KL_entry / KL_anchor)")
             axes[0, 1].grid(True, alpha=0.3)
         else:
             axes[0, 1].set_visible(False)
@@ -2154,16 +2276,16 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         else:
             axes[1, 1].set_visible(False)
 
-        # Bottom-right: Training Signal — KL Gap KL(pi_mcts || pi_raw)
-        if "training_signal_kl" in scaling:
-            tsk = scaling["training_signal_kl"]
-            tsk_entries = sorted(tsk.keys(), key=entry_sort_key)
-            _plot_by_mode(axes[1, 2], tsk_entries, [tsk[e] for e in tsk_entries],
+        # Bottom-right: Signal Efficiency (benefit / pressure)
+        if "signal_efficiency" in scaling:
+            se = scaling["signal_efficiency"]
+            se_entries = sorted(se.keys(), key=entry_sort_key)
+            _plot_by_mode(axes[1, 2], se_entries, [se[e] for e in se_entries],
                           base_color="tab:red", sp_color="tab:orange")
-            _set_entry_xticks(axes[1, 2], tsk_entries)
+            _set_entry_xticks(axes[1, 2], se_entries)
             axes[1, 2].set_xlabel("MCTS Visit Count")
-            axes[1, 2].set_ylabel("KL Gap (pi_mcts || pi_raw)")
-            axes[1, 2].set_title("Training Signal: KL Gap")
+            axes[1, 2].set_ylabel("Signal Efficiency")
+            axes[1, 2].set_title("Signal Efficiency (benefit / pressure)")
             axes[1, 2].grid(True, alpha=0.3)
         else:
             axes[1, 2].set_visible(False)
@@ -2260,12 +2382,24 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             if prefix in metrics:
                 for entry, arr in metrics[prefix].items():
                     save_data[f"{prefix}_{entry_label(entry)}"] = arr
-        # PIO gap metrics
-        pio_prefixes = ["pio_kl", "pio_top1_flip", "pio_entropy_raw", "pio_entropy_mcts",
-                        "pio_entropy_reduction", "pio_value_correction",
-                        "pio_value_sign_flip", "pio_value_accuracy_gain",
-                        "pio_correction_quality"]
-        for prefix in pio_prefixes:
+        # Signal metrics
+        signal_prefixes = ["signal_pressure", "signal_benefit", "signal_efficiency",
+                           "signal_utilization", "signal_entropy_mcts",
+                           "gap_value_mae", "gap_value_accuracy",
+                           "pio_value_accuracy_gain"]
+        for prefix in signal_prefixes:
+            if f"{prefix}_means" in metrics:
+                for entry, val in metrics[f"{prefix}_means"].items():
+                    save_data[f"{prefix}_mean_{entry_label(entry)}"] = np.array(val)
+            if f"{prefix}_all" in metrics:
+                for entry, arr in metrics[f"{prefix}_all"].items():
+                    save_data[f"{prefix}_all_{entry_label(entry)}"] = arr
+        # Signal ceiling
+        if "signal_ceiling_mean" in metrics:
+            save_data["signal_ceiling_mean"] = np.array(metrics["signal_ceiling_mean"])
+        # Noise metrics
+        noise_prefixes = ["noise_recall", "noise_consistency"]
+        for prefix in noise_prefixes:
             if f"{prefix}_means" in metrics:
                 for entry, val in metrics[f"{prefix}_means"].items():
                     save_data[f"{prefix}_mean_{entry_label(entry)}"] = np.array(val)
@@ -2297,8 +2431,9 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
                 suffix = f"_{mode}" if len(scaling["elo_regressions"]) > 1 else ""
                 save_data[f"scaling_elo_slope{suffix}"] = np.array(slope)
                 save_data[f"scaling_elo_r2{suffix}"] = np.array(r2)
-        for key in ["policy_improvement", "capacity_score", "mcts_utilization",
-                     "value_ece", "value_accuracy_gain"]:
+        for key in ["signal_utilization", "signal_pressure", "signal_efficiency",
+                     "mcts_utilization", "value_ece", "value_accuracy_gain",
+                     "noise_recall", "noise_consistency"]:
             if key in scaling:
                 for entry, val in scaling[key].items():
                     save_data[f"scaling_{key}_{entry_label(entry)}"] = np.array(val)

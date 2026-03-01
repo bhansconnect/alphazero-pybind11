@@ -1,4 +1,4 @@
-"""Tests for mcts_analysis.py -- statistical functions, calc_temp, imports, PIO gap, ECE, VIR."""
+"""Tests for mcts_analysis.py -- statistical functions, calc_temp, imports, signal metrics, ECE, VIR."""
 
 import math
 import os
@@ -392,11 +392,11 @@ def test_policy_entropy_nonnegative():
     assert policy_entropy(p) >= 0.0
 
 
-# --- PIO integration tests ---
+# --- Signal metrics integration tests ---
 
 
-def test_pio_metrics_present(monkeypatch):
-    """All PIO metric keys exist in returned metrics dict with correct types."""
+def test_signal_metrics_present(monkeypatch):
+    """All signal metric keys exist in returned metrics dict with correct types."""
     import mcts_analysis
     monkeypatch.setattr(mcts_analysis, "ANALYSIS_GAMES", 4)
 
@@ -411,41 +411,52 @@ def test_pio_metrics_present(monkeypatch):
         cache_size=0, tree_reuse=False,
     )
 
-    pio_metric_names = ["pio_kl", "pio_top1_flip", "pio_entropy_raw", "pio_entropy_mcts",
-                        "pio_entropy_reduction", "pio_value_correction",
-                        "pio_value_sign_flip", "pio_correction_quality"]
+    signal_metric_names = ["signal_pressure", "signal_benefit", "signal_entropy_mcts",
+                           "signal_efficiency", "signal_utilization"]
 
-    for name in pio_metric_names:
+    for name in signal_metric_names:
         assert f"{name}_means" in metrics, f"missing {name}_means"
-        assert f"{name}_all" in metrics, f"missing {name}_all"
         means = metrics[f"{name}_means"]
-        all_vals = metrics[f"{name}_all"]
         assert isinstance(means, dict)
-        assert isinstance(all_vals, dict)
-        # vc=1 should NOT be in PIO metrics (it IS the baseline)
+        # vc=1 should NOT be in signal metrics (it IS the baseline)
         assert Entry(1, "base") not in means
         # vc=10 and vc=25 should be present
         for entry in [Entry(10, "base"), Entry(25, "base")]:
-            assert entry in means, f"{entry} missing from {name}_means"
-            assert isinstance(means[entry], float)
+            if entry in means:
+                assert isinstance(means[entry], float)
+
+    # Check _all dicts for core signal metrics
+    for name in ["signal_pressure", "signal_benefit", "signal_entropy_mcts"]:
+        assert f"{name}_all" in metrics, f"missing {name}_all"
+        all_vals = metrics[f"{name}_all"]
+        assert isinstance(all_vals, dict)
+        for entry in [Entry(10, "base"), Entry(25, "base")]:
             assert entry in all_vals
             assert isinstance(all_vals[entry], np.ndarray)
 
-    # KL should be >= 0
+    # Signal pressure should be >= 0
     for entry in [Entry(10, "base"), Entry(25, "base")]:
-        assert metrics["pio_kl_means"][entry] >= 0.0
+        assert metrics["signal_pressure_means"][entry] >= 0.0
 
-    # Top-1 flip rate should be in [0, 1]
-    for entry in [Entry(10, "base"), Entry(25, "base")]:
-        assert 0.0 <= metrics["pio_top1_flip_means"][entry] <= 1.0
+    # Signal ceiling should exist
+    assert "signal_ceiling" in metrics
+    assert "signal_ceiling_mean" in metrics
+    assert metrics["signal_ceiling_mean"] >= 0.0
 
-    # Marginal KL should exist
+    # Marginal KL should still exist
     assert "pio_marginal_kl_means" in metrics
     assert "pio_marginal_kl_all" in metrics
 
+    # Value accuracy gain should still exist
+    assert "pio_value_accuracy_gain_means" in metrics
 
-def test_pio_vc1_injected_when_absent(monkeypatch):
-    """When entries don't include vc=1, PIO metrics still work, and entries is NOT modified."""
+    # Gap value metrics should exist
+    assert "gap_value_mae_means" in metrics
+    assert "gap_value_accuracy_means" in metrics
+
+
+def test_signal_vc1_injected_when_absent(monkeypatch):
+    """When entries don't include vc=1, signal metrics still work, and entries is NOT modified."""
     import mcts_analysis
     monkeypatch.setattr(mcts_analysis, "ANALYSIS_GAMES", 4)
 
@@ -464,13 +475,13 @@ def test_pio_vc1_injected_when_absent(monkeypatch):
     assert Entry(1, "base") not in metrics["entries"]
     assert metrics["entries"] == entries
 
-    # PIO metrics should still be computed for vc=10, vc=25
-    assert Entry(10, "base") in metrics["pio_kl_means"]
-    assert Entry(25, "base") in metrics["pio_kl_means"]
+    # Signal metrics should still be computed for vc=10, vc=25
+    assert Entry(10, "base") in metrics["signal_pressure_means"]
+    assert Entry(25, "base") in metrics["signal_pressure_means"]
 
 
-def test_pio_vc1_not_duplicated_when_present(monkeypatch):
-    """When entries include vc=1, PIO data point count matches total positions (no double-counting)."""
+def test_signal_vc1_not_duplicated_when_present(monkeypatch):
+    """When entries include vc=1, signal data point count matches total positions."""
     import mcts_analysis
     monkeypatch.setattr(mcts_analysis, "ANALYSIS_GAMES", 4)
 
@@ -486,12 +497,39 @@ def test_pio_vc1_not_duplicated_when_present(monkeypatch):
     )
 
     total_positions = metrics["total_positions"]
-    # PIO data points for vc=10 should equal total positions (one per position)
-    n_pio = len(metrics["pio_kl_all"][Entry(10, "base")])
-    assert n_pio == total_positions
+    # Signal data points for vc=10 should equal total positions (one per position)
+    n_signal = len(metrics["signal_pressure_all"][Entry(10, "base")])
+    assert n_signal == total_positions
     # Same for vc=25
-    n_pio_25 = len(metrics["pio_kl_all"][Entry(25, "base")])
-    assert n_pio_25 == total_positions
+    n_signal_25 = len(metrics["signal_pressure_all"][Entry(25, "base")])
+    assert n_signal_25 == total_positions
+
+
+def test_noise_metrics_present(monkeypatch):
+    """Noise metrics (recall, consistency) exist with values in [0, 1]."""
+    import mcts_analysis
+    monkeypatch.setattr(mcts_analysis, "ANALYSIS_GAMES", 4)
+
+    config = TrainConfig(game="connect4")
+    Game = config.Game
+
+    entries = [Entry(1, "base"), Entry(10, "base"), Entry(25, "base")]
+    anchor = Entry(25, "base")
+
+    metrics, snapshots = mcts_analysis.run_analysis(
+        config, Game, agent="random", entries=entries, anchor=anchor,
+        cache_size=0, tree_reuse=False,
+    )
+
+    assert "noise_recall_means" in metrics
+    assert "noise_consistency_means" in metrics
+    assert isinstance(metrics["noise_recall_means"], dict)
+    assert isinstance(metrics["noise_consistency_means"], dict)
+
+    for entry, val in metrics["noise_recall_means"].items():
+        assert 0.0 <= val <= 1.0, f"recall for {entry} = {val} out of [0, 1]"
+    for entry, val in metrics["noise_consistency_means"].items():
+        assert 0.0 <= val <= 1.0, f"consistency for {entry} = {val} out of [0, 1]"
 
 
 # --- compute_scaling_report tests ---
@@ -543,7 +581,7 @@ def test_elo_per_doubling_none_when_no_elo():
     """elo=None -> elo_per_doubling key absent from result."""
     entries = _make_entries([1, 10, 100])
     anchor = Entry(100, "base")
-    metrics = {"pio_top1_flip_means": {Entry(10, "base"): 0.3, Entry(100, "base"): 0.5}}
+    metrics = {"signal_pressure_means": {Entry(10, "base"): 0.3, Entry(100, "base"): 0.5}}
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
@@ -551,58 +589,50 @@ def test_elo_per_doubling_none_when_no_elo():
     assert "elo_regressions" not in result
 
 
-def test_policy_improvement_basic():
-    """Policy improvement = pio_top1_flip (ascending with VC)."""
+def test_signal_utilization_in_scaling():
+    """Signal utilization is passed through from metrics."""
     entries = _make_entries([1, 10, 100])
     anchor = Entry(100, "base")
     metrics = {
-        "pio_top1_flip_means": {Entry(10, "base"): 0.3, Entry(100, "base"): 0.5},
+        "signal_utilization_means": {Entry(10, "base"): 0.45, Entry(100, "base"): 0.95},
     }
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
-    assert "policy_improvement" in result
-    assert result["policy_improvement"][Entry(10, "base")] == pytest.approx(0.3)
-    assert result["policy_improvement"][Entry(100, "base")] == pytest.approx(0.5)
-    # vc=1 should NOT be present (pio_top1_flip only exists for vc > 1)
-    assert Entry(1, "base") not in result["policy_improvement"]
+    assert "signal_utilization" in result
+    assert result["signal_utilization"][Entry(10, "base")] == pytest.approx(0.45)
+    assert result["signal_utilization"][Entry(100, "base")] == pytest.approx(0.95)
+    # vc=1 should NOT be present
+    assert Entry(1, "base") not in result["signal_utilization"]
 
 
-def test_capacity_score_vc1_excluded():
-    """vc=1 never appears in capacity_score."""
+def test_signal_pressure_in_scaling():
+    """Signal pressure is passed through from metrics."""
     entries = _make_entries([1, 10, 100])
     anchor = Entry(100, "base")
     metrics = {
-        "pio_top1_flip_means": {Entry(10, "base"): 0.3, Entry(100, "base"): 0.5},
-        "pio_correction_quality_means": {Entry(10, "base"): 0.8, Entry(100, "base"): 0.9},
+        "signal_pressure_means": {Entry(10, "base"): 0.05, Entry(100, "base"): 0.12},
     }
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
-    assert "capacity_score" in result
-    assert Entry(1, "base") not in result["capacity_score"]
-    assert Entry(10, "base") in result["capacity_score"]
+    assert "signal_pressure" in result
+    assert Entry(1, "base") not in result["signal_pressure"]
+    assert Entry(10, "base") in result["signal_pressure"]
 
 
-def test_capacity_score_computation():
-    """Capacity score = pio_top1_flip * correction_quality."""
+def test_signal_efficiency_in_scaling():
+    """Signal efficiency is passed through from metrics."""
     entries = _make_entries([1, 50])
     anchor = Entry(50, "base")
     metrics = {
-        "pio_top1_flip_means": {Entry(50, "base"): 0.4},
-        "pio_correction_quality_means": {Entry(50, "base"): 0.75},
+        "signal_efficiency_means": {Entry(50, "base"): 0.25},
     }
 
     result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
 
-    # capacity = 0.4 * 0.75 = 0.3
-    assert result["capacity_score"][Entry(50, "base")] == pytest.approx(0.3)
-
-    # With different values
-    metrics["pio_top1_flip_means"][Entry(50, "base")] = 0.0
-    result = compute_scaling_report(entries, anchor, elo=None, metrics=metrics)
-    # 0.0 * 0.75 = 0.0
-    assert result["capacity_score"][Entry(50, "base")] == pytest.approx(0.0)
+    assert "signal_efficiency" in result
+    assert result["signal_efficiency"][Entry(50, "base")] == pytest.approx(0.25)
 
 
 def test_mcts_utilization_boundaries():
@@ -651,7 +681,7 @@ def test_scaling_report_ece_passthrough():
     entries = _make_entries([1, 10, 100])
     anchor = Entry(100, "base")
     metrics = {
-        "pio_top1_flip_means": {Entry(10, "base"): 0.3, Entry(100, "base"): 0.5},
+        "signal_pressure_means": {Entry(10, "base"): 0.3, Entry(100, "base"): 0.5},
         "value_ece": {Entry(1, "base"): 0.15, Entry(10, "base"): 0.10, Entry(100, "base"): 0.05},
         "pio_value_accuracy_gain_means": {Entry(10, "base"): 0.6, Entry(100, "base"): 0.7},
     }

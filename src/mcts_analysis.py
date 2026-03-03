@@ -834,6 +834,8 @@ def run_analysis(config, Game, agent, entries, anchor,
             if entry in trans_snapshotted[slot]:
                 return
             trans_snapshotted[slot].add(entry)
+            if entry not in trans_per_entry:
+                return
             mid = id(mcts_obj)
             if mid not in tree_trans:
                 return

@@ -1347,6 +1347,9 @@ def run_analysis(config, Game, agent, entries, anchor,
     metrics["signal_efficiency_all"] = signal_efficiency_all
 
     # Signal Utilization: KL(entry) / KL(anchor) per position
+    # Use higher epsilon to filter positions where anchor barely differs from raw
+    # (uninformative positions where the ratio is meaningless), and use median
+    # to resist outliers from near-zero ceilings.
     signal_utilization_means = {}
     signal_utilization_all = {}
     ceiling = metrics["signal_ceiling"]
@@ -1355,55 +1358,51 @@ def run_analysis(config, Game, agent, entries, anchor,
             p = np.array(signal_pressure.get(entry, []))
             if len(p) > 0 and len(ceiling) > 0:
                 n = min(len(p), len(ceiling))
-                mask = ceiling[:n] > 1e-8
+                mask = ceiling[:n] > 0.01
                 if mask.any():
                     util = p[:n][mask] / ceiling[:n][mask]
-                    signal_utilization_means[entry] = float(np.mean(util))
+                    signal_utilization_means[entry] = float(np.median(util))
                     signal_utilization_all[entry] = util
     metrics["signal_utilization_means"] = signal_utilization_means
     metrics["signal_utilization_all"] = signal_utilization_all
 
-    # Noise metrics: correction recall and consistency between consecutive VC pairs
+    # Noise metrics: correction recall and consistency between consecutive VC pairs.
+    # Mode-agnostic: corrections are always measured vs vc=1 base regardless of mode,
+    # so we iterate over all entries sorted by VC to capture cross-mode transitions
+    # (e.g. 60 base -> 120sp).
     noise_recall = {}
     noise_consistency = {}
 
-    for mode in ("base", "selfplay"):
-        mode_entries = sorted([e for e in all_entries if e.mode == mode], key=entry_sort_key)
-        if Entry(1, "base") not in mode_entries and mode == "base":
-            mode_entries = [Entry(1, "base")] + mode_entries
+    all_sorted = sorted([e for e in all_entries if e.vc > 1], key=entry_sort_key)
+    for i in range(len(all_sorted) - 1):
+        e_lower, e_higher = all_sorted[i], all_sorted[i + 1]
 
-        for i in range(1, len(mode_entries)):
-            for j in range(i + 1, len(mode_entries)):
-                e_lower, e_higher = mode_entries[i], mode_entries[j]
-                if j != i + 1:
+        recall_vals = []
+        consistency_vals = []
+        for gid in range(ANALYSIS_GAMES):
+            for _, _, policies_at_pos, _ in game_positions[gid]:
+                raw_entry = Entry(1, "base")
+                if raw_entry not in policies_at_pos:
                     continue
+                if e_lower not in policies_at_pos or e_higher not in policies_at_pos:
+                    continue
+                move_raw = int(np.argmax(policies_at_pos[raw_entry]))
+                move_lower = int(np.argmax(policies_at_pos[e_lower]))
+                move_higher = int(np.argmax(policies_at_pos[e_higher]))
 
-                recall_vals = []
-                consistency_vals = []
-                for gid in range(ANALYSIS_GAMES):
-                    for _, _, policies_at_pos, _ in game_positions[gid]:
-                        raw_entry = Entry(1, "base")
-                        if raw_entry not in policies_at_pos:
-                            continue
-                        if e_lower not in policies_at_pos or e_higher not in policies_at_pos:
-                            continue
-                        move_raw = int(np.argmax(policies_at_pos[raw_entry]))
-                        move_lower = int(np.argmax(policies_at_pos[e_lower]))
-                        move_higher = int(np.argmax(policies_at_pos[e_higher]))
+                higher_flips = (move_higher != move_raw)
+                lower_flips = (move_lower != move_raw)
 
-                        higher_flips = (move_higher != move_raw)
-                        lower_flips = (move_lower != move_raw)
+                if higher_flips:
+                    recall_vals.append(float(lower_flips))
 
-                        if higher_flips:
-                            recall_vals.append(float(lower_flips))
+                if higher_flips and lower_flips:
+                    consistency_vals.append(float(move_lower == move_higher))
 
-                        if higher_flips and lower_flips:
-                            consistency_vals.append(float(move_lower == move_higher))
-
-                if recall_vals:
-                    noise_recall[e_lower] = np.array(recall_vals)
-                if consistency_vals:
-                    noise_consistency[e_lower] = np.array(consistency_vals)
+        if recall_vals:
+            noise_recall[e_lower] = np.array(recall_vals)
+        if consistency_vals:
+            noise_consistency[e_lower] = np.array(consistency_vals)
 
     metrics["noise_recall_means"] = {e: float(np.mean(v)) for e, v in noise_recall.items()}
     metrics["noise_recall_all"] = noise_recall
@@ -1740,7 +1739,8 @@ def _has_display():
 
 # Metrics that are binary or discrete rates — bar charts with Wilson CI instead of boxplots
 _rate_metrics = {"top1", "top3", "top9",
-                 "gap_value_accuracy", "pio_value_accuracy_gain"}
+                 "gap_value_accuracy", "pio_value_accuracy_gain",
+                 "noise_recall", "noise_consistency"}
 
 
 def _wilson_ci(k, n, z=1.96):

@@ -765,6 +765,10 @@ def run_analysis(config, Game, agent, entries, anchor,
     total_positions = 0
     pbar = tqdm.tqdm(desc="Positions", unit="pos")
 
+    # Transposition tracking: hash set + count per MCTS tree instance
+    tree_trans = {}  # id(mcts_obj) -> {"hashes": set(), "count": int}
+    trans_per_entry = {e: {"total": [], "unique": []} for e in entries}
+
     while active:
         n = len(active)
 
@@ -772,6 +776,12 @@ def run_analysis(config, Game, agent, entries, anchor,
         pos_policies = [{} for _ in range(n)]
         pos_values = [{} for _ in range(n)]
         pos_q_values = [None] * n
+
+        # Snapshot transposition state so we can compute per-position deltas
+        tree_trans_prev = {
+            mid: (d["count"], len(d["hashes"]))
+            for mid, d in tree_trans.items()
+        }
 
         # Identify batched entries (batch_size != 1) — these need their own trees
         batched_entries = [e for e in entries if _to_entry(e).batch_size != 1]
@@ -817,6 +827,24 @@ def run_analysis(config, Game, agent, entries, anchor,
 
         # Snapshot tracking: which entries have been captured for each slot
         snapshotted = [set() for _ in range(n)]
+        trans_snapshotted = [set() for _ in range(n)]
+
+        def _snapshot_trans(slot, entry, mcts_obj):
+            """Capture transposition delta for an entry."""
+            if entry in trans_snapshotted[slot]:
+                return
+            trans_snapshotted[slot].add(entry)
+            mid = id(mcts_obj)
+            if mid not in tree_trans:
+                return
+            total_now = tree_trans[mid]["count"]
+            unique_now = len(tree_trans[mid]["hashes"])
+            total_prev, unique_prev = tree_trans_prev.get(mid, (0, 0))
+            total_delta = total_now - total_prev
+            unique_delta = unique_now - unique_prev
+            if total_delta > 0:
+                trans_per_entry[entry]["total"].append(total_delta)
+                trans_per_entry[entry]["unique"].append(unique_delta)
 
         def _snapshot(slot, entry, mcts_obj, is_sp):
             """Capture policy and value snapshot for an entry."""
@@ -834,6 +862,7 @@ def run_analysis(config, Game, agent, entries, anchor,
                 # key is an entry tuple or "base_ref"
                 if isinstance(key, tuple) and rn >= key.vc:
                     _snapshot(slot, key, mcts_obj, is_sp)
+                    _snapshot_trans(slot, key, mcts_obj)
             else:
                 # Shared tree — check all unbatched entries of matching mode
                 # (batched entries snapshot from their own trees)
@@ -843,6 +872,7 @@ def run_analysis(config, Game, agent, entries, anchor,
                         continue
                     if entry.vc <= rn:
                         _snapshot(slot, entry, mcts_obj, is_sp)
+                        _snapshot_trans(slot, entry, mcts_obj)
 
         # Check if any trees are already at their target (tree reuse: root_n > 0)
         for gid, key, mcts_obj, target, is_sp, slot in work_items:
@@ -872,6 +902,11 @@ def run_analysis(config, Game, agent, entries, anchor,
                         break
 
                     h = alphazero.hash_game_state(leaf)
+                    mid = id(mcts_obj)
+                    if mid not in tree_trans:
+                        tree_trans[mid] = {"hashes": set(), "count": 0}
+                    tree_trans[mid]["count"] += 1
+                    tree_trans[mid]["hashes"].add(h)
                     if cache is not None:
                         result = cache.find(h, num_moves, num_players + 1)
                         if result is not None:
@@ -881,8 +916,10 @@ def run_analysis(config, Game, agent, entries, anchor,
                             # Check vc=1
                             if has_vc1_base and not is_sp and mcts_obj.root_n() >= 1 and not vc1_captured_base[slot]:
                                 _snapshot(slot, Entry(1, "base"), mcts_obj, is_sp)
+                                _snapshot_trans(slot, Entry(1, "base"), mcts_obj)
                             if has_vc1_selfplay and is_sp and mcts_obj.root_n() >= 1 and not vc1_captured_selfplay[slot]:
                                 _snapshot(slot, Entry(1, "selfplay"), mcts_obj, is_sp)
+                                _snapshot_trans(slot, Entry(1, "selfplay"), mcts_obj)
                             continue  # try next leaf
                     miss_items.append((gid, key, mcts_obj, leaf, h, is_sp, slot, gs))
                     break  # need eval, stop this tree
@@ -901,9 +938,11 @@ def run_analysis(config, Game, agent, entries, anchor,
                 # Check vc=1 after first sim
                 if has_vc1_base and not is_sp and mcts_obj.root_n() >= 1 and not vc1_captured_base[slot]:
                     _snapshot(slot, Entry(1, "base"), mcts_obj, is_sp)
+                    _snapshot_trans(slot, Entry(1, "base"), mcts_obj)
                     vc1_captured_base[slot] = True
                 if has_vc1_selfplay and is_sp and mcts_obj.root_n() >= 1 and not vc1_captured_selfplay[slot]:
                     _snapshot(slot, Entry(1, "selfplay"), mcts_obj, is_sp)
+                    _snapshot_trans(slot, Entry(1, "selfplay"), mcts_obj)
                     vc1_captured_selfplay[slot] = True
 
         # Process batched work items — grouped by (mode, batch_size), shared tree
@@ -948,6 +987,11 @@ def run_analysis(config, Game, agent, entries, anchor,
 
                     # NN agent — check cache
                     h = alphazero.hash_game_state(leaf)
+                    mid = id(mcts_obj)
+                    if mid not in tree_trans:
+                        tree_trans[mid] = {"hashes": set(), "count": 0}
+                    tree_trans[mid]["count"] += 1
+                    tree_trans[mid]["hashes"].add(h)
                     if cache is not None:
                         result = cache.find(h, num_moves, num_players + 1)
                         if result is not None:
@@ -985,10 +1029,12 @@ def run_analysis(config, Game, agent, entries, anchor,
                 for entry in sorted_group:
                     if entry.vc <= rn:
                         _snapshot(slot, entry, mcts_obj, is_sp)
+                        _snapshot_trans(slot, entry, mcts_obj)
 
             # Final snapshot for any remaining entries
             for entry in sorted_group:
                 _snapshot(slot, entry, mcts_obj, is_sp)
+                _snapshot_trans(slot, entry, mcts_obj)
 
         # Capture Q-values from the base reference tree at anchor_vc
         for slot, gid in enumerate(active):
@@ -1066,6 +1112,9 @@ def run_analysis(config, Game, agent, entries, anchor,
                         if is_sp and mcts_obj.root_n() > 0:
                             mcts_obj.apply_root_policy_temp()
                             mcts_obj.add_root_noise()
+
+        if not tree_reuse:
+            tree_trans.clear()
 
         active = next_active
 
@@ -1508,6 +1557,32 @@ def run_analysis(config, Game, agent, entries, anchor,
         print(f"{'Visits':>8s} {'MargKL':>10s}")
         for entry in sorted(marginal_kl_means.keys(), key=entry_sort_key):
             print(f"{entry_label(entry):>8s} {marginal_kl_means[entry]:>10.4f}")
+
+    # Transposition rate metrics
+    trans_rate_means = {}
+    trans_rate_all = {}
+    for entry in entries:
+        totals = trans_per_entry[entry]["total"]
+        uniques = trans_per_entry[entry]["unique"]
+        if totals:
+            t = np.array(totals, dtype=np.float64)
+            u = np.array(uniques, dtype=np.float64)
+            rates = 1.0 - u / np.maximum(t, 1)
+            trans_rate_means[entry] = float(np.mean(rates))
+            trans_rate_all[entry] = rates
+
+    metrics["transposition_rate_means"] = trans_rate_means
+    metrics["transposition_rate_all"] = trans_rate_all
+
+    if trans_rate_means:
+        print(f"\n--- Transposition Analysis ---")
+        print(f"{'Visits':>8s} {'Rate':>10s} {'Leaves':>10s} {'Unique':>10s} {'Multiplier':>12s}")
+        for entry in sorted(trans_rate_means.keys(), key=entry_sort_key):
+            t = np.array(trans_per_entry[entry]["total"])
+            u = np.array(trans_per_entry[entry]["unique"])
+            rate = trans_rate_means[entry]
+            mult = np.mean(t) / max(np.mean(u), 1)
+            print(f"{entry_label(entry):>8s} {rate*100:>9.1f}% {np.mean(t):>10.0f} {np.mean(u):>10.0f} {mult:>11.2f}x")
 
     print_cache_stats(cache)
     gc.collect()
@@ -2345,6 +2420,66 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
         fig.savefig(path, dpi=150, bbox_inches="tight")
         print(f"Saved: {path}")
 
+    # Figure: Transposition Analysis
+    trans_rate_means = metrics.get("transposition_rate_means", {}) if metrics else {}
+    trans_rate_all = metrics.get("transposition_rate_all", {}) if metrics else {}
+    if trans_rate_means:
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+        # Left: Transposition rate vs visit count
+        sorted_trans = sorted(trans_rate_means.keys(), key=entry_sort_key)
+        rates_pct = [trans_rate_means[e] * 100 for e in sorted_trans]
+        _plot_by_mode(axes[0], sorted_trans, rates_pct)
+        _set_entry_xticks(axes[0], sorted_trans)
+        axes[0].set_xlabel("MCTS Visit Count")
+        axes[0].set_ylabel("Transposition Rate (%)")
+        axes[0].set_title("Transposition Rate vs Visit Count")
+        axes[0].grid(True, alpha=0.3)
+
+        # Center: Search multiplier (total_leaves / unique_hashes)
+        trans_per_entry_data = {}
+        for entry in sorted_trans:
+            if entry in trans_rate_all:
+                r = trans_rate_all[entry]
+                # multiplier = 1 / (1 - rate) for each position
+                mult = 1.0 / np.maximum(1.0 - r, 1e-9)
+                trans_per_entry_data[entry] = float(np.mean(mult))
+        if trans_per_entry_data:
+            mult_entries = sorted(trans_per_entry_data.keys(), key=entry_sort_key)
+            mult_vals = [trans_per_entry_data[e] for e in mult_entries]
+            _plot_by_mode(axes[1], mult_entries, mult_vals,
+                          base_color="tab:red", sp_color="tab:orange")
+            _set_entry_xticks(axes[1], mult_entries)
+            axes[1].axhline(y=1.0, color="gray", linestyle="--", alpha=0.5, label="no waste")
+            axes[1].legend(fontsize=8)
+        axes[1].set_xlabel("MCTS Visit Count")
+        axes[1].set_ylabel("Search Multiplier (x)")
+        axes[1].set_title("Search Multiplier (leaves / unique states)")
+        axes[1].grid(True, alpha=0.3)
+
+        # Right: Distribution box plot
+        if trans_rate_all:
+            box_entries = sorted(trans_rate_all.keys(), key=entry_sort_key)
+            bp_data = [trans_rate_all[e] * 100 for e in box_entries]
+            labels = [entry_label(e) for e in box_entries]
+            bp = axes[2].boxplot(bp_data, tick_labels=labels,
+                                 showfliers=False, patch_artist=True)
+            for i, entry in enumerate(box_entries):
+                bp["boxes"][i].set_facecolor(
+                    "lightyellow" if entry.mode == "selfplay" else "lightskyblue")
+            axes[2].set_xlabel("MCTS Visit Count")
+            axes[2].set_ylabel("Transposition Rate (%)")
+            axes[2].set_title("Transposition Rate Distribution")
+            axes[2].grid(True, alpha=0.3)
+        else:
+            axes[2].set_visible(False)
+
+        fig.suptitle("Transposition Analysis (MCGS potential)", fontsize=14)
+        fig.tight_layout()
+        path = os.path.join(save_dir, "mcts_transposition_analysis.png")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        print(f"Saved: {path}")
+
     # Save raw data
     save_data = {
         "visit_counts": np.array(sorted(set(e.vc for e in entries))),
@@ -2406,6 +2541,13 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             if f"{prefix}_all" in metrics:
                 for entry, arr in metrics[f"{prefix}_all"].items():
                     save_data[f"{prefix}_all_{entry_label(entry)}"] = arr
+        # Transposition rate
+        if "transposition_rate_means" in metrics:
+            for entry, val in metrics["transposition_rate_means"].items():
+                save_data[f"transposition_rate_mean_{entry_label(entry)}"] = np.array(val)
+        if "transposition_rate_all" in metrics:
+            for entry, arr in metrics["transposition_rate_all"].items():
+                save_data[f"transposition_rate_all_{entry_label(entry)}"] = arr
         # Marginal KL
         if "pio_marginal_kl_means" in metrics:
             for entry, val in metrics["pio_marginal_kl_means"].items():

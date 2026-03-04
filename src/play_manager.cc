@@ -234,6 +234,8 @@ void PlayManager::play() {
           ++game.fast_move_count;
         }
         game.total_valid_moves += mcts.num_root_children();
+        game.total_tt_hits += mcts.tt_hits();
+        game.total_sims += mcts.root_n();
         ++game.move_count;
         for (auto& m : game.mcts) {
           m.update_root(*game.gs, chosen_m);
@@ -277,6 +279,8 @@ void PlayManager::play() {
             fast_total_avg_leaf_depth_ += game.fast_total_avg_leaf_depth;
             fast_total_search_entropy_ += game.fast_total_search_entropy;
             total_valid_moves_ += game.total_valid_moves;
+            total_tt_hits_ += game.total_tt_hits;
+            total_sims_ += game.total_sims;
             total_move_count_ += game.move_count;
             full_move_count_ += game.full_move_count;
             fast_move_count_ += game.fast_move_count;
@@ -285,6 +289,8 @@ void PlayManager::play() {
             game.fast_total_avg_leaf_depth = 0;
             game.fast_total_search_entropy = 0;
             game.total_valid_moves = 0;
+            game.total_tt_hits = 0;
+            game.total_sims = 0;
             game.move_count = 0;
             game.full_move_count = 0;
             game.fast_move_count = 0;
@@ -332,7 +338,17 @@ void PlayManager::play() {
     // Find the next leaf to process and put it in the inference queue.
     const auto cp = game.gs->current_player();
     auto& mcts = game.mcts[cp];
+    const auto goal = game.capped ? params_.playout_cap_depth
+                                  : seat_visits_[game.perm_index][cp];
     auto leaf = mcts.find_leaf(*game.gs);
+    while (!mcts.leaf_needs_eval() && mcts.depth() < goal) {
+      mcts.backprop_leaf();
+      leaf = mcts.find_leaf(*game.gs);
+    }
+    if (mcts.depth() >= goal) {
+      awaiting_mcts_.push(i.value());
+      continue;
+    }
 
     auto group = game.seat_perm[cp];
     auto et = eval_types_.empty() ? EvalType::NN : eval_types_[group];
@@ -347,7 +363,7 @@ void PlayManager::play() {
     }
 
     game.canonical = leaf->canonicalized();
-    game.leaf_hash = hash_game_state(*leaf);
+    game.leaf_hash = mcts.leaf_hash();
 
     if (!caches_.empty() && caches_[group]) {
       if (caches_[group]->find(game.leaf_hash, game.pi.data(), game.v.data())) {
@@ -368,7 +384,8 @@ MCTS PlayManager::make_mcts(uint8_t perm_index, int player) const {
               params_.fpu_reduction,
               base_gs_->relative_values(),
               static_cast<bool>(seat_root_fpu_zero_[perm_index][player]),
-              params_.shaped_dirichlet};
+              params_.shaped_dirichlet,
+              params_.mcgs};
 }
 
 void PlayManager::update_inferences(const uint8_t group,

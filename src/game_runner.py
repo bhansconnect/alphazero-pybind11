@@ -197,6 +197,7 @@ SelfPlayResult = namedtuple(
         "min_inference_ms",
         "max_inference_ms",
         "theoretical_hr",
+        "tt_hit_rate",
     ],
 )
 
@@ -301,16 +302,18 @@ class GameRunner:
             hist_saver = threading.Thread(target=self.hist_saver)
             hist_saver.start()
 
-        for mw in mcts_workers:
-            mw.join()
+        def _join_all(threads):
+            for t in threads:
+                while t.is_alive():
+                    t.join(timeout=1.0)
+
+        _join_all(mcts_workers)
         if has_nn:
-            for bt in batcher_threads:
-                bt.join()
-            gpu_thread.join()
-            result_thread.join()
-        monitor.join()
+            _join_all(batcher_threads)
+            _join_all([gpu_thread, result_thread])
+        _join_all([monitor])
         if self.pm.params().history_enabled:
-            hist_saver.join()
+            _join_all([hist_saver])
 
     @tracy_zone
     def monitor(self):
@@ -560,6 +563,7 @@ def base_params(config, start_temp, bs, cb):
     params.max_batch_size = bs
     params.concurrent_games = bs * cb
     params.fpu_reduction = config.fpu_reduction
+    params.mcgs = config.mcgs
     return params
 
 
@@ -1475,6 +1479,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     fast_avg_entropy = pm.fast_avg_search_entropy()
     avg_mpt = pm.avg_moves_per_turn()
     avg_vm = pm.avg_valid_moves()
+    tt_hr = pm.tt_hit_rate()
     # Cache pressure metrics
     max_cache = pm.cache_max_size()
     cache_sz = pm.cache_size()
@@ -1526,6 +1531,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         avg_inference_ms=avg_inference_ms, median_inference_ms=median_inference_ms,
         min_inference_ms=min_inference_ms, max_inference_ms=max_inference_ms,
         theoretical_hr=theoretical_hr,
+        tt_hit_rate=tt_hr,
     )
 
 
@@ -1623,6 +1629,7 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
     avg_entropy = pm.avg_search_entropy()
     avg_mpt = pm.avg_moves_per_turn()
     avg_vm = pm.avg_valid_moves()
+    tt_hr = pm.tt_hit_rate()
 
     hits = pm.cache_hits()
     total = hits + pm.cache_misses()
@@ -1646,7 +1653,7 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
 
     del gr, nn, nn_past, pm
     gc.collect()
-    return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm
+    return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm, tt_hr
 
 
 def get_lr(config, iteration, lr_state):
@@ -2018,7 +2025,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 elif phase == "Calibrate ELO":
                     compare_start = max(0, source_n - config.bootstrap_compare_past)
                     for past_iter in tqdm.tqdm(range(compare_start, source_n), desc="  ELO", leave=False):
-                        nn_rate, draw_rate, _, _, _, _, _, _ = play_past(
+                        nn_rate, draw_rate, _, _, _, _, _, _, _ = play_past(
                             config, paths, experiment_name, config.compare_mcts_visits,
                             source_n, past_iter, config.past_compare_batch_size,
                             fallback_checkpoint_dir=source_paths["checkpoint"],
@@ -2097,7 +2104,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             with TracyZone("stage_history"):
                 past_iter = max(0, i - config.compare_past)
                 if past_iter != i and math.isnan(wr[i, past_iter]):
-                    nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy, bench_mpt, bench_vm = play_past(
+                    nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy, bench_mpt, bench_vm, bench_tt_hr = play_past(
                         config, paths, experiment_name,
                         config.compare_mcts_visits, i, past_iter, config.past_compare_batch_size,
                         fallback_checkpoint_dir=fallback_checkpoint_dir,
@@ -2111,6 +2118,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     run.track(bench_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}", "search": "full"})
                     run.track(bench_mpt, name="moves_per_turn", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
                     run.track(bench_vm, name="avg_valid_moves", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
+                    run.track(bench_tt_hr, name="tt_hit_rate", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
                     postfix[f"vs -{config.compare_past}"] = _fmt_pct(nn_rate + draw_rate / Game.NUM_PLAYERS())
                     gc.collect()
             stage_times["history"] = time.time() - stage_start
@@ -2151,6 +2159,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     run.track(sp.fast_avg_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": "self", "search": "fast"})
                 run.track(sp.avg_mpt, name="moves_per_turn", epoch=i, step=total_train_steps, context={"vs": "self"})
                 run.track(sp.avg_vm, name="avg_valid_moves", epoch=i, step=total_train_steps, context={"vs": "self"})
+                run.track(float(sp.tt_hit_rate), name="tt_hit_rate", epoch=i, step=total_train_steps, context={"vs": "self"})
                 run.track(float(sp.saturation), name="cache_rate", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "saturation"})
                 run.track(float(sp.churn_rate), name="cache_rate", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "churn"})
                 run.track(float(sp.avg_batch_size), name="batch_size", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "avg"})
@@ -2215,11 +2224,12 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 panel_entropy = 0
                 panel_mpt = 0
                 panel_vm = 0
+                panel_tt_hr = 0
                 best_win_rate = 0
                 for gate_net in tqdm.tqdm(
                     panel, desc=f"Pitting against Panel {panel}", leave=False
                 ):
-                    nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy, gate_mpt, gate_vm = play_past(
+                    nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy, gate_mpt, gate_vm, gate_tt_hr = play_past(
                         config, paths, experiment_name,
                         config.compare_mcts_visits, next_net, gate_net, config.gate_compare_batch_size,
                         fallback_checkpoint_dir=fallback_checkpoint_dir,
@@ -2231,6 +2241,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     panel_entropy += gate_entropy
                     panel_mpt += gate_mpt
                     panel_vm += gate_vm
+                    panel_tt_hr += gate_tt_hr
                     wr[next_net, gate_net] = nn_rate + draw_rate / Game.NUM_PLAYERS()
                     wr[gate_net, next_net] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
                     gc.collect()
@@ -2242,6 +2253,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         run.track(gate_entropy, name="search_entropy", epoch=next_net, step=total_train_steps, context={"vs": "best", "search": "full"})
                         run.track(gate_mpt, name="moves_per_turn", epoch=next_net, step=total_train_steps, context={"vs": "best"})
                         run.track(gate_vm, name="avg_valid_moves", epoch=next_net, step=total_train_steps, context={"vs": "best"})
+                        run.track(gate_tt_hr, name="tt_hit_rate", epoch=next_net, step=total_train_steps, context={"vs": "best"})
                         best_win_rate = nn_rate + draw_rate / Game.NUM_PLAYERS()
                         postfix["vs best"] = _fmt_pct(best_win_rate)
                         pbar.set_postfix(postfix)
@@ -2252,6 +2264,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 panel_entropy /= len(panel)
                 panel_mpt /= len(panel)
                 panel_vm /= len(panel)
+                panel_tt_hr /= len(panel)
                 run.track(panel_nn_rate, name="win_rate", epoch=next_net, step=total_train_steps, context={"vs": "panel", "from": "all_games"})
                 run.track(panel_draw_rate, name="draw_rate", epoch=next_net, step=total_train_steps, context={"vs": "panel", "from": "all_games"})
                 run.track(panel_game_length, name="average_game_length", epoch=next_net, context={"vs": "panel"})
@@ -2259,6 +2272,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 run.track(panel_entropy, name="search_entropy", epoch=next_net, step=total_train_steps, context={"vs": "panel"})
                 run.track(panel_mpt, name="moves_per_turn", epoch=next_net, step=total_train_steps, context={"vs": "panel"})
                 run.track(panel_vm, name="avg_valid_moves", epoch=next_net, step=total_train_steps, context={"vs": "panel"})
+                run.track(panel_tt_hr, name="tt_hit_rate", epoch=next_net, step=total_train_steps, context={"vs": "panel"})
                 panel_win_rate = panel_nn_rate + panel_draw_rate / Game.NUM_PLAYERS()
                 if len(panel) > 1:
                     postfix["vs panel"] = _fmt_pct(panel_win_rate)

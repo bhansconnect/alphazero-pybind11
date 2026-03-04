@@ -361,103 +361,106 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
         for a in nn_agents:
             cache_dict[a] = create_sharded_cache(Game, per_agent_cache)
 
-    for r in tqdm.trange(rounds, desc="Rounds"):
-        dist = math.ceil(dist / 2)
+    try:
+        for r in tqdm.trange(rounds, desc="Rounds"):
+            dist = math.ceil(dist / 2)
 
-        with tqdm.trange(count // 2, desc="Matchups", leave=False) as pbar:
-            current = len(rankings) - 1
-            played = [False] * count
+            with tqdm.trange(count // 2, desc="Matchups", leave=False) as pbar:
+                current = len(rankings) - 1
+                played = [False] * count
 
-            while current >= 0:
-                if played[rankings[current]]:
-                    current -= 1
-                    continue
-                played[rankings[current]] = True
+                while current >= 0:
+                    if played[rankings[current]]:
+                        current -= 1
+                        continue
+                    played[rankings[current]] = True
 
-                # Find opponent at target distance
-                offset = dist
-                while current - offset >= 0 and (
-                    played[rankings[current - offset]]
-                    or not math.isnan(
-                        win_matrix[rankings[current], rankings[current - offset]]
-                    )
-                ):
-                    offset += 1
-
-                if current - offset < 0:
-                    print("Falling back to shorter distance games")
-                    offset = 1
+                    # Find opponent at target distance
+                    offset = dist
                     while current - offset >= 0 and (
                         played[rankings[current - offset]]
                         or not math.isnan(
-                            win_matrix[
-                                rankings[current], rankings[current - offset]
-                            ]
+                            win_matrix[rankings[current], rankings[current - offset]]
                         )
                     ):
                         offset += 1
+
                     if current - offset < 0:
-                        print("No one to play? Relaxing constraints")
+                        print("Falling back to shorter distance games")
                         offset = 1
-                        while not math.isnan(
-                            win_matrix[
-                                rankings[current], rankings[current - offset]
-                            ]
+                        while current - offset >= 0 and (
+                            played[rankings[current - offset]]
+                            or not math.isnan(
+                                win_matrix[
+                                    rankings[current], rankings[current - offset]
+                                ]
+                            )
                         ):
                             offset += 1
+                        if current - offset < 0:
+                            print("No one to play? Relaxing constraints")
+                            offset = 1
+                            while not math.isnan(
+                                win_matrix[
+                                    rankings[current], rankings[current - offset]
+                                ]
+                            ):
+                                offset += 1
 
-                played[rankings[current - offset]] = True
+                    played[rankings[current - offset]] = True
 
-                i = rankings[current]
-                j = rankings[current - offset]
+                    i = rankings[current]
+                    j = rankings[current - offset]
 
-                # Handle dummy player
-                if agents[i] == "dummy":
-                    win_matrix[i, j] = 0.0
-                    win_matrix[j, i] = 1.0
+                    # Handle dummy player
+                    if agents[i] == "dummy":
+                        win_matrix[i, j] = 0.0
+                        win_matrix[j, i] = 1.0
+                        current -= 1
+                        continue
+                    elif agents[j] == "dummy":
+                        win_matrix[i, j] = 1.0
+                        win_matrix[j, i] = 0.0
+                        current -= 1
+                        continue
+
+                    p1, d1 = load_agent(Game, agents[i], model_path, mcts_visits, rand_agents)
+                    p2, d2 = load_agent(Game, agents[j], model_path, mcts_visits, rand_agents)
+
+                    players = [p2] * Game.NUM_PLAYERS()
+                    depths = [d2] * Game.NUM_PLAYERS()
+                    players[0] = p1
+                    depths[0] = d1
+
+                    # Build per-group caches for this matchup
+                    matchup_agents = [agents[i]] + [agents[j]] * (Game.NUM_PLAYERS() - 1)
+                    matchup_caches = _build_matchup_caches(
+                        Game, matchup_agents, players, list(range(Game.NUM_PLAYERS())), cache_dict
+                    )
+
+                    win_rates = pit_agents(
+                        config,
+                        Game,
+                        players,
+                        depths,
+                        bs,
+                        f"{_agent_label(agents[i])}-{_agent_label(agents[j])}",
+                        cache_size=0 if matchup_caches else cache_size,
+                        caches=matchup_caches,
+                    )
+
+                    win_matrix[i, j] = win_rates[0]
+                    win_matrix[j, i] = win_rates[1]
+                    pbar.update()
                     current -= 1
-                    continue
-                elif agents[j] == "dummy":
-                    win_matrix[i, j] = 1.0
-                    win_matrix[j, i] = 0.0
-                    current -= 1
-                    continue
 
-                p1, d1 = load_agent(Game, agents[i], model_path, mcts_visits, rand_agents)
-                p2, d2 = load_agent(Game, agents[j], model_path, mcts_visits, rand_agents)
-
-                players = [p2] * Game.NUM_PLAYERS()
-                depths = [d2] * Game.NUM_PLAYERS()
-                players[0] = p1
-                depths[0] = d1
-
-                # Build per-group caches for this matchup
-                matchup_agents = [agents[i]] + [agents[j]] * (Game.NUM_PLAYERS() - 1)
-                matchup_caches = _build_matchup_caches(
-                    Game, matchup_agents, players, list(range(Game.NUM_PLAYERS())), cache_dict
-                )
-
-                win_rates = pit_agents(
-                    config,
-                    Game,
-                    players,
-                    depths,
-                    bs,
-                    f"{_agent_label(agents[i])}-{_agent_label(agents[j])}",
-                    cache_size=0 if matchup_caches else cache_size,
-                    caches=matchup_caches,
-                )
-
-                win_matrix[i, j] = win_rates[0]
-                win_matrix[j, i] = win_rates[1]
-                pbar.update()
-                current -= 1
-
-        # Update ELO and rankings
-        elo = calc_elo(elo, win_matrix)
-        rankings = list(np.argsort(elo))
-        tqdm.tqdm.write(f"ELO: {np.array2string(elo, precision=0)}")
-        tqdm.tqdm.write(f"Rankings: {rankings}")
+            # Update ELO and rankings
+            elo = calc_elo(elo, win_matrix)
+            rankings = list(np.argsort(elo))
+            tqdm.tqdm.write(f"ELO: {np.array2string(elo, precision=0)}")
+            tqdm.tqdm.write(f"Rankings: {rankings}")
+    except KeyboardInterrupt:
+        print("\nMonrad tournament interrupted, returning partial results.")
 
     # Print shared cache stats
     for agent_name, cache in cache_dict.items():
@@ -479,70 +482,73 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
         for a in nn_agents:
             cache_dict[a] = create_sharded_cache(Game, per_agent_cache)
 
-    with tqdm.trange(count * (count - 1) // 2, desc="Pit Agents") as pbar:
-        for i in range(count):
-            p1, d1 = load_agent(Game, agents[i], model_path, mcts_visits, rand_agents)
-            for j in range(i + 1, count):
-                p2, d2 = load_agent(
-                    Game, agents[j], model_path, mcts_visits, rand_agents
-                )
-                players = [p2] * Game.NUM_PLAYERS()
-                depths = [d2] * Game.NUM_PLAYERS()
-                players[0] = p1
-                depths[0] = d1
+    try:
+        with tqdm.trange(count * (count - 1) // 2, desc="Pit Agents") as pbar:
+            for i in range(count):
+                p1, d1 = load_agent(Game, agents[i], model_path, mcts_visits, rand_agents)
+                for j in range(i + 1, count):
+                    p2, d2 = load_agent(
+                        Game, agents[j], model_path, mcts_visits, rand_agents
+                    )
+                    players = [p2] * Game.NUM_PLAYERS()
+                    depths = [d2] * Game.NUM_PLAYERS()
+                    players[0] = p1
+                    depths[0] = d1
 
-                matchup_agents = [agents[i]] + [agents[j]] * (Game.NUM_PLAYERS() - 1)
-                matchup_caches = _build_matchup_caches(
-                    Game, matchup_agents, players, list(range(Game.NUM_PLAYERS())), cache_dict
-                )
+                    matchup_agents = [agents[i]] + [agents[j]] * (Game.NUM_PLAYERS() - 1)
+                    matchup_caches = _build_matchup_caches(
+                        Game, matchup_agents, players, list(range(Game.NUM_PLAYERS())), cache_dict
+                    )
 
-                win_rates = pit_agents(
-                    config,
-                    Game,
-                    players,
-                    depths,
-                    bs,
-                    f"{_agent_label(agents[i])}-{_agent_label(agents[j])}",
-                    cache_size=0 if matchup_caches else cache_size,
-                    caches=matchup_caches,
-                )
+                    win_rates = pit_agents(
+                        config,
+                        Game,
+                        players,
+                        depths,
+                        bs,
+                        f"{_agent_label(agents[i])}-{_agent_label(agents[j])}",
+                        cache_size=0 if matchup_caches else cache_size,
+                        caches=matchup_caches,
+                    )
 
-                if Game.NUM_PLAYERS() == 2:
-                    win_matrix[i, j] = win_rates[0]
-                    win_matrix[j, i] = win_rates[1]
+                    if Game.NUM_PLAYERS() == 2:
+                        win_matrix[i, j] = win_rates[0]
+                        win_matrix[j, i] = win_rates[1]
+                        pbar.update()
+                        continue
+
+                    # For >2 players, swap positions and average
+                    players = [p1] * Game.NUM_PLAYERS()
+                    depths = [d1] * Game.NUM_PLAYERS()
+                    players[0] = p2
+                    depths[0] = d2
+
+                    matchup_agents2 = [agents[j]] + [agents[i]] * (Game.NUM_PLAYERS() - 1)
+                    matchup_caches2 = _build_matchup_caches(
+                        Game, matchup_agents2, players, list(range(Game.NUM_PLAYERS())), cache_dict
+                    )
+
+                    win_rates2 = pit_agents(
+                        config,
+                        Game,
+                        players,
+                        depths,
+                        bs,
+                        f"{_agent_label(agents[j])}-{_agent_label(agents[i])}",
+                        cache_size=0 if matchup_caches2 else cache_size,
+                        caches=matchup_caches2,
+                    )
+
+                    wr1 = win_rates[0]
+                    wr2 = win_rates2[0]
+                    for k in range(1, len(win_rates)):
+                        wr1 += win_rates2[k]
+                        wr2 += win_rates[k]
+                    win_matrix[i, j] = wr1 / 2
+                    win_matrix[j, i] = wr2 / 2
                     pbar.update()
-                    continue
-
-                # For >2 players, swap positions and average
-                players = [p1] * Game.NUM_PLAYERS()
-                depths = [d1] * Game.NUM_PLAYERS()
-                players[0] = p2
-                depths[0] = d2
-
-                matchup_agents2 = [agents[j]] + [agents[i]] * (Game.NUM_PLAYERS() - 1)
-                matchup_caches2 = _build_matchup_caches(
-                    Game, matchup_agents2, players, list(range(Game.NUM_PLAYERS())), cache_dict
-                )
-
-                win_rates2 = pit_agents(
-                    config,
-                    Game,
-                    players,
-                    depths,
-                    bs,
-                    f"{_agent_label(agents[j])}-{_agent_label(agents[i])}",
-                    cache_size=0 if matchup_caches2 else cache_size,
-                    caches=matchup_caches2,
-                )
-
-                wr1 = win_rates[0]
-                wr2 = win_rates2[0]
-                for k in range(1, len(win_rates)):
-                    wr1 += win_rates2[k]
-                    wr2 += win_rates[k]
-                win_matrix[i, j] = wr1 / 2
-                win_matrix[j, i] = wr2 / 2
-                pbar.update()
+    except KeyboardInterrupt:
+        print("\nRound-robin tournament interrupted, returning partial results.")
 
     # Print shared cache stats
     for agent_name, cache in cache_dict.items():

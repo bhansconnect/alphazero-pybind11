@@ -60,6 +60,7 @@ class PlayerConfig:
         self.mcts = None
         self.show_hints = False
         self.greedy = False
+        self.mcgs = True
         self.batch_size = 0  # 0 = auto, 1 = off (sequential), >1 = fixed
         self._calibrated_timed_bs = None
 
@@ -79,7 +80,8 @@ class PlayerConfig:
         batch_str = ""
         if self.batch_size != 1:
             batch_str = f", batch={'auto' if self.batch_size == 0 else self.batch_size}"
-        return f"AI(net={net_str}, nodes={node_str}, time={time_str}, temp={self.temperature}{greedy_str}{batch_str})"
+        mcgs_str = "" if self.mcgs else ", mcgs=off"
+        return f"AI(net={net_str}, nodes={node_str}, time={time_str}, temp={self.temperature}{greedy_str}{batch_str}{mcgs_str})"
 
 
 class PlayContext:
@@ -125,7 +127,7 @@ def _get_cache(ctx, player_idx):
     return ctx.cache
 
 
-def create_mcts(game_class, cpuct=DEFAULT_CPUCT, fpu_reduction=DEFAULT_FPU_REDUCTION):
+def create_mcts(game_class, cpuct=DEFAULT_CPUCT, fpu_reduction=DEFAULT_FPU_REDUCTION, mcgs=True):
     """Create a new MCTS instance."""
     return alphazero.MCTS(
         cpuct,
@@ -135,6 +137,9 @@ def create_mcts(game_class, cpuct=DEFAULT_CPUCT, fpu_reduction=DEFAULT_FPU_REDUC
         1.0,
         fpu_reduction,
         game_class().relative_values(),
+        False,
+        False,
+        mcgs,
     )
 
 
@@ -350,7 +355,7 @@ def get_ai_probs(ctx, player_idx, valids):
     wld = None
 
     if pcfg.mcts is None:
-        pcfg.mcts = create_mcts(ctx.game_class, ctx.cpuct, ctx.fpu_reduction)
+        pcfg.mcts = create_mcts(ctx.game_class, ctx.cpuct, ctx.fpu_reduction, pcfg.mcgs)
 
     should_search = (pcfg.think_time is not None and pcfg.think_time > 0) or (
         pcfg.node_limit is not None and pcfg.node_limit > 0
@@ -842,6 +847,13 @@ def handle_config_command(parts, ctx, game_name, base_dir):
                         print(f"Invalid batch size: {val}")
                         return "config"
             print_status(ctx)
+    elif cmd == "mcgs":
+        if len(parts) >= (3 if player is not None else 2):
+            val = parts[-1]
+            for p in targets:
+                ctx.players[p].mcgs = val in ["on", "true", "1", "yes"]
+                ctx.players[p].mcts = None  # reset tree to pick up new setting
+            print_status(ctx)
     elif cmd == "delay":
         if len(parts) >= 2:
             try:
@@ -882,7 +894,7 @@ def parse_meta_command(cmd, ctx, game_name="", base_dir="data"):
     if lower == "manual":
         return "manual"
     parts = lower.split()
-    if parts and parts[0] in ["net", "nodes", "time", "temp", "hints", "greedy", "batch", "delay"]:
+    if parts and parts[0] in ["net", "nodes", "time", "temp", "hints", "greedy", "mcgs", "batch", "delay"]:
         return handle_config_command(parts, ctx, game_name, base_dir)
     return None
 
@@ -905,6 +917,7 @@ def print_generic_help():
     print("  temp <0|1> <value>       - Temperature")
     print("  hints <0|1> <on|off>     - AI hints for human player")
     print("  greedy <0|1> <on|off>    - Always play best move")
+    print("  mcgs <0|1> <on|off>      - MCGS graph search (transpositions)")
     print("  batch <0|1> <0|1|N>      - Batch size (0=auto, 1=off, N=fixed)")
     print("  delay <seconds>          - Turn delay for auto-full mode")
 
@@ -1057,6 +1070,12 @@ def prompt_ai_config(ctx, args):
         for p in ctx.players:
             if p.is_ai:
                 p.batch_size = batch_val
+
+    # MCGS
+    mcgs = _prompt_bool("MCGS (graph search)", True)
+    for p in ctx.players:
+        if p.is_ai:
+            p.mcgs = mcgs
 
     # Tree reuse
     ctx.tree_reuse = _prompt_bool("Tree reuse", ctx.tree_reuse)

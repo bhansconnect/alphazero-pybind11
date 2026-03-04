@@ -48,6 +48,8 @@ struct GameData {
   double fast_total_avg_leaf_depth = 0;  // fast searches only
   double fast_total_search_entropy = 0;  // fast searches only
   double total_valid_moves = 0;          // all moves
+  uint64_t total_tt_hits = 0;           // MCGS TT hits (all moves)
+  uint64_t total_sims = 0;             // MCGS total sims (all moves)
   uint32_t move_count = 0;              // all moves
   uint32_t full_move_count = 0;         // full searches only
   uint32_t fast_move_count = 0;         // fast searches only
@@ -75,6 +77,7 @@ struct PlayParams {
   float fpu_reduction = 0.0;
   bool root_fpu_zero = false;
   bool shaped_dirichlet = false;
+  bool mcgs = true;
   bool policy_target_pruning = false;
   float resign_percent = 0.0;
   float resign_playthrough_percent = 0.0;
@@ -185,6 +188,10 @@ class DLLEXPORT PlayManager {
     if (total_move_count_ == 0) return 0;
     return static_cast<float>(total_valid_moves_ / static_cast<double>(total_move_count_));
   }
+  float tt_hit_rate() const noexcept {
+    if (total_sims_ == 0) return 0;
+    return static_cast<float>(static_cast<double>(total_tt_hits_) / static_cast<double>(total_sims_));
+  }
   size_t awaiting_mcts_count() const noexcept { return awaiting_mcts_.size(); }
   size_t awaiting_inference_count() const noexcept {
     size_t out = 0;
@@ -251,6 +258,8 @@ class DLLEXPORT PlayManager {
   double fast_total_avg_leaf_depth_ = 0;  // fast searches only
   double fast_total_search_entropy_ = 0;  // fast searches only
   double total_valid_moves_ = 0;
+  uint64_t total_tt_hits_ = 0;
+  uint64_t total_sims_ = 0;
   uint64_t total_move_count_ = 0;
   uint64_t full_move_count_ = 0;
   uint64_t fast_move_count_ = 0;

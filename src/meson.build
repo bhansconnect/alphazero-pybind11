@@ -110,7 +110,7 @@ test('gtest tests', connect4_gs_test)
 mcts = library(
     'mcts',
     'mcts.cc',
-    dependencies: [eigen_dep, absl_hash_dep, tracy_dep],
+    dependencies: [eigen_dep, absl_hash_dep, absl_container_dep, tracy_dep],
     cpp_args: lib_args,
 )
 
@@ -146,8 +146,8 @@ test('gtest tests', photosynthesis_gs_test)
 mcts_test = executable(
   'mcts_test',
   'mcts_test.cc',
-  dependencies: [gtest_dep, eigen_dep, absl_hash_dep],
-  link_with: [mcts, connect4_gs, game_state_lib],
+  dependencies: [gtest_dep, eigen_dep, absl_hash_dep, absl_container_dep],
+  link_with: [mcts, connect4_gs, star_gambit_gs, game_state_lib],
 )
 test('gtest tests', mcts_test)
 

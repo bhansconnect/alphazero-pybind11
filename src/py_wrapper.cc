@@ -170,6 +170,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def(py::init<float, uint32_t, uint32_t, float, float, float>())
       .def(py::init<float, uint32_t, uint32_t, float, float, float, bool>())
       .def(py::init<float, uint32_t, uint32_t, float, float, float, bool, bool, bool>())
+      .def(py::init<float, uint32_t, uint32_t, float, float, float, bool, bool, bool, bool>())
       .def("update_root", &MCTS::update_root)
       .def("find_leaf", &MCTS::find_leaf)
       .def("process_result", &MCTS::process_result)
@@ -186,6 +187,9 @@ PYBIND11_MODULE(alphazero, m) {
       .def("process_result_batched", &MCTS::process_result_batched)
       .def("in_flight_count", &MCTS::in_flight_count)
       .def("reset_batch", &MCTS::reset_batch)
+      .def("tt_hits", &MCTS::tt_hits)
+      .def("tt_size", &MCTS::tt_size)
+      .def("leaf_hash", &MCTS::leaf_hash)
       .def_static("pick_move", &MCTS::pick_move);
 
   py::class_<S3FIFOCache>(m, "S3FIFOCache")
@@ -284,6 +288,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("fpu_reduction", &PlayParams::fpu_reduction)
       .def_readwrite("root_fpu_zero", &PlayParams::root_fpu_zero)
       .def_readwrite("shaped_dirichlet", &PlayParams::shaped_dirichlet)
+      .def_readwrite("mcgs", &PlayParams::mcgs)
       .def_readwrite("policy_target_pruning", &PlayParams::policy_target_pruning)
       .def_readwrite("mcts_root_temp", &PlayParams::mcts_root_temp)
       .def_readwrite("resign_percent", &PlayParams::resign_percent)
@@ -330,6 +335,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def("fast_avg_search_entropy", &PlayManager::fast_avg_search_entropy)
       .def("avg_moves_per_turn", &PlayManager::avg_moves_per_turn)
       .def("avg_valid_moves", &PlayManager::avg_valid_moves)
+      .def("tt_hit_rate", &PlayManager::tt_hit_rate)
       .def("play", &PlayManager::play, py::call_guard<py::gil_scoped_release>())
       .def("pop_game", &PlayManager::pop_game,
            py::call_guard<py::gil_scoped_release>())

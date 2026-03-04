@@ -21,6 +21,7 @@ import gc
 import time as _time
 from typing import NamedTuple
 import re
+import readline  # noqa: F401 -- enables arrow keys/history for input()
 import numpy as np
 import torch
 import tqdm
@@ -51,35 +52,41 @@ ANALYSIS_GAMES = 64
 
 
 class Entry(NamedTuple):
-    """An analysis entry: (visit_count, mode, batch_size).
+    """An analysis entry: (visit_count, mode, batch_size, mcgs).
 
     mode: "base" (no noise, eval temp) or "selfplay" (Dirichlet, root temp).
     batch_size: WU-UCT batch size. 1 = sequential (default).
+    mcgs: enable Monte Carlo Graph Search (transposition merging).
     """
     vc: int
     mode: str
     batch_size: int = 1
+    mcgs: bool = True
 
 
 # --- Entry helpers ---
 
 def _to_entry(e):
-    """Normalize a tuple to an Entry (handles 2-tuples for backward compat)."""
+    """Normalize a tuple to an Entry (handles 2/3/4-tuples for backward compat)."""
     if isinstance(e, Entry):
         return e
     if len(e) == 2:
-        return Entry(e[0], e[1], 1)
+        return Entry(e[0], e[1], 1, True)
+    if len(e) == 3:
+        return Entry(e[0], e[1], e[2], True)
     return Entry(*e)
 
 
 def entry_label(entry):
-    """Label for an entry: '200', '200sp', '200b8', '200spb8'."""
+    """Label for an entry: '200', '200sp', '200b8', '200spb8', '200t', '200spt'."""
     e = _to_entry(entry)
     label = f"{e.vc}sp" if e.mode == "selfplay" else str(e.vc)
     if e.batch_size > 1:
         label += f"b{e.batch_size}"
     elif e.batch_size == 0:
         label += "b0"
+    if not e.mcgs:
+        label += "t"
     return label
 
 
@@ -91,9 +98,9 @@ def _resolve_batch_size(entry):
 
 
 def entry_sort_key(entry):
-    """Sort key: by VC, then base before selfplay, then batch_size."""
+    """Sort key: by VC, then base before selfplay, then batch_size, then mcgs."""
     e = _to_entry(entry)
-    return (e.vc, 0 if e.mode == "base" else 1, e.batch_size)
+    return (e.vc, 0 if e.mode == "base" else 1, e.batch_size, int(e.mcgs))
 
 
 def _load_agent(Game, network_path, use_playout):
@@ -206,7 +213,7 @@ def select_checkpoint(checkpoints):
 BENCHMARK_POSITIONS = 30
 
 
-def _make_mcts(is_selfplay, config, Game):
+def _make_mcts(is_selfplay, config, Game, mcgs=True):
     """Create an MCTS instance with config params for the given mode."""
     num_players = Game.NUM_PLAYERS()
     num_moves = Game.NUM_MOVES()
@@ -215,10 +222,10 @@ def _make_mcts(is_selfplay, config, Game):
         return alphazero.MCTS(config.cpuct, num_players, num_moves, 0.25,
                               config.mcts_root_temp, config.fpu_reduction,
                               relative_values, config.root_fpu_zero,
-                              config.shaped_dirichlet)
+                              config.shaped_dirichlet, mcgs)
     return alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.0,
                           config.fpu_reduction, relative_values,
-                          config.root_fpu_zero, config.shaped_dirichlet)
+                          config.root_fpu_zero, config.shaped_dirichlet, mcgs)
 
 
 def run_benchmark(config, Game, agent, entries, cache_size=0, tree_reuse=False):
@@ -234,7 +241,7 @@ def run_benchmark(config, Game, agent, entries, cache_size=0, tree_reuse=False):
         gs = Game()
         cache = create_cache(Game, cache_size) if not isinstance(agent, str) else None
         is_sp = entry.mode == "selfplay"
-        mcts = _make_mcts(is_sp, config, Game)
+        mcts = _make_mcts(is_sp, config, Game, mcgs=entry.mcgs)
 
         nn_agent = None if isinstance(agent, str) else agent
         eval_type = agent if isinstance(agent, str) else "network"
@@ -262,9 +269,9 @@ def run_benchmark(config, Game, agent, entries, cache_size=0, tree_reuse=False):
                 try:
                     mcts.update_root(gs, action)
                 except Exception:
-                    mcts = _make_mcts(is_sp, config, Game)
+                    mcts = _make_mcts(is_sp, config, Game, mcgs=entry.mcgs)
             else:
-                mcts = _make_mcts(is_sp, config, Game)
+                mcts = _make_mcts(is_sp, config, Game, mcgs=entry.mcgs)
 
         sps = (entry.vc * positions) / total_time if total_time > 0 else 0
         results[entry] = {
@@ -385,25 +392,26 @@ def interactive_config():
     print("  (1 = raw network policy, no MCTS search)")
     print("  (append 'sp' for selfplay mode, e.g. 200sp)")
     print("  (append 'b<N>' for batched WU-UCT, e.g. 200b8, 200spb16, 120b0 for auto)")
+    print("  (append 't' for tree-only (no MCGS), 'g' to confirm MCGS (default), e.g. 200t, 200spt)")
     print("  (same VC can appear in both modes, e.g. 200, 200sp)")
     vc_input = input("Enter comma-separated visit counts or press Enter for defaults: ").strip()
     if vc_input:
         entries = []
         for token in vc_input.split(","):
             token = token.strip().lower()
-            # Parse optional bN suffix
-            batch_size = 1
-            batch_match = re.search(r'b(\d+)$', token)
-            if batch_match:
-                batch_size = int(batch_match.group(1))
-                token = token[:batch_match.start()]
-            if token.endswith("sp"):
-                vc = int(token[:-2])
-                mode = "selfplay"
-            else:
-                vc = int(token)
-                mode = "base"
-            entry = Entry(vc, mode, batch_size)
+            m = re.fullmatch(r'(\d+)(sp)?(b\d+)?([gt]{0,2})?', token)
+            if not m:
+                print(f"  Warning: could not parse '{token}', skipping")
+                continue
+            vc = int(m.group(1))
+            mode = "selfplay" if m.group(2) else "base"
+            batch_size = int(m.group(3)[1:]) if m.group(3) else 1
+            flags = m.group(4) or ''
+            if 'g' in flags and 't' in flags:
+                print(f"  Warning: '{token}' has both 'g' and 't', skipping")
+                continue
+            mcgs = 't' not in flags  # default True; only 't' disables; 'g' or empty keeps True
+            entry = Entry(vc, mode, batch_size, mcgs)
             if entry not in entries:
                 entries.append(entry)
         anchor = entries[-1]  # last entry typed
@@ -718,16 +726,17 @@ def run_analysis(config, Game, agent, entries, anchor,
 
     cache = create_cache(Game, cache_size) if not isinstance(agent, str) else None
 
-    def _make_base_mcts():
+    def _make_base_mcts(mcgs=True):
         return alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.0,
                               config.fpu_reduction, relative_values,
-                              config.root_fpu_zero, config.shaped_dirichlet)
+                              config.root_fpu_zero, config.shaped_dirichlet,
+                              mcgs)
 
-    def _make_selfplay_mcts():
+    def _make_selfplay_mcts(mcgs=True):
         return alphazero.MCTS(config.cpuct, num_players, num_moves, 0.25,
                               config.mcts_root_temp, config.fpu_reduction,
                               relative_values, config.root_fpu_zero,
-                              config.shaped_dirichlet)
+                              config.shaped_dirichlet, mcgs)
 
     # Tree storage: trees[gid] = {key: (mcts_obj, target_vc, is_selfplay)}
     # key is either an entry tuple (vc, mode) for tree_reuse, or "base"/"selfplay"
@@ -736,28 +745,28 @@ def run_analysis(config, Game, agent, entries, anchor,
 
     if tree_reuse:
         # One persistent tree per entry per game (unbatched only)
-        # Batched entries grouped by (mode, batch_size) share one tree per group
+        # Batched entries grouped by (mode, batch_size, mcgs) share one tree per group
         for gid in range(ANALYSIS_GAMES):
             trees[gid] = {}
             for entry in entries:
                 if entry.batch_size != 1:
                     continue
                 is_sp = entry.mode == "selfplay"
-                mcts_obj = _make_selfplay_mcts() if is_sp else _make_base_mcts()
+                mcts_obj = _make_selfplay_mcts(mcgs=entry.mcgs) if is_sp else _make_base_mcts(mcgs=entry.mcgs)
                 trees[gid][entry] = (mcts_obj, entry.vc, is_sp)
             # Group batched entries
             _tr_groups = {}
             for entry in entries:
                 if entry.batch_size != 1:
-                    _tr_groups.setdefault((entry.mode, entry.batch_size), []).append(entry)
-            for (mode, bs), group in _tr_groups.items():
+                    _tr_groups.setdefault((entry.mode, entry.batch_size, entry.mcgs), []).append(entry)
+            for (mode, bs, mcgs), group in _tr_groups.items():
                 is_sp = mode == "selfplay"
-                mcts_obj = _make_selfplay_mcts() if is_sp else _make_base_mcts()
+                mcts_obj = _make_selfplay_mcts(mcgs=mcgs) if is_sp else _make_base_mcts(mcgs=mcgs)
                 target = max(e.vc for e in group)
-                trees[gid][("batched", mode, bs)] = (mcts_obj, target, is_sp)
+                trees[gid][("batched", mode, bs, mcgs)] = (mcts_obj, target, is_sp)
             # Need a separate base ref tree if anchor is selfplay or batched
             if anchor.mode == "selfplay" or anchor.batch_size != 1:
-                trees[gid]["base_ref"] = (_make_base_mcts(), anchor_vc, False)
+                trees[gid]["base_ref"] = (_make_base_mcts(mcgs=anchor.mcgs), anchor_vc, False)
     # Shared trees created per-position below
 
     print(f"Playing {ANALYSIS_GAMES} games with anchor {entry_label(anchor)} per position...")
@@ -785,30 +794,42 @@ def run_analysis(config, Game, agent, entries, anchor,
 
         # Identify batched entries (batch_size != 1) — these need their own trees
         batched_entries = [e for e in entries if _to_entry(e).batch_size != 1]
-        # Group batched entries by (mode, batch_size) to share trees
+        # Group batched entries by (mode, batch_size, mcgs) to share trees
         batched_groups = {}
         for entry in batched_entries:
-            gk = (entry.mode, entry.batch_size)
+            gk = (entry.mode, entry.batch_size, entry.mcgs)
             batched_groups.setdefault(gk, []).append(entry)
 
         if not tree_reuse:
             # Create fresh shared trees per position
             for slot, gid in enumerate(active):
                 trees[gid] = {}
-                # Base shared tree — runs to max of base VCs (unbatched only) and anchor_vc
-                unbatched_base_vcs = sorted(set(e.vc for e in base_entries if _to_entry(e).batch_size == 1))
-                base_target = max(unbatched_base_vcs + [anchor_vc]) if unbatched_base_vcs else anchor_vc
-                trees[gid]["base"] = (_make_base_mcts(), base_target, False)
-                # Selfplay shared tree (if any unbatched selfplay entries)
-                unbatched_sp_vcs = sorted(set(e.vc for e in selfplay_entries if _to_entry(e).batch_size == 1))
-                if unbatched_sp_vcs:
-                    trees[gid]["selfplay"] = (_make_selfplay_mcts(), max(unbatched_sp_vcs), True)
-                # Batched entries: one shared tree per (mode, batch_size) group
-                for (mode, bs), group in batched_groups.items():
+                # Base shared trees — split by mcgs flag
+                for mcgs_val in (False, True):
+                    unbatched_base = [e for e in base_entries
+                                      if _to_entry(e).batch_size == 1 and e.mcgs == mcgs_val]
+                    unbatched_base_vcs = sorted(set(e.vc for e in unbatched_base))
+                    if mcgs_val:
+                        if unbatched_base_vcs:
+                            target = max(unbatched_base_vcs)
+                            trees[gid][("base", True)] = (_make_base_mcts(mcgs=True), target, False)
+                    else:
+                        base_target = max(unbatched_base_vcs + [anchor_vc]) if unbatched_base_vcs else anchor_vc
+                        trees[gid]["base"] = (_make_base_mcts(mcgs=False), base_target, False)
+                # Selfplay shared trees — split by mcgs flag
+                for mcgs_val in (False, True):
+                    unbatched_sp = [e for e in selfplay_entries
+                                    if _to_entry(e).batch_size == 1 and e.mcgs == mcgs_val]
+                    unbatched_sp_vcs = sorted(set(e.vc for e in unbatched_sp))
+                    if unbatched_sp_vcs:
+                        key = ("selfplay", mcgs_val) if mcgs_val else "selfplay"
+                        trees[gid][key] = (_make_selfplay_mcts(mcgs=mcgs_val), max(unbatched_sp_vcs), True)
+                # Batched entries: one shared tree per (mode, batch_size, mcgs) group
+                for (mode, bs, mcgs_val), group in batched_groups.items():
                     is_sp = mode == "selfplay"
-                    mcts_obj = _make_selfplay_mcts() if is_sp else _make_base_mcts()
+                    mcts_obj = _make_selfplay_mcts(mcgs=mcgs_val) if is_sp else _make_base_mcts(mcgs=mcgs_val)
                     target = max(e.vc for e in group)
-                    group_key = ("batched", mode, bs)
+                    group_key = ("batched", mode, bs, mcgs_val)
                     trees[gid][group_key] = (mcts_obj, target, is_sp)
 
         # Build the work list: (gid, key, tree, target_vc, is_selfplay)
@@ -820,7 +841,7 @@ def run_analysis(config, Game, agent, entries, anchor,
         for slot, gid in enumerate(active):
             for key, (mcts_obj, target, is_sp) in trees[gid].items():
                 item = (gid, key, mcts_obj, target, is_sp, slot)
-                if isinstance(key, tuple) and len(key) == 3 and key[0] == "batched":
+                if isinstance(key, tuple) and len(key) >= 3 and key[0] == "batched":
                     batched_work_items.append(item)
                 else:
                     work_items.append(item)
@@ -857,20 +878,33 @@ def run_analysis(config, Game, agent, entries, anchor,
             wld = np.array(mcts_obj.root_value())
             pos_values[slot][entry] = float(wld[0])
 
+        def _key_mcgs(key):
+            """Extract mcgs flag from a tree key."""
+            if isinstance(key, Entry):
+                return key.mcgs
+            if isinstance(key, tuple) and len(key) == 2 and isinstance(key[1], bool):
+                return key[1]  # ("base", True) or ("selfplay", True)
+            if isinstance(key, tuple) and len(key) >= 4:
+                return key[3]  # ("batched", mode, bs, mcgs)
+            return False
+
         def _check_snapshots(gid, key, mcts_obj, is_sp, slot):
             """Check if root_n has reached any target entries for this tree."""
             rn = mcts_obj.root_n()
             if tree_reuse:
                 # key is an entry tuple or "base_ref"
-                if isinstance(key, tuple) and rn >= key.vc:
+                if isinstance(key, Entry) and rn >= key.vc:
                     _snapshot(slot, key, mcts_obj, is_sp)
                     _snapshot_trans(slot, key, mcts_obj)
             else:
-                # Shared tree — check all unbatched entries of matching mode
+                # Shared tree — check all unbatched entries of matching mode + mcgs
                 # (batched entries snapshot from their own trees)
+                key_mcgs = _key_mcgs(key)
                 entries_to_check = selfplay_entries if is_sp else base_entries
                 for entry in entries_to_check:
                     if _to_entry(entry).batch_size != 1:
+                        continue
+                    if entry.mcgs != key_mcgs:
                         continue
                     if entry.vc <= rn:
                         _snapshot(slot, entry, mcts_obj, is_sp)
@@ -947,10 +981,14 @@ def run_analysis(config, Game, agent, entries, anchor,
                     _snapshot_trans(slot, Entry(1, "selfplay"), mcts_obj)
                     vc1_captured_selfplay[slot] = True
 
-        # Process batched work items — grouped by (mode, batch_size), shared tree
+        # Process batched work items — grouped by (mode, batch_size, mcgs), shared tree
         for gid, key, mcts_obj, target, is_sp, slot in batched_work_items:
-            _, mode, batch_size = key  # ("batched", mode, bs)
-            group_entries = batched_groups[(mode, batch_size)]
+            if len(key) == 4:
+                _, mode, batch_size, mcgs_val = key  # ("batched", mode, bs, mcgs)
+            else:
+                _, mode, batch_size = key  # legacy ("batched", mode, bs)
+                mcgs_val = False
+            group_entries = batched_groups[(mode, batch_size, mcgs_val)]
             sorted_group = sorted(group_entries, key=lambda e: e.vc)
             gs = game_states[gid]
             bs = _resolve_batch_size(group_entries[0])  # all same batch_size

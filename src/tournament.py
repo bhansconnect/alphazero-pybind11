@@ -559,7 +559,7 @@ def _agent_label(agent_name):
     name = os.path.basename(str(agent_name))
     if name.endswith(".pt"):
         name = name[:-3]
-    return name[:30]
+    return name
 
 
 # ---------------------------------------------------------------------------

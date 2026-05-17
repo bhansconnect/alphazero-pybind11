@@ -1762,16 +1762,22 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
         vgames = pm.variant_games_completed(vid)
         if vgames == 0:
             continue
-        vscores = pm.variant_scores(vid)
         vnn = 0.0
-        # Same perm-aggregation logic: sum nn-seat wins across all seat perms.
+        # Mirror the perm-aggregation logic used for nn_rate: use per-perm variant
+        # scores so nn-seat wins and nn_past-seat wins don't cancel each other out.
         for perm_idx in range(pm.num_seat_perms()):
+            vperm_scores = pm.variant_perm_scores(vid, perm_idx)
+            vperm_games = pm.variant_perm_games_completed(vid, perm_idx)
+            if vperm_games == 0:
+                continue
             perm = seat_perms[perm_idx]
             for seat in range(num_players):
-                if perm[seat] == 0:
-                    vnn += vscores[seat] / vgames
+                if perm[seat] == 0:  # nn is in this seat
+                    vnn += vperm_scores[seat] / vperm_games
         variant_nn_rates[vid] = vnn / n_perms
-        variant_draw_rates[vid] = vscores[num_players] / vgames  # draw slot is last
+        # Draw rate doesn't depend on seat assignment, use global aggregate.
+        vscores = pm.variant_scores(vid)
+        variant_draw_rates[vid] = vscores[num_players] / vgames
 
     del gr, nn, nn_past, pm
     gc.collect()
@@ -2157,7 +2163,7 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps):
             wr_mat = np.genfromtxt(wr_path, delimiter=",")
             n = min(iteration + 2, wr_mat.shape[0])
             wr_display = np.where(np.isnan(wr_mat[:n, :n]), 0.5, wr_mat[:n, :n])
-            sz = max(4, n // 3)
+            sz = min(max(4, n // 3), 12)
             fig2, ax2 = plt.subplots(figsize=(sz, sz))
             im2 = ax2.imshow(wr_display, cmap="RdYlGn", vmin=0, vmax=1, interpolation="nearest")
             ax2.set_title(f"Win Rate Matrix (iteration {iteration})", fontsize=11)
@@ -2749,7 +2755,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         run.track(current_counts[vi] / total_sc, name="variant_sample_frac",
                                   epoch=i, step=total_train_steps, context={"variant": vname})
 
-            if _is_unified_game(config) and i % 10 == 0:
+            if _is_unified_game(config):
                 stage_start = time.time()
                 _generate_visualizations(config, paths, i, run, total_train_steps)
                 stage_times["visualizations"] = time.time() - stage_start

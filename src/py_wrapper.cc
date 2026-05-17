@@ -391,6 +391,9 @@ PYBIND11_MODULE(alphazero, m) {
       .def("variant_scores", &PlayManager::variant_scores,
            py::return_value_policy::reference_internal)
       .def("variant_games_completed", &PlayManager::variant_games_completed)
+      .def("variant_perm_scores", &PlayManager::variant_perm_scores,
+           py::return_value_policy::reference_internal)
+      .def("variant_perm_games_completed", &PlayManager::variant_perm_games_completed)
       .def("set_eager", &PlayManager::set_eager)
       .def("cache_evictions", &PlayManager::cache_evictions)
       .def("cache_reinserts", &PlayManager::cache_reinserts)

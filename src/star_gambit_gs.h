@@ -24,6 +24,16 @@ struct SkirmishConfig {
   static constexpr int STARTING_DREADNOUGHTS = 0;
 };
 
+struct ShowdownConfig {
+  static constexpr int BOARD_SIDE = 5;
+  static constexpr int MAX_FIGHTERS = 4;
+  static constexpr int MAX_CRUISERS = 0;
+  static constexpr int MAX_DREADNOUGHTS = 1;
+  static constexpr int STARTING_FIGHTERS = 4;
+  static constexpr int STARTING_CRUISERS = 0;
+  static constexpr int STARTING_DREADNOUGHTS = 1;
+};
+
 struct ClashConfig {
   static constexpr int BOARD_SIDE = 5;
   static constexpr int MAX_FIGHTERS = 3;
@@ -672,6 +682,7 @@ class StarGambitGS : public GameState {
 // ============================================================================
 
 using StarGambitSkirmishGS = StarGambitGS<SkirmishConfig>;
+using StarGambitShowdownGS = StarGambitGS<ShowdownConfig>;
 using StarGambitClashGS = StarGambitGS<ClashConfig>;
 using StarGambitBattleGS = StarGambitGS<BattleConfig>;
 
@@ -683,6 +694,7 @@ using StarGambitGS_Legacy = StarGambitSkirmishGS;
 // ============================================================================
 
 extern template class StarGambitGS<SkirmishConfig>;
+extern template class StarGambitGS<ShowdownConfig>;
 extern template class StarGambitGS<ClashConfig>;
 extern template class StarGambitGS<BattleConfig>;
 

@@ -146,6 +146,7 @@ class GameConfig:
 
 
 SKIRMISH = GameConfig(3, 1, 0, board_side=5)
+SHOWDOWN = GameConfig(4, 0, 1, board_side=5)
 CLASH = GameConfig(3, 2, 1, board_side=5)
 BATTLE = GameConfig(4, 3, 2, board_side=6)
 
@@ -613,8 +614,9 @@ def print_help():
 
 VARIANT_MAP = {
     "1": "star_gambit_skirmish",
-    "2": "star_gambit_clash",
-    "3": "star_gambit_battle",
+    "2": "star_gambit_showdown",
+    "3": "star_gambit_clash",
+    "4": "star_gambit_battle",
 }
 
 
@@ -724,10 +726,11 @@ class StarGambitUI(GameUI):
         print_actions_menu(valids, self.cfg, gs, probs=probs, wld=wld)
 
     def select_variant(self) -> str | None:
-        """Offer Skirmish/Clash/Battle selection."""
+        """Offer Skirmish/Showdown/Clash/Battle selection."""
         print("Select variant:")
         print("  1. Skirmish (3F/1C)")
-        print("  2. Clash (3F/2C/1D)")
-        print("  3. Battle (4F/3C/2D)")
+        print("  2. Showdown (4F/1D)")
+        print("  3. Clash (3F/2C/1D)")
+        print("  4. Battle (4F/3C/2D)")
         choice = input("Variant [1]: ").strip() or "1"
         return VARIANT_MAP.get(choice, "star_gambit_skirmish")

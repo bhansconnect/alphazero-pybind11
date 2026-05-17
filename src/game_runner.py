@@ -848,7 +848,7 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
     # Find files in tmp_history
     file_triples = glob_file_triples(tmp_hist, f"{iteration:04d}-*-canonical-*.ptz")
     if not file_triples:
-        return np.zeros(4)
+        return np.zeros(0)
 
     # Pass 1: compute per-sample loss by loading one file at a time
     nn = neural_net.NNWrapper.load_checkpoint(
@@ -875,8 +875,6 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
     sample_count = len(loss)
     total_loss = np.sum(loss)
 
-    surprise_pcts = np.percentile(loss, [25, 50, 75, 95]) if sample_count > 0 else np.zeros(4)
-
     # Compute copy counts vectorized
     if total_loss <= 0:
         copies = np.ones(sample_count, dtype=np.int64)
@@ -886,6 +884,7 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
         frac_w = weights - int_w
         frac_mask = np.random.random(sample_count) < frac_w
         copies = int_w + frac_mask.astype(np.int64)
+    loss_for_logging = loss
     del loss
 
     # Clear old history for iteration before saving new history
@@ -946,7 +945,7 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
             if os.path.exists(fp):
                 os.remove(fp)
 
-    return surprise_pcts
+    return loss_for_logging
 
 
 @tracy_zone
@@ -2034,9 +2033,9 @@ def _analyze_iteration_variants(config, paths, experiment_name, iteration):
         if mask.sum() == 0:
             continue
         result[vname] = {
-            "pi_loss": float(pi_losses[mask].mean()),
-            "v_loss": float(v_losses[mask].mean()),
-            "entropy": float(entropies[mask].mean()),
+            "pi_loss": pi_losses[mask],
+            "v_loss": v_losses[mask],
+            "entropy": entropies[mask],
         }
     return result
 
@@ -2678,11 +2677,15 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             stage_start = time.time()
             with TracyZone("stage_resampling"):
-                surprise_pcts = resample_by_surprise(config, paths, experiment_name, i)
+                surprise_loss_arr = resample_by_surprise(config, paths, experiment_name, i)
             stage_times["resampling"] = time.time() - stage_start
-            for label, pct in zip(["p25", "p50", "p75", "p95"], surprise_pcts):
-                run.track(float(pct), name="surprise_loss", epoch=i, step=total_train_steps,
-                          context={"pct": label})
+            if len(surprise_loss_arr) > 0:
+                try:
+                    import aim as _aim
+                    run.track(_aim.Distribution(surprise_loss_arr), name="surprise_loss",
+                              epoch=i, step=total_train_steps)
+                except Exception:
+                    pass
 
             stage_start = time.time()
             with TracyZone("stage_training"):
@@ -2713,12 +2716,27 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 if _is_unified_game(config):
                     variant_stats = _analyze_iteration_variants(config, paths, experiment_name, i)
                     for vname, stats in variant_stats.items():
-                        run.track(stats["pi_loss"], name="loss", epoch=i, step=total_train_steps,
+                        # Mean scalars for time-series trend lines
+                        run.track(float(stats["pi_loss"].mean()), name="loss", epoch=i,
+                                  step=total_train_steps,
                                   context={"type": "policy", "variant": vname})
-                        run.track(stats["v_loss"], name="loss", epoch=i, step=total_train_steps,
+                        run.track(float(stats["v_loss"].mean()), name="loss", epoch=i,
+                                  step=total_train_steps,
                                   context={"type": "value", "variant": vname})
-                        run.track(stats["entropy"], name="loss", epoch=i, step=total_train_steps,
+                        run.track(float(stats["entropy"].mean()), name="loss", epoch=i,
+                                  step=total_train_steps,
                                   context={"type": "target_entropy", "variant": vname})
+                        # Distributions for spread/skew visibility
+                        try:
+                            import aim as _aim
+                            run.track(_aim.Distribution(stats["pi_loss"]), name="pi_loss_dist",
+                                      epoch=i, step=total_train_steps, context={"variant": vname})
+                            run.track(_aim.Distribution(stats["v_loss"]), name="v_loss_dist",
+                                      epoch=i, step=total_train_steps, context={"variant": vname})
+                            run.track(_aim.Distribution(stats["entropy"]), name="entropy_dist",
+                                      epoch=i, step=total_train_steps, context={"variant": vname})
+                        except Exception:
+                            pass
             stage_times["variant_analysis"] = time.time() - stage_start
 
             stage_start = time.time()

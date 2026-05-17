@@ -2594,7 +2594,12 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
     # Unified variant mixing state (only used for star_gambit_unified).
     unified_probs = None
-    prev_variant_sample_counts = None
+    variant_sample_count_history = []  # rolling 5-iter window to smooth prob corrections
+    if _is_unified_game(config) and start > 0:
+        for past in range(max(0, start - 5), start):
+            counts = _count_variant_samples(paths, past)
+            if counts is not None:
+                variant_sample_count_history.append(counts)
     if not _is_unified_game(config):
         wr_v = None
         elo_v = None
@@ -2659,10 +2664,16 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             stage_start = time.time()
             with TracyZone("stage_selfplay"):
                 if _is_unified_game(config):
-                    prev_variant_sample_counts = (
-                        _count_variant_samples(paths, i - 1) if i > 0 else None
+                    counts = _count_variant_samples(paths, i - 1) if i > 0 else None
+                    if counts is not None:
+                        variant_sample_count_history.append(counts)
+                        if len(variant_sample_count_history) > 5:
+                            variant_sample_count_history.pop(0)
+                    rolled_counts = (
+                        [sum(h[v] for h in variant_sample_count_history) for v in range(4)]
+                        if variant_sample_count_history else None
                     )
-                    unified_probs = _compute_unified_probs(config, prev_variant_sample_counts)
+                    unified_probs = _compute_unified_probs(config, rolled_counts)
                     for vi, vname in enumerate(UNIFIED_VARIANT_NAMES):
                         run.track(unified_probs[vi], name="variant_prob", epoch=i,
                                   step=total_train_steps, context={"variant": vname})

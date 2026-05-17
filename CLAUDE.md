@@ -10,13 +10,17 @@ This project uses [uv](https://docs.astral.sh/uv/) for Python dependency managem
 
 ```bash
 # Install all dependencies + build tools (Python 3.11, torch, numpy, etc.)
-uv sync
+uv sync --no-install-project
 
 # Editable install (builds the C++ extension)
-NINJA=$(pwd)/.venv/bin/ninja uv pip install --python .venv/bin/python --no-build-isolation -e .
+NINJA=$(pwd)/.venv/bin/ninja uv pip install --python .venv/bin/python --no-build-isolation --no-cache -e .
 ```
 
 **Always use `uv run` to execute Python and build commands.** This ensures the correct environment is used without manual activation.
+
+> **Why these flags?** `--no-install-project` skips the local package during sync so uv doesn't
+> try to build it without `NINJA` set. `--no-cache` forces meson to run fresh every time, which
+> ensures the build directory is created and the correct ninja path is stored in the editable hook.
 
 ## Build Commands
 
@@ -24,8 +28,8 @@ NINJA=$(pwd)/.venv/bin/ninja uv pip install --python .venv/bin/python --no-build
 # Build and test C++ (build/cp311 is created by the editable install above)
 uv run ninja -C build/cp311 test
 
-# Rebuild Python package after C++ changes
-NINJA=$(pwd)/.venv/bin/ninja uv pip install --python .venv/bin/python --no-build-isolation -e .
+# Rebuild after C++ changes (no reinstall needed)
+uv run ninja -C build/cp311
 ```
 
 ## Key Files
@@ -97,9 +101,6 @@ uv run meson setup build/cp311 -Dtracy_enabled=true --buildtype=release --reconf
 
 # Build
 uv run ninja -C build/cp311
-
-# Reinstall Python package
-NINJA=$(pwd)/.venv/bin/ninja uv pip install --python .venv/bin/python --no-build-isolation -e .
 ```
 
 ### Running Tracy

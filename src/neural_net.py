@@ -565,10 +565,12 @@ class NNWrapper:
                 l_pi = self.loss_pi(target_pis, out_pi)
                 total_loss = l_pi + l_v
                 total_loss.backward()
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.nnet.parameters(), float('inf'))
                 self.optimizer.step()
 
                 v_val = l_v.item()
                 pi_val = l_pi.item()
+                grad_norm_val = grad_norm.item()
 
                 with torch.no_grad():
                     mask = target_pis > 0
@@ -609,6 +611,12 @@ class NNWrapper:
                     epoch=epoch,
                     step=total_train_steps + current_step,
                     context={"type": "kl_gap"},
+                )
+                run.track(
+                    grad_norm_val,
+                    name="grad_norm",
+                    epoch=epoch,
+                    step=total_train_steps + current_step,
                 )
 
                 # record loss and update progress bar.

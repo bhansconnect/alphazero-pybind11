@@ -23,13 +23,13 @@ git clone <repo-url>
 cd alphazero-pybind11
 
 # Install all dependencies + build tools (Python 3.11, torch, numpy, etc.)
-uv sync
+uv sync --no-install-project
 
 # Editable install (builds the C++ extension)
-NINJA=$(pwd)/.venv/bin/ninja uv pip install --python .venv/bin/python --no-build-isolation -e .
+NINJA=$(pwd)/.venv/bin/ninja uv pip install --python .venv/bin/python --no-build-isolation --no-cache -e .
 ```
 
-That's it. `uv sync` automatically downloads Python 3.11 and installs all dependencies (including PyTorch with CUDA on Linux or MPS on macOS). The editable install builds the C++ extension.
+`uv sync --no-install-project` downloads Python 3.11 and installs all dependencies (including PyTorch with CUDA on Linux). The editable install then builds the C++ extension — the `NINJA` env var tells the build where to find ninja, and `--no-cache` ensures meson always runs fresh so the build directory is properly created.
 
 ### Build the C++ Tests
 
@@ -80,16 +80,6 @@ uv run python -m pytest src/test_config.py src/test_game_ui.py src/test_mcts_ana
 
 # Full integration tests (slow, ~3-5 min)
 uv run python -m pytest src/test_train.py -v
-```
-
-### Optional Dependencies
-
-```bash
-# Aim (training visualization)
-uv sync --extra aim
-
-# Matplotlib (plotting)
-uv sync --extra plot
 ```
 
 ## Important Files

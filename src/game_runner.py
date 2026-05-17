@@ -2007,7 +2007,7 @@ def _analyze_iteration_variants(config, paths, experiment_name, iteration):
     device = nn.device
     nn.nnet.eval()
 
-    all_pi_loss, all_v_loss, all_entropy = [], [], []
+    all_pi_loss, all_v_loss, all_entropy, all_top1, all_v_pred, all_v_actual = [], [], [], [], [], []
     bs = config.train_batch_size
     with torch.no_grad():
         for start in range(0, len(c_data), bs):
@@ -2018,12 +2018,18 @@ def _analyze_iteration_variants(config, paths, experiment_name, iteration):
             out_v, out_pi = nn.nnet(cb)
             all_pi_loss.append(nn.sample_loss_pi(pib, out_pi).cpu().numpy())
             all_v_loss.append(nn.sample_loss_v(vb, out_v).cpu().numpy())
-            # Target entropy: only over non-zero (valid-move) entries
             all_entropy.append((-(pib * (pib + 1e-9).log()).sum(dim=1)).cpu().numpy())
+            all_top1.append(pib.max(dim=1).values.cpu().numpy())
+            # Value calibration: predicted vs actual current-player win prob (index 0)
+            all_v_pred.append(torch.exp(out_v)[:, 0].cpu().numpy())
+            all_v_actual.append(vb[:, 0].cpu().numpy())
 
-    pi_losses = np.concatenate(all_pi_loss)
-    v_losses = np.concatenate(all_v_loss)
-    entropies = np.concatenate(all_entropy)
+    pi_losses  = np.concatenate(all_pi_loss)
+    v_losses   = np.concatenate(all_v_loss)
+    entropies  = np.concatenate(all_entropy)
+    top1       = np.concatenate(all_top1)
+    v_pred     = np.concatenate(all_v_pred)
+    v_actual   = np.concatenate(all_v_actual)
     del nn, c_data, v_data, pi_data
     gc.collect()
 
@@ -2033,9 +2039,12 @@ def _analyze_iteration_variants(config, paths, experiment_name, iteration):
         if mask.sum() == 0:
             continue
         result[vname] = {
-            "pi_loss": pi_losses[mask],
-            "v_loss": v_losses[mask],
-            "entropy": entropies[mask],
+            "pi_loss":  pi_losses[mask],
+            "v_loss":   v_losses[mask],
+            "entropy":  entropies[mask],
+            "top1":     top1[mask],
+            "v_pred":   v_pred[mask],
+            "v_actual": v_actual[mask],
         }
     return result
 
@@ -2071,7 +2080,7 @@ def _log_win_rate_matrix(paths, iteration, run, total_train_steps):
         plt.close("all")
 
 
-def _generate_visualizations(config, paths, iteration, run, total_train_steps):
+def _generate_visualizations(config, paths, iteration, run, total_train_steps, variant_stats=None):
     """Generate and log phase-aware action heatmap and win rate matrix as aim images.
 
     Only called for unified games. All errors are caught silently so a missing
@@ -2241,12 +2250,47 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps):
                              fontsize=8)
         plt.tight_layout()
 
+        # --- Figure 5: value calibration curves per variant ---
+        fig5 = None
+        if variant_stats:
+            n_variants = len(variant_stats)
+            fig5, axes5 = plt.subplots(1, n_variants, figsize=(4 * n_variants, 4))
+            if n_variants == 1:
+                axes5 = [axes5]
+            fig5.suptitle(f"Iteration {iteration} — Value Calibration", fontsize=12)
+            bins = np.linspace(0, 1, 11)
+            bin_centers = (bins[:-1] + bins[1:]) / 2
+            for ax, (vname, stats) in zip(axes5, variant_stats.items()):
+                vp = stats["v_pred"]
+                va = stats["v_actual"]
+                bin_idx = np.digitize(vp, bins) - 1
+                bin_idx = np.clip(bin_idx, 0, 9)
+                actual_means = np.array([
+                    va[bin_idx == b].mean() if (bin_idx == b).sum() > 0 else np.nan
+                    for b in range(10)
+                ])
+                counts = np.array([(bin_idx == b).sum() for b in range(10)])
+                ax.plot([0, 1], [0, 1], "k--", alpha=0.4, label="Perfect")
+                valid = ~np.isnan(actual_means)
+                sc = ax.scatter(bin_centers[valid], actual_means[valid],
+                                c=counts[valid], cmap="YlOrRd", s=60, zorder=3)
+                ax.plot(bin_centers[valid], actual_means[valid], alpha=0.7)
+                plt.colorbar(sc, ax=ax, label="n samples")
+                ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+                ax.set_xlabel("Predicted win prob"); ax.set_ylabel("Actual win rate")
+                ax.set_title(f"{vname.capitalize()}\n(n={len(vp)})", fontsize=9)
+                ax.legend(fontsize=7)
+            plt.tight_layout()
+
         run.track(aim_lib.Image(fig1), name="action_heatmap",
                   epoch=iteration, step=total_train_steps)
         run.track(aim_lib.Image(fig3), name="unit_action_breakdown",
                   epoch=iteration, step=total_train_steps)
         run.track(aim_lib.Image(fig4), name="unit_variant_heatmap",
                   epoch=iteration, step=total_train_steps)
+        if fig5 is not None:
+            run.track(aim_lib.Image(fig5), name="value_calibration",
+                      epoch=iteration, step=total_train_steps)
     except Exception:
         pass
     finally:
@@ -2713,6 +2757,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             stage_start = time.time()
             with TracyZone("stage_variant_analysis"):
+                variant_stats = {}
                 if _is_unified_game(config):
                     variant_stats = _analyze_iteration_variants(config, paths, experiment_name, i)
                     for vname, stats in variant_stats.items():
@@ -2726,6 +2771,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         run.track(float(stats["entropy"].mean()), name="loss", epoch=i,
                                   step=total_train_steps,
                                   context={"type": "target_entropy", "variant": vname})
+                        run.track(float(stats["top1"].mean()), name="policy_top1_mass", epoch=i,
+                                  step=total_train_steps, context={"variant": vname})
                         # Distributions for spread/skew visibility
                         try:
                             import aim as _aim
@@ -2734,6 +2781,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                             run.track(_aim.Distribution(stats["v_loss"]), name="v_loss_dist",
                                       epoch=i, step=total_train_steps, context={"variant": vname})
                             run.track(_aim.Distribution(stats["entropy"]), name="entropy_dist",
+                                      epoch=i, step=total_train_steps, context={"variant": vname})
+                            run.track(_aim.Distribution(stats["top1"]), name="top1_dist",
                                       epoch=i, step=total_train_steps, context={"variant": vname})
                         except Exception:
                             pass
@@ -2847,7 +2896,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             stage_start = time.time()
             _log_win_rate_matrix(paths, i, run, total_train_steps)
             if _is_unified_game(config):
-                _generate_visualizations(config, paths, i, run, total_train_steps)
+                _generate_visualizations(config, paths, i, run, total_train_steps, variant_stats)
             stage_times["visualizations"] = time.time() - stage_start
 
             total_time = time.time() - iteration_start

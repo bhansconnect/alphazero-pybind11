@@ -78,6 +78,11 @@ using star_gambit_gs::StarGambitSkirmishGS;
 using star_gambit_gs::StarGambitShowdownGS;
 using star_gambit_gs::StarGambitClashGS;
 using star_gambit_gs::StarGambitBattleGS;
+using star_gambit_gs::StarGambitUnifiedGS;
+using star_gambit_gs::StarGambitUnifiedSkirmishGS;
+using star_gambit_gs::StarGambitUnifiedShowdownGS;
+using star_gambit_gs::StarGambitUnifiedClashGS;
+using star_gambit_gs::StarGambitUnifiedBattleGS;
 using star_gambit_gs::SkirmishConfig;
 using star_gambit_gs::ShowdownConfig;
 using star_gambit_gs::ClashConfig;
@@ -157,6 +162,10 @@ PYBIND11_MODULE(alphazero, m) {
            py::call_guard<py::gil_scoped_release>())
       .def("scores", &GameState::scores,
            py::call_guard<py::gil_scoped_release>())
+      .def("randomize_start", &GameState::randomize_start,
+           py::call_guard<py::gil_scoped_release>())
+      .def("num_variants", &GameState::num_variants)
+      .def("get_variant_id", &GameState::get_variant_id)
       .def(
           "canonicalized",
           [](const GameState* gs) {
@@ -378,6 +387,10 @@ PYBIND11_MODULE(alphazero, m) {
       .def("perm_scores", &PlayManager::perm_scores,
            py::return_value_policy::reference_internal)
       .def("perm_games_completed", &PlayManager::perm_games_completed)
+      .def("num_tracked_variants", &PlayManager::num_tracked_variants)
+      .def("variant_scores", &PlayManager::variant_scores,
+           py::return_value_policy::reference_internal)
+      .def("variant_games_completed", &PlayManager::variant_games_completed)
       .def("set_eager", &PlayManager::set_eager)
       .def("cache_evictions", &PlayManager::cache_evictions)
       .def("cache_reinserts", &PlayManager::cache_reinserts)
@@ -573,6 +586,37 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return ActionSpace<BattleConfig>::CANONICAL_SHAPE; });
+
+  // Star Gambit - Unified (all 4 variants, 13×13 canvas, 36 channels)
+  // probs: variant selection weights [Skirmish, Showdown, Clash, Battle]
+  py::class_<StarGambitUnifiedGS, GameState>(m, "StarGambitUnifiedGS")
+      .def(py::init<int, std::array<float, 4>>(),
+           py::arg("pinned_variant") = -1,
+           py::arg("probs") = std::array<float, 4>{0.25f, 0.25f, 0.25f, 0.25f})
+      .def("get_units", &StarGambitUnifiedGS::get_units)
+      .def("get_fire_info", &StarGambitUnifiedGS::get_fire_info)
+      .def_static("NUM_PLAYERS", [] { return star_gambit_gs::NUM_PLAYERS; })
+      .def_static("NUM_MOVES", [] { return StarGambitUnifiedGS::UNIFIED_NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
+      .def_static("CANONICAL_SHAPE",
+                  [] { return StarGambitUnifiedGS::CANONICAL_SHAPE_ARRAY; });
+
+  // Pinned-variant subclasses (always play the specified variant)
+  py::class_<StarGambitUnifiedSkirmishGS, StarGambitUnifiedGS>(
+      m, "StarGambitUnifiedSkirmishGS")
+      .def(py::init<>());
+
+  py::class_<StarGambitUnifiedShowdownGS, StarGambitUnifiedGS>(
+      m, "StarGambitUnifiedShowdownGS")
+      .def(py::init<>());
+
+  py::class_<StarGambitUnifiedClashGS, StarGambitUnifiedGS>(
+      m, "StarGambitUnifiedClashGS")
+      .def(py::init<>());
+
+  py::class_<StarGambitUnifiedBattleGS, StarGambitUnifiedGS>(
+      m, "StarGambitUnifiedBattleGS")
+      .def(py::init<>());
 
   py::class_<PhotosynthesisGS<2>, GameState>(m, "PhotosynthesisGS2")
       .def(py::init<>())

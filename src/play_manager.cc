@@ -144,6 +144,15 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
   scores_.setZero();
   resign_scores_ = Vector<float>{base_gs_->num_players() + 1};
   resign_scores_.setZero();
+
+  // Init per-variant score tracking if the game supports variants.
+  int nvar = base_gs_->num_variants();
+  for (int v = 0; v < nvar; ++v) {
+    PermScores vs;
+    vs.scores = Vector<float>{base_gs_->num_players() + 1};
+    vs.scores.setZero();
+    variant_scores_.push_back(std::move(vs));
+  }
 }
 
 void PlayManager::play() {
@@ -267,6 +276,11 @@ void PlayManager::play() {
             scores_ += scores.value();
             perm_scores_[game.perm_index].scores += scores.value();
             ++perm_scores_[game.perm_index].games_completed;
+            int vid = game.gs->get_variant_id();
+            if (vid >= 0 && vid < static_cast<int>(variant_scores_.size())) {
+              variant_scores_[vid].scores += scores.value();
+              ++variant_scores_[vid].games_completed;
+            }
             if (resign_score.has_value()) {
               resign_scores_ += resign_score.value();
             }

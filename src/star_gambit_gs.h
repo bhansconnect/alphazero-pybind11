@@ -2,7 +2,9 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <random>
 #include <vector>
 
 #include "dll_export.h"
@@ -697,5 +699,135 @@ extern template class StarGambitGS<SkirmishConfig>;
 extern template class StarGambitGS<ShowdownConfig>;
 extern template class StarGambitGS<ClashConfig>;
 extern template class StarGambitGS<BattleConfig>;
+
+// ============================================================================
+// StarGambitUnifiedGS: all 4 variants in one class, 13×13 universal canvas
+// ============================================================================
+//
+// Wraps any of the 4 variant game states and presents a unified interface:
+//   CANONICAL_SHAPE = (36, 13, 13)  — 32 state channels + 4 variant one-hot
+//   NUM_MOVES       = 1709          — same as Battle (13×13×10 + 18 + 1)
+//
+// Small-board variants (Skirmish/Showdown/Clash, 11×11) are embedded in the
+// 13×13 canvas with a 1-cell zero border. Action indices are remapped.
+// A variant one-hot in channels 32-35 lets the network identify which variant.
+//
+// For multi-variant training: set variant probabilities via the constructor or
+// by passing probs when creating the base game before PlayManager init.
+// randomize_start() picks a new variant each game reset.
+//
+// For interactive play (play.py): use the pinned-variant subclasses below,
+// which always start the specific variant.
+
+class StarGambitUnifiedGS : public GameState {
+ public:
+  enum class Variant : int { Skirmish = 0, Showdown = 1, Clash = 2, Battle = 3 };
+
+  // ---- Unified space constants ----
+  static constexpr int UNIFIED_BOARD_DIM = 13;
+  static constexpr int UNIFIED_BOARD_SIDE = 6;
+  static constexpr int SMALL_BOARD_DIM = 11;
+  static constexpr int SMALL_BOARD_SIDE = 5;
+  static constexpr int UNIFIED_CHANNELS = 36;  // 32 game-state + 4 variant one-hot
+
+  static constexpr int UNIFIED_SPATIAL =
+      UNIFIED_BOARD_DIM * UNIFIED_BOARD_DIM * ACTIONS_PER_POSITION;  // 1690
+  static constexpr int UNIFIED_DEPLOY = 3 * 6;  // 18
+  static constexpr int UNIFIED_DEPLOY_OFFSET = UNIFIED_SPATIAL;                      // 1690
+  static constexpr int UNIFIED_END_TURN_OFFSET = UNIFIED_DEPLOY_OFFSET + UNIFIED_DEPLOY;  // 1708
+  static constexpr int UNIFIED_NUM_MOVES = UNIFIED_END_TURN_OFFSET + 1;             // 1709
+
+  static constexpr int SMALL_SPATIAL =
+      SMALL_BOARD_DIM * SMALL_BOARD_DIM * ACTIONS_PER_POSITION;  // 1210
+  static constexpr int SMALL_DEPLOY_OFFSET = SMALL_SPATIAL;                          // 1210
+  static constexpr int SMALL_END_TURN_OFFSET = SMALL_DEPLOY_OFFSET + UNIFIED_DEPLOY; // 1228
+
+  static constexpr std::array<int, 3> CANONICAL_SHAPE_ARRAY = {
+      UNIFIED_CHANNELS, UNIFIED_BOARD_DIM, UNIFIED_BOARD_DIM};
+
+  // ---- Constructor ----
+  // pinned_variant = -1  →  random, sample from probs each randomize_start()
+  // pinned_variant = 0-3 →  always use that variant
+  // probs: relative weights for Skirmish, Showdown, Clash, Battle
+  explicit StarGambitUnifiedGS(
+      int pinned_variant = -1,
+      std::array<float, 4> probs = {0.25f, 0.25f, 0.25f, 0.25f});
+
+  StarGambitUnifiedGS(const StarGambitUnifiedGS& other);
+
+  // ---- GameState interface ----
+  [[nodiscard]] std::unique_ptr<GameState> copy() const noexcept override;
+  [[nodiscard]] bool operator==(const GameState& other) const noexcept override;
+  void hash(absl::HashState h) const override;
+
+  void randomize_start() noexcept override;
+
+  [[nodiscard]] uint8_t current_player() const noexcept override;
+  [[nodiscard]] uint32_t current_turn() const noexcept override;
+  [[nodiscard]] uint32_t num_moves() const noexcept override { return UNIFIED_NUM_MOVES; }
+  [[nodiscard]] uint8_t num_players() const noexcept override { return NUM_PLAYERS; }
+  [[nodiscard]] bool relative_values() const noexcept override { return true; }
+
+  [[nodiscard]] Vector<uint8_t> valid_moves() const noexcept override;
+  void play_move(uint32_t move) override;
+  [[nodiscard]] std::optional<Vector<float>> scores() const noexcept override;
+
+  [[nodiscard]] Tensor<float, 3> canonicalized() const noexcept override;
+
+  [[nodiscard]] uint8_t num_symmetries() const noexcept override { return NUM_SYMMETRIES; }
+  [[nodiscard]] std::vector<PlayHistory> symmetries(
+      const PlayHistory& base) const noexcept override;
+
+  [[nodiscard]] std::string dump() const noexcept override;
+
+  [[nodiscard]] int num_variants() const noexcept override { return 4; }
+  [[nodiscard]] int get_variant_id() const noexcept override { return static_cast<int>(current_variant_); }
+
+  // ---- Extra helpers exposed to Python ----
+  [[nodiscard]] std::vector<UnitInfo> get_units() const;
+  [[nodiscard]] FireInfo get_fire_info(uint32_t unified_move) const;
+
+ private:
+  Variant pick_variant() const;
+  std::unique_ptr<GameState> make_inner_game() const;
+  [[nodiscard]] bool is_small_variant() const { return current_variant_ != Variant::Battle; }
+
+  // Remap an inner-space action index to the unified 13×13 action space.
+  // For small variants: shifts row/col by +1 and remaps deploy offset.
+  // For Battle: identity (already 13×13).
+  [[nodiscard]] int to_unified_action(int inner_action) const;
+
+  // Remap a unified action index back to the inner game's action space.
+  [[nodiscard]] int from_unified_action(int unified_action) const;
+
+  std::array<float, 4> variant_probs_;
+  int pinned_variant_;
+  Variant current_variant_;
+  std::unique_ptr<GameState> inner_;
+};
+
+// ---- Pinned-variant subclasses for GAME_REGISTRY / play.py ----
+// Each always produces observations/actions in the unified 13×13 space,
+// but randomize_start() always picks the specified variant.
+
+class StarGambitUnifiedSkirmishGS : public StarGambitUnifiedGS {
+ public:
+  StarGambitUnifiedSkirmishGS() : StarGambitUnifiedGS(0) {}
+};
+
+class StarGambitUnifiedShowdownGS : public StarGambitUnifiedGS {
+ public:
+  StarGambitUnifiedShowdownGS() : StarGambitUnifiedGS(1) {}
+};
+
+class StarGambitUnifiedClashGS : public StarGambitUnifiedGS {
+ public:
+  StarGambitUnifiedClashGS() : StarGambitUnifiedGS(2) {}
+};
+
+class StarGambitUnifiedBattleGS : public StarGambitUnifiedGS {
+ public:
+  StarGambitUnifiedBattleGS() : StarGambitUnifiedGS(3) {}
+};
 
 }  // namespace alphazero::star_gambit_gs

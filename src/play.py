@@ -1088,17 +1088,16 @@ def main():
 
     game_name, Game = resolve_game(args.game_or_config, args.base_dir)
     ui = get_game_ui(game_name)
+    # checkpoint_game_name: used for data/checkpoint discovery; stays as the base
+    # game even after variant selection (pinned variants share the same data dir).
+    checkpoint_game_name = game_name
 
-    # Offer variant selection only when a base game name is given on CLI
-    # (not in auto-discover mode, where the user already picked a specific game)
-    if args.game_or_config is not None:
-        variant = ui.select_variant()
-        if variant and variant != game_name:
-            if variant in GAME_REGISTRY:
-                game_name = variant
-                cls_name = GAME_REGISTRY[variant]
-                Game = getattr(alphazero, cls_name)
-                ui = get_game_ui(game_name)
+    # Offer variant selection if the UI supports it (e.g. unified games).
+    variant = ui.select_variant()
+    if variant and variant != game_name and variant in GAME_REGISTRY:
+        game_name = variant
+        Game = getattr(alphazero, GAME_REGISTRY[variant])
+        ui = get_game_ui(game_name)
 
     print(f"\n=== {game_name} Interactive Player ===\n")
 
@@ -1134,7 +1133,7 @@ def main():
 
     # Network selection and configuration
     if ctx.players[0].is_ai or ctx.players[1].is_ai:
-        select_network_interactive(ctx, game_name, args.base_dir)
+        select_network_interactive(ctx, checkpoint_game_name, args.base_dir)
         prompt_ai_config(ctx, args)
 
         print()
@@ -1145,7 +1144,7 @@ def main():
             cmd = input("\nConfig> ").strip()
             if cmd.lower() in ["", "start", "go"]:
                 break
-            result = parse_meta_command(cmd, ctx, game_name, args.base_dir)
+            result = parse_meta_command(cmd, ctx, checkpoint_game_name, args.base_dir)
             if result == "quit":
                 return
             if result == "help":
@@ -1297,7 +1296,7 @@ def main():
                             ctx.game.play_move(action)
                             break
 
-                        meta = parse_meta_command(cmd, ctx, game_name, args.base_dir)
+                        meta = parse_meta_command(cmd, ctx, checkpoint_game_name, args.base_dir)
                         if meta == "quit":
                             return
                         if meta == "help":
@@ -1429,7 +1428,7 @@ def main():
                         ctx.game.play_move(action)
                         break
 
-                    meta = parse_meta_command(cmd, ctx, game_name, args.base_dir)
+                    meta = parse_meta_command(cmd, ctx, checkpoint_game_name, args.base_dir)
                     if meta == "quit":
                         return
                     if meta == "help":
@@ -1541,7 +1540,7 @@ def main():
                 if not cmd:
                     continue
 
-                meta = parse_meta_command(cmd, ctx, game_name, args.base_dir)
+                meta = parse_meta_command(cmd, ctx, checkpoint_game_name, args.base_dir)
                 if meta == "quit":
                     return
                 if meta == "help":

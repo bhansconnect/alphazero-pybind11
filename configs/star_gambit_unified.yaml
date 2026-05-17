@@ -1,0 +1,39 @@
+game: star_gambit_unified
+
+# Network: same arch as individual Battle config; spatial head required for all variants.
+depth: 4
+channels: 16
+kernel_size: 3
+star_gambit_spatial: true
+
+# MCTS
+temp_decay_half_life: 8
+selfplay_mcts_visits: 120
+fast_mcts_visits: 30
+compare_mcts_visits: 30
+
+# Training
+lr_schedule: adaptive
+iterations: 800
+
+# --- Multi-variant mixing ---
+# Fraction of games (game_based) or samples (sample_based) per variant.
+# Must sum to 1.0. Omit or set to {} for equal 25% weighting.
+variant_fractions:
+  skirmish: 0.25
+  showdown: 0.25
+  clash: 0.25
+  battle: 0.25
+
+# "game_based": use fractions directly as game selection probabilities.
+# "sample_based": calibrate game probs each iteration so actual sample
+#   fractions match targets (helps when variants have very different game lengths).
+variant_mixing_mode: sample_based
+
+# Variant weights for gating evaluation. Defaults to variant_fractions if omitted.
+# Set explicitly to evaluate gating under a different distribution than training.
+gating_variant_weights:
+  skirmish: 0.25
+  showdown: 0.25
+  clash: 0.25
+  battle: 0.25

@@ -619,12 +619,22 @@ VARIANT_MAP = {
     "4": "star_gambit_battle",
 }
 
+# Unified variants: use the 13×13 canvas with pinned variant selection.
+# These are for playing against a unified-trained network.
+UNIFIED_VARIANT_MAP = {
+    "1": "star_gambit_unified_skirmish",
+    "2": "star_gambit_unified_showdown",
+    "3": "star_gambit_unified_clash",
+    "4": "star_gambit_unified_battle",
+}
+
 
 class StarGambitUI(GameUI):
     """Rich UI for Star Gambit with hex grid, unit selection, move naming."""
 
-    def __init__(self, cfg: GameConfig):
+    def __init__(self, cfg: GameConfig, unified: bool = False):
         self.cfg = cfg
+        self._unified = unified  # True when backed by a unified-trained network
 
     def display_board(self, gs) -> str:
         """Return board string and unit lists."""
@@ -726,7 +736,21 @@ class StarGambitUI(GameUI):
         print_actions_menu(valids, self.cfg, gs, probs=probs, wld=wld)
 
     def select_variant(self) -> str | None:
-        """Offer Skirmish/Showdown/Clash/Battle selection."""
+        """Offer variant selection.
+
+        Returns a "star_gambit_unified_*" name when this UI was created with unified=True
+        (i.e., the network was trained on the unified multi-variant game).
+        Returns the original per-variant game name otherwise.
+        """
+        if self._unified:
+            print("Select variant (playing against unified network):")
+            print("  1. Skirmish (3F/1C)   – unified canvas")
+            print("  2. Showdown (4F/1D)   – unified canvas")
+            print("  3. Clash    (3F/2C/1D)– unified canvas")
+            print("  4. Battle   (4F/3C/2D)– unified canvas")
+            choice = input("Variant [1]: ").strip() or "1"
+            return UNIFIED_VARIANT_MAP.get(choice, "star_gambit_unified_skirmish")
+
         print("Select variant:")
         print("  1. Skirmish (3F/1C)")
         print("  2. Showdown (4F/1D)")

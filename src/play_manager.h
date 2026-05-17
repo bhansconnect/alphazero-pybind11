@@ -144,6 +144,15 @@ class DLLEXPORT PlayManager {
   uint32_t perm_games_completed(size_t idx) const noexcept {
     return perm_scores_[idx].games_completed;
   }
+  int num_tracked_variants() const noexcept {
+    return static_cast<int>(variant_scores_.size());
+  }
+  const Vector<float>& variant_scores(int v) const noexcept {
+    return variant_scores_[v].scores;
+  }
+  uint32_t variant_games_completed(int v) const noexcept {
+    return variant_scores_[v].games_completed;
+  }
 
   // GPU steal: set by GPU thread to signal batcher to hand off partial batches
   void set_eager(bool e) noexcept { eager_.store(e, std::memory_order_relaxed); }
@@ -283,6 +292,7 @@ class DLLEXPORT PlayManager {
     uint32_t games_completed = 0;
   };
   std::vector<PermScores> perm_scores_;
+  std::vector<PermScores> variant_scores_;  // indexed by variant_id; empty for single-variant games
 };
 
 }  // namespace alphazero

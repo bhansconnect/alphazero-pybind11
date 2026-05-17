@@ -98,6 +98,12 @@ def _register_star_gambit_uis():
         GAME_UI_REGISTRY["star_gambit_showdown"] = lambda: StarGambitUI(SHOWDOWN)
         GAME_UI_REGISTRY["star_gambit_clash"] = lambda: StarGambitUI(CLASH)
         GAME_UI_REGISTRY["star_gambit_battle"] = lambda: StarGambitUI(BATTLE)
+        # Unified variants all use the BATTLE config (13×13 canvas) with unified=True.
+        GAME_UI_REGISTRY["star_gambit_unified"] = lambda: StarGambitUI(BATTLE, unified=True)
+        GAME_UI_REGISTRY["star_gambit_unified_skirmish"] = lambda: StarGambitUI(BATTLE, unified=True)
+        GAME_UI_REGISTRY["star_gambit_unified_showdown"] = lambda: StarGambitUI(BATTLE, unified=True)
+        GAME_UI_REGISTRY["star_gambit_unified_clash"] = lambda: StarGambitUI(BATTLE, unified=True)
+        GAME_UI_REGISTRY["star_gambit_unified_battle"] = lambda: StarGambitUI(BATTLE, unified=True)
     except ImportError:
         pass
 

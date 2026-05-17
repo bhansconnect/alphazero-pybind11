@@ -72,6 +72,12 @@ class WEAKDLLEXPORT GameState {
   // Randomize the start state of a game. For most games this does nothing.
   virtual void randomize_start() noexcept {};
 
+  // Returns the number of variants this game supports (0 = single variant).
+  [[nodiscard]] virtual int num_variants() const noexcept { return 0; }
+
+  // Returns the current variant id (0-indexed). Returns -1 for single-variant games.
+  [[nodiscard]] virtual int get_variant_id() const noexcept { return -1; }
+
   // Returns the current player. Players must be 0 indexed.
   [[nodiscard]] virtual uint8_t current_player() const noexcept = 0;
 

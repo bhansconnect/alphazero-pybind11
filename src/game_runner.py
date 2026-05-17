@@ -1970,19 +1970,22 @@ def _analyze_iteration_variants(config, paths, experiment_name, iteration):
     if not file_triples:
         return {}
 
-    MAX_SAMPLES = 4096
+    MAX_SAMPLES = 32_000
     all_c, all_v, all_pi = [], [], []
     total = 0
+    per_file = max(1, MAX_SAMPLES // len(file_triples))
     for c_path, v_path, pi_path, size in file_triples:
-        if total >= MAX_SAMPLES:
-            break
+        take = min(per_file, size, MAX_SAMPLES - total)
+        if take <= 0:
+            continue
         c = load_compressed(c_path).float()
         v = load_compressed(v_path).float()
         pi = load_compressed(pi_path).float()
-        take = min(size, MAX_SAMPLES - total)
-        all_c.append(c[:take])
-        all_v.append(v[:take])
-        all_pi.append(pi[:take])
+        if take < size:
+            idx = torch.randperm(size)[:take]
+            all_c.append(c[idx]); all_v.append(v[idx]); all_pi.append(pi[idx])
+        else:
+            all_c.append(c); all_v.append(v); all_pi.append(pi)
         total += take
 
     if not all_c:
@@ -2009,9 +2012,10 @@ def _analyze_iteration_variants(config, paths, experiment_name, iteration):
 
     all_pi_loss, all_v_loss, all_entropy, all_top1, all_v_pred, all_v_actual = [], [], [], [], [], []
     bs = config.train_batch_size
+    n_samples = len(c_data)
     with torch.no_grad():
-        for start in range(0, len(c_data), bs):
-            end = min(start + bs, len(c_data))
+        for start in tqdm.tqdm(range(0, n_samples, bs), desc="Variant analysis", leave=False):
+            end = min(start + bs, n_samples)
             cb = c_data[start:end].to(device, non_blocking=True)
             vb = v_data[start:end].to(device, non_blocking=True)
             pib = pi_data[start:end].to(device, non_blocking=True)
@@ -2100,17 +2104,21 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         if not file_triples:
             return
 
-        MAX_SAMPLES = 8192
+        MAX_SAMPLES = 32_000
         all_c, all_pi = [], []
         total = 0
+        per_file = max(1, MAX_SAMPLES // len(file_triples))
         for c_path, v_path, pi_path, size in file_triples:
-            if total >= MAX_SAMPLES:
-                break
+            take = min(per_file, size, MAX_SAMPLES - total)
+            if take <= 0:
+                continue
             c = load_compressed(c_path).float()
             pi = load_compressed(pi_path).float()
-            take = min(size, MAX_SAMPLES - total)
-            all_c.append(c[:take])
-            all_pi.append(pi[:take])
+            if take < size:
+                idx = torch.randperm(size)[:take]
+                all_c.append(c[idx]); all_pi.append(pi[idx])
+            else:
+                all_c.append(c); all_pi.append(pi)
             total += take
 
         if not all_c:
@@ -2782,7 +2790,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                                       epoch=i, step=total_train_steps, context={"variant": vname})
                             run.track(_aim.Distribution(stats["entropy"]), name="entropy_dist",
                                       epoch=i, step=total_train_steps, context={"variant": vname})
-                            run.track(_aim.Distribution(stats["top1"]), name="top1_dist",
+                            run.track(_aim.Distribution(stats["top1"]), name="pi_top1_dist",
                                       epoch=i, step=total_train_steps, context={"variant": vname})
                         except Exception:
                             pass

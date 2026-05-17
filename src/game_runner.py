@@ -2128,25 +2128,58 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         pi_np = torch.cat(all_pi).numpy()
         del all_c, all_pi
 
-        # Phase bucketing via reserve channels (24-29) broadcast at center hex (6,6)
-        reserves = c_data[:, 24:30, 6, 6].sum(dim=1).numpy()
-        deploy_mask = reserves > 0.01
-        combat_mask = ~deploy_mask
+        # Variant id per sample: channels 32-35 one-hot at grid center (6,6)
+        variant_ids = c_data[:, 32:36, 6, 6].numpy().argmax(axis=1)
 
-        # Unit presence (channels 1-8 summed over board) splits early vs late combat
+        # Unit presence (channels 1-8 summed over board)
         unit_presence_sum = c_data[:, 1:9, :, :].sum(dim=(1, 2, 3)).numpy()
-        if combat_mask.sum() > 0:
-            threshold = float(np.median(unit_presence_sum[combat_mask]))
-        else:
-            threshold = 0.0
-        early_mask = combat_mask & (unit_presence_sum > threshold)
-        late_mask = combat_mask & (unit_presence_sum <= threshold)
+
+        # Four monotonic phases using two independently-decreasing signals:
+        #   reserves (ch 24-29): only decrease as units deploy
+        #   portal HP (ch 30-31): only decrease as damage lands
+        #   unit count: only decreases after deploy is done (no new units enter)
+        #
+        # Phase 1 — Deploy:      reserves above per-variant median
+        # Phase 2 — Standstill:  fleet committed, portals intact, unit count high
+        # Phase 3 — Attrition:   unit count declining, portals still intact
+        #                        (game often decided here before portal is touched)
+        # Phase 4 — Portal:      any portal damage (prioritized over phases 2-3)
+        #
+        # Portal damage is checked first so it always "wins" regardless of unit count.
+        # Within portal-intact states, per-variant median unit count splits standstill/attrition.
+        reserves = c_data[:, 24:30, 6, 6].sum(dim=1).numpy()
+        portal_total = c_data[:, 30:32, 6, 6].sum(dim=1).numpy()
+
+        deploy_mask  = np.zeros(len(variant_ids), dtype=bool)
+        for _vid in range(4):
+            _vm = variant_ids == _vid
+            if _vm.sum() > 0:
+                deploy_mask[_vm] = reserves[_vm] > float(np.median(reserves[_vm]))
+
+        post_deploy    = ~deploy_mask
+        portal_mask    = post_deploy & (portal_total <= 1.99)
+        intact_mask    = post_deploy & (portal_total >  1.99)
+        standstill_mask = np.zeros(len(variant_ids), dtype=bool)
+        attrition_mask  = np.zeros(len(variant_ids), dtype=bool)
+        for _vid in range(4):
+            _vm = intact_mask & (variant_ids == _vid)
+            if _vm.sum() > 1:
+                _med = float(np.median(unit_presence_sum[_vm]))
+                standstill_mask |= _vm & (unit_presence_sum >  _med)
+                attrition_mask  |= _vm & (unit_presence_sum <= _med)
+            elif _vm.sum() == 1:
+                standstill_mask |= _vm
 
         # Per-unit-type presence at each hex: channels 1=Fighter, 2=Cruiser, 3=Dreadnought
         unit_presence = [c_data[:, ch, :, :].numpy() > 0.5 for ch in [1, 2, 3]]
 
-        # Variant id per sample: channels 32-35 one-hot at grid center (6,6)
-        variant_ids = c_data[:, 32:36, 6, 6].numpy().argmax(axis=1)
+        # Per-sample unit counts by type (my + opponent).
+        # Fighter=1 hex, Cruiser=2 hexes, Dreadnought=3 hexes — divide channel sum by hex size.
+        _hex_sizes = [1, 2, 3]
+        unit_counts_my  = [c_data[:, ch,   :, :].sum(dim=(1, 2)).numpy() / sz
+                           for ch, sz in zip([1, 2, 3], _hex_sizes)]
+        unit_counts_opp = [c_data[:, ch+4, :, :].sum(dim=(1, 2)).numpy() / sz
+                           for ch, sz in zip([1, 2, 3], _hex_sizes)]
 
         del c_data
 
@@ -2194,7 +2227,7 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                          "#e15759","#ff9d9a","#b07aa1","#9c755f","#d37295"]
 
         # --- Figure 1: aggregate action frequency by phase ---
-        fig1, axes = plt.subplots(1, 3, figsize=(15, 5))
+        fig1, axes = plt.subplots(1, 4, figsize=(20, 5))
         fig1.suptitle(f"Iteration {iteration} — Action Frequency by Phase", fontsize=12)
 
         ax = axes[0]
@@ -2207,11 +2240,12 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
             ax.bar(x + ui * bar_w, dep_pi[ui * 6: ui * 6 + 6], bar_w,
                    label=uname, color=col, alpha=0.85)
         ax.set_xticks(x + bar_w); ax.set_xticklabels(facing_labels, fontsize=8)
-        ax.set_title(f"Deploy Phase\n(n={deploy_mask.sum()})", fontsize=10)
+        ax.set_title(f"Deploy\n(n={deploy_mask.sum()})", fontsize=10)
         ax.set_ylabel("Fraction of deploy pi mass"); ax.legend(fontsize=7)
 
-        for ax, mask, title in [(axes[1], early_mask, "Early Combat"),
-                                (axes[2], late_mask,  "Late/Attrition")]:
+        for ax, mask, title in [(axes[1], standstill_mask, "Standstill / Maneuver"),
+                                (axes[2], attrition_mask,  "Attrition (no portal dmg)"),
+                                (axes[3], portal_mask,     "Portal Damage")]:
             grid = _spatial_heatmap(mask)
             im = ax.imshow(grid, cmap="YlOrRd", vmin=0, interpolation="nearest")
             ax.set_title(f"{title}\n(n={mask.sum()})", fontsize=10)
@@ -2221,11 +2255,13 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
 
         fig2 = None
 
-        # --- Figure 3: per-unit action breakdown (3 units × 2 phases) ---
-        fig3, axes3 = plt.subplots(3, 2, figsize=(10, 10))
+        # --- Figure 3: per-unit action breakdown (3 units × 4 phases) ---
+        fig3, axes3 = plt.subplots(3, 4, figsize=(16, 10))
         fig3.suptitle(f"Iteration {iteration} — Action Breakdown by Unit Type", fontsize=12)
+        _phases = [(deploy_mask, "Deploy"), (standstill_mask, "Standstill"),
+                   (attrition_mask, "Attrition"), (portal_mask, "Portal")]
         for ui, uname in enumerate(unit_names):
-            for pi_col, (mask, phase) in enumerate([(early_mask, "Early"), (late_mask, "Late")]):
+            for pi_col, (mask, phase) in enumerate(_phases):
                 ax = axes3[ui, pi_col]
                 dist = _action_dist(mask, ui)
                 bars = ax.bar(range(10), dist, color=action_colors, alpha=0.85)
@@ -2235,40 +2271,90 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                 ax.set_ylabel("Fraction", fontsize=8)
         plt.tight_layout()
 
-        # --- Figure 4: per-unit × per-variant spatial heatmaps ---
+        # --- Figure 4: per-unit × per-variant spatial heatmaps (all positions) ---
         fig4, axes4 = plt.subplots(3, 4, figsize=(16, 9))
-        fig4.suptitle(f"Iteration {iteration} — Unit × Variant Action Heatmaps (Combat)", fontsize=12)
-        combat_mask_all = early_mask | late_mask
+        fig4.suptitle(f"Iteration {iteration} — Unit × Variant Action Heatmaps (All Positions)", fontsize=12)
         # Invalid combos: Cruiser absent in Showdown(1), Dreadnought absent in Skirmish(0)
         invalid = {(1, 1), (2, 0)}  # (unit_idx, variant_id) pairs always zero
         for ui, uname in enumerate(unit_names):
             for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
                 ax = axes4[ui, vid]
+                vmask = variant_ids == vid
                 if (ui, vid) in invalid:
                     ax.set_facecolor("#dddddd")
                     ax.text(0.5, 0.5, "N/A", transform=ax.transAxes,
                             ha="center", va="center", fontsize=10, color="#888888")
                     ax.set_xticks([]); ax.set_yticks([])
                 else:
-                    vmask = combat_mask_all & (variant_ids == vid)
                     grid = _spatial_heatmap(vmask, unit_idx=ui)
                     im = ax.imshow(grid, cmap="YlOrRd", vmin=0, interpolation="nearest")
                     plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-                ax.set_title(f"{uname}\n{vname.capitalize()} (n={((combat_mask_all)&(variant_ids==vid)).sum()})",
-                             fontsize=8)
+                ax.set_title(f"{uname}\n{vname.capitalize()} (n={vmask.sum()})", fontsize=8)
         plt.tight_layout()
 
-        # --- Figure 5: value calibration curves per variant ---
-        fig5 = None
+        # --- Figure 5: unit count by type × phase × variant ---
+        _phase_list = [
+            (deploy_mask,     "Deploy"),
+            (standstill_mask, "Standstill"),
+            (attrition_mask,  "Attrition"),
+            (portal_mask,     "Portal"),
+        ]
+        fig5, axes5u = plt.subplots(4, 4, figsize=(16, 12))
+        fig5.suptitle(f"Iteration {iteration} — Unit Count by Type × Phase × Variant", fontsize=12)
+        _bar_x = np.arange(3); _bar_w = 0.35
+        for pi_row, (pmask, pname) in enumerate(_phase_list):
+            for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+                ax = axes5u[pi_row, vid]
+                combo = pmask & (variant_ids == vid)
+                n = int(combo.sum())
+                ax.set_title(f"{vname.capitalize()} — {pname}\n(n={n})", fontsize=7)
+                if n == 0:
+                    ax.set_facecolor("#eeeeee"); ax.set_xticks([]); ax.set_yticks([])
+                    continue
+                my_avg  = [unit_counts_my[ui][combo].mean()  for ui in range(3)]
+                opp_avg = [unit_counts_opp[ui][combo].mean() for ui in range(3)]
+                ax.bar(_bar_x - _bar_w/2, my_avg,  _bar_w, label="Mine", color=unit_colors,      alpha=0.85)
+                ax.bar(_bar_x + _bar_w/2, opp_avg, _bar_w, label="Opp",  color=unit_colors, alpha=0.45)
+                ax.set_xticks(_bar_x); ax.set_xticklabels(["F", "C", "D"], fontsize=8)
+                ax.set_ylabel("Avg units", fontsize=7)
+                if pi_row == 0 and vid == 0:
+                    ax.legend(fontsize=6)
+        plt.tight_layout()
+
+        # --- Figure 6: per-phase unit × variant spatial heatmaps ---
+        fig6_list = []
+        for pmask, pname in _phase_list:
+            f, axs = plt.subplots(3, 4, figsize=(16, 9))
+            f.suptitle(f"Iteration {iteration} — Unit × Variant Heatmap: {pname}", fontsize=12)
+            for ui, uname in enumerate(unit_names):
+                for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+                    ax = axs[ui, vid]
+                    if (ui, vid) in invalid:
+                        ax.set_facecolor("#dddddd")
+                        ax.text(0.5, 0.5, "N/A", transform=ax.transAxes,
+                                ha="center", va="center", fontsize=10, color="#888888")
+                        ax.set_xticks([]); ax.set_yticks([])
+                    else:
+                        vmask = pmask & (variant_ids == vid)
+                        grid = _spatial_heatmap(vmask, unit_idx=ui)
+                        im = ax.imshow(grid, cmap="YlOrRd", vmin=0, interpolation="nearest")
+                        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+                    ax.set_title(f"{uname}\n{vname.capitalize()} (n={(pmask&(variant_ids==vid)).sum()})",
+                                 fontsize=8)
+            plt.tight_layout()
+            fig6_list.append((f, pname))
+
+        # --- Figure 7: value calibration curves per variant ---
+        fig7 = None
         if variant_stats:
             n_variants = len(variant_stats)
-            fig5, axes5 = plt.subplots(1, n_variants, figsize=(4 * n_variants, 4))
+            fig7, axes7 = plt.subplots(1, n_variants, figsize=(4 * n_variants, 4))
             if n_variants == 1:
-                axes5 = [axes5]
-            fig5.suptitle(f"Iteration {iteration} — Value Calibration", fontsize=12)
+                axes7 = [axes7]
+            fig7.suptitle(f"Iteration {iteration} — Value Calibration", fontsize=12)
             bins = np.linspace(0, 1, 11)
             bin_centers = (bins[:-1] + bins[1:]) / 2
-            for ax, (vname, stats) in zip(axes5, variant_stats.items()):
+            for ax, (vname, stats) in zip(axes7, variant_stats.items()):
                 vp = stats["v_pred"]
                 va = stats["v_actual"]
                 bin_idx = np.digitize(vp, bins) - 1
@@ -2296,8 +2382,13 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                   epoch=iteration, step=total_train_steps)
         run.track(aim_lib.Image(fig4), name="unit_variant_heatmap",
                   epoch=iteration, step=total_train_steps)
-        if fig5 is not None:
-            run.track(aim_lib.Image(fig5), name="value_calibration",
+        run.track(aim_lib.Image(fig5), name="unit_count_by_phase",
+                  epoch=iteration, step=total_train_steps)
+        for f6, pname in fig6_list:
+            run.track(aim_lib.Image(f6), name="unit_variant_heatmap_by_phase",
+                      epoch=iteration, step=total_train_steps, context={"phase": pname})
+        if fig7 is not None:
+            run.track(aim_lib.Image(fig7), name="value_calibration",
                       epoch=iteration, step=total_train_steps)
     except Exception:
         pass

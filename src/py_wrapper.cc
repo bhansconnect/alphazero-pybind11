@@ -75,9 +75,11 @@ using onitama_gs::OnitamaGS;
 using opentafl_gs::OpenTaflGS;
 using photosynthesis_gs::PhotosynthesisGS;
 using star_gambit_gs::StarGambitSkirmishGS;
+using star_gambit_gs::StarGambitShowdownGS;
 using star_gambit_gs::StarGambitClashGS;
 using star_gambit_gs::StarGambitBattleGS;
 using star_gambit_gs::SkirmishConfig;
+using star_gambit_gs::ShowdownConfig;
 using star_gambit_gs::ClashConfig;
 using star_gambit_gs::BattleConfig;
 using star_gambit_gs::ActionSpace;
@@ -538,6 +540,17 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return ActionSpace<SkirmishConfig>::CANONICAL_SHAPE; });
+
+  // Star Gambit - Showdown (4F, 0C, 1D, 5-side board)
+  py::class_<StarGambitShowdownGS, GameState>(m, "StarGambitShowdownGS")
+      .def(py::init<>())
+      .def("get_units", &StarGambitShowdownGS::get_units)
+      .def("get_fire_info", &StarGambitShowdownGS::get_fire_info)
+      .def_static("NUM_PLAYERS", [] { return star_gambit_gs::NUM_PLAYERS; })
+      .def_static("NUM_MOVES", [] { return ActionSpace<ShowdownConfig>::NUM_MOVES; })
+      .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
+      .def_static("CANONICAL_SHAPE",
+                  [] { return ActionSpace<ShowdownConfig>::CANONICAL_SHAPE; });
 
   // Star Gambit - Clash (3F, 2C, 1D, 5-side board)
   py::class_<StarGambitClashGS, GameState>(m, "StarGambitClashGS")

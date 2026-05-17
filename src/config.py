@@ -23,6 +23,7 @@ GAME_REGISTRY = {
     "photosynthesis_3p": "PhotosynthesisGS3",
     "photosynthesis_4p": "PhotosynthesisGS4",
     "star_gambit_skirmish": "StarGambitSkirmishGS",
+    "star_gambit_showdown": "StarGambitShowdownGS",
     "star_gambit_clash": "StarGambitClashGS",
     "star_gambit_battle": "StarGambitBattleGS",
 }

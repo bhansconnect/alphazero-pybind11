@@ -191,17 +191,24 @@ def test_sg_ui_select_variant_skirmish(monkeypatch):
     assert ui.select_variant() == "star_gambit_skirmish"
 
 
-def test_sg_ui_select_variant_clash(monkeypatch):
-    """Star Gambit variant selection returns clash for choice 2."""
+def test_sg_ui_select_variant_showdown(monkeypatch):
+    """Star Gambit variant selection returns showdown for choice 2."""
     ui = StarGambitUI(SKIRMISH)
     monkeypatch.setattr("builtins.input", lambda _: "2")
+    assert ui.select_variant() == "star_gambit_showdown"
+
+
+def test_sg_ui_select_variant_clash(monkeypatch):
+    """Star Gambit variant selection returns clash for choice 3."""
+    ui = StarGambitUI(SKIRMISH)
+    monkeypatch.setattr("builtins.input", lambda _: "3")
     assert ui.select_variant() == "star_gambit_clash"
 
 
 def test_sg_ui_select_variant_battle(monkeypatch):
-    """Star Gambit variant selection returns battle for choice 3."""
+    """Star Gambit variant selection returns battle for choice 4."""
     ui = StarGambitUI(SKIRMISH)
-    monkeypatch.setattr("builtins.input", lambda _: "3")
+    monkeypatch.setattr("builtins.input", lambda _: "4")
     assert ui.select_variant() == "star_gambit_battle"
 
 

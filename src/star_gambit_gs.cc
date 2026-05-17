@@ -2239,6 +2239,7 @@ FireInfo StarGambitGS<Config>::get_fire_info(uint32_t move) const {
 // =============================================================================
 
 template class StarGambitGS<SkirmishConfig>;
+template class StarGambitGS<ShowdownConfig>;
 template class StarGambitGS<ClashConfig>;
 template class StarGambitGS<BattleConfig>;
 

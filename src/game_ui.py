@@ -93,8 +93,9 @@ GAME_UI_REGISTRY: dict[str, callable] = {}
 def _register_star_gambit_uis():
     """Register Star Gambit UIs lazily."""
     try:
-        from star_gambit_ui import StarGambitUI, SKIRMISH, CLASH, BATTLE
+        from star_gambit_ui import StarGambitUI, SKIRMISH, SHOWDOWN, CLASH, BATTLE
         GAME_UI_REGISTRY["star_gambit_skirmish"] = lambda: StarGambitUI(SKIRMISH)
+        GAME_UI_REGISTRY["star_gambit_showdown"] = lambda: StarGambitUI(SHOWDOWN)
         GAME_UI_REGISTRY["star_gambit_clash"] = lambda: StarGambitUI(CLASH)
         GAME_UI_REGISTRY["star_gambit_battle"] = lambda: StarGambitUI(BATTLE)
     except ImportError:

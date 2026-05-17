@@ -2041,6 +2041,37 @@ def _analyze_iteration_variants(config, paths, experiment_name, iteration):
     return result
 
 
+def _log_win_rate_matrix(paths, iteration, run, total_train_steps):
+    """Log win rate matrix heatmap to aim. Works for any game."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import aim as aim_lib
+    except ImportError:
+        return
+    try:
+        wr_path = os.path.join(paths["experiment"], "win_rate.csv")
+        if not os.path.exists(wr_path):
+            return
+        wr_mat = np.genfromtxt(wr_path, delimiter=",")
+        n = min(iteration + 2, wr_mat.shape[0])
+        wr_display = np.where(np.isnan(wr_mat[:n, :n]), 0.5, wr_mat[:n, :n])
+        sz = min(max(4, n // 3), 12)
+        fig, ax = plt.subplots(figsize=(sz, sz))
+        im = ax.imshow(wr_display, cmap="RdYlGn", vmin=0, vmax=1, interpolation="nearest")
+        ax.set_title(f"Win Rate Matrix (iteration {iteration})", fontsize=11)
+        ax.set_xlabel("Opponent iteration"); ax.set_ylabel("Agent iteration")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        plt.tight_layout()
+        run.track(aim_lib.Image(fig), name="win_rate_matrix",
+                  epoch=iteration, step=total_train_steps)
+    except Exception:
+        pass
+    finally:
+        plt.close("all")
+
+
 def _generate_visualizations(config, paths, iteration, run, total_train_steps):
     """Generate and log phase-aware action heatmap and win rate matrix as aim images.
 
@@ -2087,96 +2118,136 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps):
         combat_mask = ~deploy_mask
 
         # Unit presence (channels 1-8 summed over board) splits early vs late combat
-        unit_presence = c_data[:, 1:9, :, :].sum(dim=(1, 2, 3)).numpy()
+        unit_presence_sum = c_data[:, 1:9, :, :].sum(dim=(1, 2, 3)).numpy()
         if combat_mask.sum() > 0:
-            threshold = float(np.median(unit_presence[combat_mask]))
+            threshold = float(np.median(unit_presence_sum[combat_mask]))
         else:
             threshold = 0.0
-        early_mask = combat_mask & (unit_presence > threshold)
-        late_mask = combat_mask & (unit_presence <= threshold)
+        early_mask = combat_mask & (unit_presence_sum > threshold)
+        late_mask = combat_mask & (unit_presence_sum <= threshold)
+
+        # Per-unit-type presence at each hex: channels 1=Fighter, 2=Cruiser, 3=Dreadnought
+        unit_presence = [c_data[:, ch, :, :].numpy() > 0.5 for ch in [1, 2, 3]]
+
+        # Variant id per sample: channels 32-35 one-hot at grid center (6,6)
+        variant_ids = c_data[:, 32:36, 6, 6].numpy().argmax(axis=1)
+
         del c_data
+
+        # Precompute spatial pi tensor once: (N, 13, 13, 10)
+        pi_spatial = pi_np[:, :1690].reshape(-1, 13, 13, 10)
 
         # Hex valid-cell mask for the 13×13 unified board (board_side=6)
         hex_mask = np.zeros((13, 13), dtype=bool)
         for r in range(13):
             for c in range(13):
-                q = r - 6
-                rh = c - 6
-                s = -q - rh
+                q = r - 6; rh = c - 6; s = -q - rh
                 if abs(q) <= 6 and abs(rh) <= 6 and abs(s) <= 6:
                     hex_mask[r, c] = True
 
-        def spatial_heatmap(mask):
-            if mask.sum() == 0:
+        def _spatial_heatmap(sample_mask, unit_idx=None):
+            """Normalized (13,13) heatmap. unit_idx filters to that unit type if given."""
+            if sample_mask.sum() == 0:
                 return np.full((13, 13), np.nan)
-            sp = pi_np[mask, :1690].reshape(-1, 13, 13, 10).sum(axis=-1).sum(axis=0)
-            total = sp.sum()
-            grid = sp / total if total > 0 else sp
-            return np.where(hex_mask, grid, np.nan)
+            sp = pi_spatial[sample_mask]                         # (n, 13, 13, 10)
+            if unit_idx is not None:
+                up = unit_presence[unit_idx][sample_mask]        # (n, 13, 13) bool
+                sp = sp * up[:, :, :, np.newaxis]
+            grid = sp.sum(axis=(0, 3))                           # (13, 13)
+            total = grid.sum()
+            return np.where(hex_mask, grid / total if total > 0 else grid, np.nan)
 
-        # --- Figure 1: action frequency (3 panels) ---
+        def _action_dist(sample_mask, unit_idx):
+            """Normalized (10,) action-slot distribution for a unit type."""
+            if sample_mask.sum() == 0:
+                return np.zeros(10)
+            sp = pi_spatial[sample_mask]                         # (n, 13, 13, 10)
+            up = unit_presence[unit_idx][sample_mask]            # (n, 13, 13) bool
+            dist = (sp * up[:, :, :, np.newaxis]).sum(axis=(0, 1, 2))
+            total = dist.sum()
+            return dist / total if total > 0 else dist
+
+        unit_names  = ["Fighter", "Cruiser", "Dreadnought"]
+        unit_colors = ["#4e79a7", "#f28e2b", "#59a14f"]
+        facing_labels = ["E", "NE", "NW", "W", "SW", "SE"]
+        action_labels = ["MvFwd", "MvFL", "MvFR", "RotL", "RotR",
+                         "FirFwd", "FirFL", "FirFR", "FirRL", "FirRR"]
+        # Blue=move, orange=rotate, red=fire
+        action_colors = ["#4e79a7","#5fa2ce","#a0cbe8",
+                         "#f28e2b","#ffbe7d",
+                         "#e15759","#ff9d9a","#b07aa1","#9c755f","#d37295"]
+
+        # --- Figure 1: aggregate action frequency by phase ---
         fig1, axes = plt.subplots(1, 3, figsize=(15, 5))
         fig1.suptitle(f"Iteration {iteration} — Action Frequency by Phase", fontsize=12)
 
-        # Panel A: deploy bar chart
         ax = axes[0]
         dep_pi = pi_np[deploy_mask, 1690:1708].sum(axis=0) if deploy_mask.sum() > 0 else np.zeros(18)
         dep_total = dep_pi.sum()
         if dep_total > 0:
             dep_pi = dep_pi / dep_total
-        unit_names = ["Fighter", "Cruiser", "Dreadnought"]
-        unit_colors = ["#4e79a7", "#f28e2b", "#59a14f"]
-        facing_labels = ["E", "NE", "NW", "W", "SW", "SE"]
-        x = np.arange(6)
-        bar_w = 0.25
+        x = np.arange(6); bar_w = 0.25
         for ui, (uname, col) in enumerate(zip(unit_names, unit_colors)):
-            vals = dep_pi[ui * 6: ui * 6 + 6]
-            ax.bar(x + ui * bar_w, vals, bar_w, label=uname, color=col, alpha=0.85)
-        ax.set_xticks(x + bar_w)
-        ax.set_xticklabels(facing_labels, fontsize=8)
+            ax.bar(x + ui * bar_w, dep_pi[ui * 6: ui * 6 + 6], bar_w,
+                   label=uname, color=col, alpha=0.85)
+        ax.set_xticks(x + bar_w); ax.set_xticklabels(facing_labels, fontsize=8)
         ax.set_title(f"Deploy Phase\n(n={deploy_mask.sum()})", fontsize=10)
-        ax.set_ylabel("Fraction of deploy pi mass")
-        ax.legend(fontsize=7)
+        ax.set_ylabel("Fraction of deploy pi mass"); ax.legend(fontsize=7)
 
-        # Panel B: early combat spatial heatmap
-        ax = axes[1]
-        grid = spatial_heatmap(early_mask)
-        im = ax.imshow(grid, cmap="YlOrRd", vmin=0, interpolation="nearest")
-        ax.set_title(f"Early Combat\n(n={early_mask.sum()})", fontsize=10)
-        ax.set_xlabel("col"); ax.set_ylabel("row")
-        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-
-        # Panel C: late/attrition spatial heatmap
-        ax = axes[2]
-        grid = spatial_heatmap(late_mask)
-        im = ax.imshow(grid, cmap="YlOrRd", vmin=0, interpolation="nearest")
-        ax.set_title(f"Late/Attrition\n(n={late_mask.sum()})", fontsize=10)
-        ax.set_xlabel("col"); ax.set_ylabel("row")
-        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-
+        for ax, mask, title in [(axes[1], early_mask, "Early Combat"),
+                                (axes[2], late_mask,  "Late/Attrition")]:
+            grid = _spatial_heatmap(mask)
+            im = ax.imshow(grid, cmap="YlOrRd", vmin=0, interpolation="nearest")
+            ax.set_title(f"{title}\n(n={mask.sum()})", fontsize=10)
+            ax.set_xlabel("col"); ax.set_ylabel("row")
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         plt.tight_layout()
 
-        # --- Figure 2: win rate matrix ---
-        wr_path = os.path.join(paths["experiment"], "win_rate.csv")
         fig2 = None
-        if os.path.exists(wr_path):
-            wr_mat = np.genfromtxt(wr_path, delimiter=",")
-            n = min(iteration + 2, wr_mat.shape[0])
-            wr_display = np.where(np.isnan(wr_mat[:n, :n]), 0.5, wr_mat[:n, :n])
-            sz = min(max(4, n // 3), 12)
-            fig2, ax2 = plt.subplots(figsize=(sz, sz))
-            im2 = ax2.imshow(wr_display, cmap="RdYlGn", vmin=0, vmax=1, interpolation="nearest")
-            ax2.set_title(f"Win Rate Matrix (iteration {iteration})", fontsize=11)
-            ax2.set_xlabel("Opponent iteration")
-            ax2.set_ylabel("Agent iteration")
-            plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
-            plt.tight_layout()
+
+        # --- Figure 3: per-unit action breakdown (3 units × 2 phases) ---
+        fig3, axes3 = plt.subplots(3, 2, figsize=(10, 10))
+        fig3.suptitle(f"Iteration {iteration} — Action Breakdown by Unit Type", fontsize=12)
+        for ui, uname in enumerate(unit_names):
+            for pi_col, (mask, phase) in enumerate([(early_mask, "Early"), (late_mask, "Late")]):
+                ax = axes3[ui, pi_col]
+                dist = _action_dist(mask, ui)
+                bars = ax.bar(range(10), dist, color=action_colors, alpha=0.85)
+                ax.set_xticks(range(10))
+                ax.set_xticklabels(action_labels, fontsize=6, rotation=45, ha="right")
+                ax.set_title(f"{uname} — {phase}\n(n={mask.sum()})", fontsize=9)
+                ax.set_ylabel("Fraction", fontsize=8)
+        plt.tight_layout()
+
+        # --- Figure 4: per-unit × per-variant spatial heatmaps ---
+        fig4, axes4 = plt.subplots(3, 4, figsize=(16, 9))
+        fig4.suptitle(f"Iteration {iteration} — Unit × Variant Action Heatmaps (Combat)", fontsize=12)
+        combat_mask_all = early_mask | late_mask
+        # Invalid combos: Cruiser absent in Showdown(1), Dreadnought absent in Skirmish(0)
+        invalid = {(1, 1), (2, 0)}  # (unit_idx, variant_id) pairs always zero
+        for ui, uname in enumerate(unit_names):
+            for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+                ax = axes4[ui, vid]
+                if (ui, vid) in invalid:
+                    ax.set_facecolor("#dddddd")
+                    ax.text(0.5, 0.5, "N/A", transform=ax.transAxes,
+                            ha="center", va="center", fontsize=10, color="#888888")
+                    ax.set_xticks([]); ax.set_yticks([])
+                else:
+                    vmask = combat_mask_all & (variant_ids == vid)
+                    grid = _spatial_heatmap(vmask, unit_idx=ui)
+                    im = ax.imshow(grid, cmap="YlOrRd", vmin=0, interpolation="nearest")
+                    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+                ax.set_title(f"{uname}\n{vname.capitalize()} (n={((combat_mask_all)&(variant_ids==vid)).sum()})",
+                             fontsize=8)
+        plt.tight_layout()
 
         run.track(aim_lib.Image(fig1), name="action_heatmap",
                   epoch=iteration, step=total_train_steps)
-        if fig2 is not None:
-            run.track(aim_lib.Image(fig2), name="win_rate_matrix",
-                      epoch=iteration, step=total_train_steps)
+        run.track(aim_lib.Image(fig3), name="unit_action_breakdown",
+                  epoch=iteration, step=total_train_steps)
+        run.track(aim_lib.Image(fig4), name="unit_variant_heatmap",
+                  epoch=iteration, step=total_train_steps)
     except Exception:
         pass
     finally:
@@ -2755,10 +2826,11 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         run.track(current_counts[vi] / total_sc, name="variant_sample_frac",
                                   epoch=i, step=total_train_steps, context={"variant": vname})
 
+            stage_start = time.time()
+            _log_win_rate_matrix(paths, i, run, total_train_steps)
             if _is_unified_game(config):
-                stage_start = time.time()
                 _generate_visualizations(config, paths, i, run, total_train_steps)
-                stage_times["visualizations"] = time.time() - stage_start
+            stage_times["visualizations"] = time.time() - stage_start
 
             total_time = time.time() - iteration_start
             for stage_name, stage_time in stage_times.items():

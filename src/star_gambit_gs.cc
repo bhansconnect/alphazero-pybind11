@@ -2243,4 +2243,342 @@ template class StarGambitGS<ShowdownConfig>;
 template class StarGambitGS<ClashConfig>;
 template class StarGambitGS<BattleConfig>;
 
+// =============================================================================
+// StarGambitUnifiedGS Implementation
+// =============================================================================
+
+namespace {
+
+using UnifiedVariant = StarGambitUnifiedGS::Variant;
+
+// Thread-local RNG for variant sampling (avoids rand() and is thread-safe).
+UnifiedVariant pick_from_probs(const std::array<float, 4>& probs) {
+  thread_local std::mt19937 rng{std::random_device{}()};
+  std::discrete_distribution<int> dist(probs.begin(), probs.end());
+  return static_cast<UnifiedVariant>(dist(rng));
+}
+
+// Check if (row, col) is a valid hex position in the 13×13 unified grid.
+bool is_unified_hex(int row, int col) {
+  constexpr int S = StarGambitUnifiedGS::UNIFIED_BOARD_SIDE;
+  int q = row - S;
+  int r = col - S;
+  int s = -q - r;
+  return std::abs(q) <= S && std::abs(r) <= S && std::abs(s) <= S;
+}
+
+}  // namespace
+
+StarGambitUnifiedGS::StarGambitUnifiedGS(int pinned_variant,
+                                         std::array<float, 4> probs)
+    : variant_probs_(probs), pinned_variant_(pinned_variant) {
+  current_variant_ = pick_variant();
+  inner_ = make_inner_game();
+}
+
+StarGambitUnifiedGS::StarGambitUnifiedGS(const StarGambitUnifiedGS& other)
+    : variant_probs_(other.variant_probs_),
+      pinned_variant_(other.pinned_variant_),
+      current_variant_(other.current_variant_),
+      inner_(other.inner_->copy()) {}
+
+std::unique_ptr<GameState> StarGambitUnifiedGS::copy() const noexcept {
+  return std::make_unique<StarGambitUnifiedGS>(*this);
+}
+
+bool StarGambitUnifiedGS::operator==(const GameState& other) const noexcept {
+  const auto* o = dynamic_cast<const StarGambitUnifiedGS*>(&other);
+  if (!o) return false;
+  if (current_variant_ != o->current_variant_) return false;
+  return *inner_ == *o->inner_;
+}
+
+void StarGambitUnifiedGS::hash(absl::HashState h) const {
+  h = absl::HashState::combine(std::move(h), static_cast<int>(current_variant_));
+  inner_->hash(std::move(h));
+}
+
+StarGambitUnifiedGS::Variant StarGambitUnifiedGS::pick_variant() const {
+  if (pinned_variant_ >= 0 && pinned_variant_ <= 3) {
+    return static_cast<Variant>(pinned_variant_);
+  }
+  return pick_from_probs(variant_probs_);
+}
+
+std::unique_ptr<GameState> StarGambitUnifiedGS::make_inner_game() const {
+  switch (current_variant_) {
+    case Variant::Skirmish:  return std::make_unique<StarGambitSkirmishGS>();
+    case Variant::Showdown:  return std::make_unique<StarGambitShowdownGS>();
+    case Variant::Clash:     return std::make_unique<StarGambitClashGS>();
+    case Variant::Battle:    return std::make_unique<StarGambitBattleGS>();
+  }
+  return std::make_unique<StarGambitSkirmishGS>();
+}
+
+void StarGambitUnifiedGS::randomize_start() noexcept {
+  current_variant_ = pick_variant();
+  inner_ = make_inner_game();
+  inner_->randomize_start();
+}
+
+uint8_t StarGambitUnifiedGS::current_player() const noexcept {
+  return inner_->current_player();
+}
+
+uint32_t StarGambitUnifiedGS::current_turn() const noexcept {
+  return inner_->current_turn();
+}
+
+std::optional<Vector<float>> StarGambitUnifiedGS::scores() const noexcept {
+  return inner_->scores();
+}
+
+std::string StarGambitUnifiedGS::dump() const noexcept {
+  return inner_->dump();
+}
+
+// -----------------------------------------------------------------------------
+// Action remapping
+// -----------------------------------------------------------------------------
+
+int StarGambitUnifiedGS::to_unified_action(int inner_action) const {
+  if (!is_small_variant()) return inner_action;  // Battle: identity
+
+  if (inner_action < SMALL_SPATIAL) {
+    // Spatial: shift row and col by +1 (board_side 5→6)
+    int slot       = inner_action % ACTIONS_PER_POSITION;
+    int flat_pos   = inner_action / ACTIONS_PER_POSITION;
+    int inner_row  = flat_pos / SMALL_BOARD_DIM;
+    int inner_col  = flat_pos % SMALL_BOARD_DIM;
+    int unified_row = inner_row + 1;
+    int unified_col = inner_col + 1;
+    return (unified_row * UNIFIED_BOARD_DIM + unified_col) * ACTIONS_PER_POSITION + slot;
+  }
+  // Deploy / end-turn: shift by offset difference
+  return UNIFIED_DEPLOY_OFFSET + (inner_action - SMALL_DEPLOY_OFFSET);
+}
+
+int StarGambitUnifiedGS::from_unified_action(int unified_action) const {
+  if (!is_small_variant()) return unified_action;  // Battle: identity
+
+  if (unified_action < UNIFIED_SPATIAL) {
+    // Spatial: shift row and col by -1
+    int slot         = unified_action % ACTIONS_PER_POSITION;
+    int flat_pos     = unified_action / ACTIONS_PER_POSITION;
+    int unified_row  = flat_pos / UNIFIED_BOARD_DIM;
+    int unified_col  = flat_pos % UNIFIED_BOARD_DIM;
+    int inner_row    = unified_row - 1;
+    int inner_col    = unified_col - 1;
+    return (inner_row * SMALL_BOARD_DIM + inner_col) * ACTIONS_PER_POSITION + slot;
+  }
+  // Deploy / end-turn: shift back
+  return SMALL_DEPLOY_OFFSET + (unified_action - UNIFIED_DEPLOY_OFFSET);
+}
+
+// -----------------------------------------------------------------------------
+// valid_moves()
+// -----------------------------------------------------------------------------
+
+Vector<uint8_t> StarGambitUnifiedGS::valid_moves() const noexcept {
+  Vector<uint8_t> unified(UNIFIED_NUM_MOVES);
+  unified.setZero();
+
+  auto inner_valids = inner_->valid_moves();
+
+  for (int i = 0; i < static_cast<int>(inner_valids.size()); ++i) {
+    if (inner_valids(i)) {
+      unified(to_unified_action(i)) = 1;
+    }
+  }
+  return unified;
+}
+
+// -----------------------------------------------------------------------------
+// play_move()
+// -----------------------------------------------------------------------------
+
+void StarGambitUnifiedGS::play_move(uint32_t move) {
+  inner_->play_move(static_cast<uint32_t>(from_unified_action(static_cast<int>(move))));
+}
+
+// -----------------------------------------------------------------------------
+// canonicalized()
+// -----------------------------------------------------------------------------
+
+Tensor<float, 3> StarGambitUnifiedGS::canonicalized() const noexcept {
+  Tensor<float, 3> out(UNIFIED_CHANNELS, UNIFIED_BOARD_DIM, UNIFIED_BOARD_DIM);
+  out.setZero();
+
+  auto inner_obs = inner_->canonicalized();
+  const int inner_dim  = is_small_variant() ? SMALL_BOARD_DIM  : UNIFIED_BOARD_DIM;
+  const int row_offset = is_small_variant() ? 1 : 0;
+  const int col_offset = is_small_variant() ? 1 : 0;
+
+  // Copy 32 state channels from inner, placing them at the correct offset.
+  for (int ch = 0; ch < 32; ++ch) {
+    for (int r = 0; r < inner_dim; ++r) {
+      for (int c = 0; c < inner_dim; ++c) {
+        out(ch, r + row_offset, c + col_offset) = inner_obs(ch, r, c);
+      }
+    }
+  }
+
+  // Append 4 one-hot variant channels broadcast exactly where channel 0 (valid hex mask) is 1.
+  // For small variants this covers only the inner board's hexes; for Battle the full 13×13 hex.
+  const int variant_ch = 32 + static_cast<int>(current_variant_);
+  for (int r = 0; r < UNIFIED_BOARD_DIM; ++r) {
+    for (int c = 0; c < UNIFIED_BOARD_DIM; ++c) {
+      if (out(0, r, c) > 0.5f) {
+        out(variant_ch, r, c) = 1.0f;
+      }
+    }
+  }
+
+  return out;
+}
+
+// -----------------------------------------------------------------------------
+// symmetries()
+// NW-axis mirror in unified 13×13 space (same transform as Battle, + 4 extra channels).
+// -----------------------------------------------------------------------------
+
+std::vector<PlayHistory> StarGambitUnifiedGS::symmetries(
+    const PlayHistory& base) const noexcept {
+  std::vector<PlayHistory> syms;
+  syms.push_back(base);
+
+  constexpr int BD   = UNIFIED_BOARD_DIM;  // 13
+  constexpr int BS   = UNIFIED_BOARD_SIDE; // 6
+  constexpr int NCH  = UNIFIED_CHANNELS;   // 36
+  constexpr int NM   = UNIFIED_NUM_MOVES;  // 1709
+
+  PlayHistory mirrored;
+  mirrored.v = base.v;
+
+  // ---- Mirror observation ----
+  mirrored.canonical.resize(NCH, BD, BD);
+  mirrored.canonical.setZero();
+
+  // Position transform: (row, col) → (BD-1-row, row+col-BS)
+  for (int ch = 0; ch < NCH; ++ch) {
+    for (int row = 0; row < BD; ++row) {
+      for (int col = 0; col < BD; ++col) {
+        int new_row = (BD - 1) - row;
+        int new_col = row + col - BS;
+        if (new_col >= 0 && new_col < BD) {
+          mirrored.canonical(ch, new_row, new_col) = base.canonical(ch, row, col);
+        }
+      }
+    }
+  }
+
+  // Permute facing channels 9-14 via MIRROR_DIRECTION_MAP
+  {
+    Tensor<float, 3> tmp(6, BD, BD);
+    for (int d = 0; d < 6; ++d)
+      for (int r = 0; r < BD; ++r)
+        for (int c = 0; c < BD; ++c)
+          tmp(d, r, c) = mirrored.canonical(9 + d, r, c);
+    for (int d = 0; d < 6; ++d) {
+      int src = MIRROR_DIRECTION_MAP[d];
+      for (int r = 0; r < BD; ++r)
+        for (int c = 0; c < BD; ++c)
+          mirrored.canonical(9 + d, r, c) = tmp(src, r, c);
+    }
+  }
+
+  // Permute cannon channels 17-21: swap L/R [0,2,1,4,3]
+  {
+    constexpr int CANNON_MAP[5] = {0, 2, 1, 4, 3};
+    Tensor<float, 3> tmp(5, BD, BD);
+    for (int c = 0; c < 5; ++c)
+      for (int r = 0; r < BD; ++r)
+        for (int col = 0; col < BD; ++col)
+          tmp(c, r, col) = mirrored.canonical(17 + c, r, col);
+    for (int c = 0; c < 5; ++c) {
+      int src = CANNON_MAP[c];
+      for (int r = 0; r < BD; ++r)
+        for (int col = 0; col < BD; ++col)
+          mirrored.canonical(17 + c, r, col) = tmp(src, r, col);
+    }
+  }
+  // Channels 32-35 (variant one-hot) are broadcast constants — invariant
+  // under the mirror, so the position transform already handles them correctly.
+
+  // ---- Mirror policy ----
+  mirrored.pi.resize(1, NM);
+  mirrored.pi.setZero();
+
+  // Spatial actions
+  for (int action = 0; action < UNIFIED_SPATIAL; ++action) {
+    int slot     = action % ACTIONS_PER_POSITION;
+    int flat_pos = action / ACTIONS_PER_POSITION;
+    int row      = flat_pos / BD;
+    int col      = flat_pos % BD;
+
+    if (!is_unified_hex(row, col)) {
+      mirrored.pi(action) = base.pi(action);
+      continue;
+    }
+
+    int new_row  = (BD - 1) - row;
+    int new_col  = row + col - BS;
+    int new_slot = SLOT_MAP[slot];
+
+    if (new_col >= 0 && new_col < BD) {
+      int new_action = (new_row * BD + new_col) * ACTIONS_PER_POSITION + new_slot;
+      mirrored.pi(new_action) = base.pi(action);
+    }
+  }
+
+  // Deploy actions
+  for (int d = 0; d < UNIFIED_DEPLOY; ++d) {
+    int type_idx = d / 6;
+    int facing   = d % 6;
+    int new_facing = (type_idx == 2) ? DEPLOY_MIRROR_D[facing]
+                                     : MIRROR_DIRECTION_MAP[facing];
+    int new_d = type_idx * 6 + new_facing;
+    mirrored.pi(UNIFIED_DEPLOY_OFFSET + new_d) = base.pi(UNIFIED_DEPLOY_OFFSET + d);
+  }
+
+  // End turn
+  mirrored.pi(UNIFIED_END_TURN_OFFSET) = base.pi(UNIFIED_END_TURN_OFFSET);
+
+  syms.push_back(mirrored);
+  return syms;
+}
+
+// -----------------------------------------------------------------------------
+// get_units() / get_fire_info() — dispatch to typed inner game
+// -----------------------------------------------------------------------------
+
+std::vector<UnitInfo> StarGambitUnifiedGS::get_units() const {
+  switch (current_variant_) {
+    case Variant::Skirmish:
+      return static_cast<const StarGambitSkirmishGS*>(inner_.get())->get_units();
+    case Variant::Showdown:
+      return static_cast<const StarGambitShowdownGS*>(inner_.get())->get_units();
+    case Variant::Clash:
+      return static_cast<const StarGambitClashGS*>(inner_.get())->get_units();
+    case Variant::Battle:
+      return static_cast<const StarGambitBattleGS*>(inner_.get())->get_units();
+  }
+  return {};
+}
+
+FireInfo StarGambitUnifiedGS::get_fire_info(uint32_t unified_move) const {
+  uint32_t inner_move = static_cast<uint32_t>(from_unified_action(static_cast<int>(unified_move)));
+  switch (current_variant_) {
+    case Variant::Skirmish:
+      return static_cast<const StarGambitSkirmishGS*>(inner_.get())->get_fire_info(inner_move);
+    case Variant::Showdown:
+      return static_cast<const StarGambitShowdownGS*>(inner_.get())->get_fire_info(inner_move);
+    case Variant::Clash:
+      return static_cast<const StarGambitClashGS*>(inner_.get())->get_fire_info(inner_move);
+    case Variant::Battle:
+      return static_cast<const StarGambitBattleGS*>(inner_.get())->get_fire_info(inner_move);
+  }
+  return {};
+}
+
 }  // namespace alphazero::star_gambit_gs

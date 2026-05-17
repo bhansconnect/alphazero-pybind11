@@ -26,6 +26,11 @@ GAME_REGISTRY = {
     "star_gambit_showdown": "StarGambitShowdownGS",
     "star_gambit_clash": "StarGambitClashGS",
     "star_gambit_battle": "StarGambitBattleGS",
+    "star_gambit_unified": "StarGambitUnifiedGS",
+    "star_gambit_unified_skirmish": "StarGambitUnifiedSkirmishGS",
+    "star_gambit_unified_showdown": "StarGambitUnifiedShowdownGS",
+    "star_gambit_unified_clash": "StarGambitUnifiedClashGS",
+    "star_gambit_unified_battle": "StarGambitUnifiedBattleGS",
 }
 
 
@@ -151,6 +156,18 @@ class TrainConfig:
     # Parallel file loading
     loader_threads: int = -1  # -1 = os.cpu_count()
 
+    # Multi-variant Star Gambit (only used when game = star_gambit_unified)
+    # Fraction of games (or samples for sample_based) per variant; must sum to 1.0.
+    # e.g. {"skirmish": 0.25, "showdown": 0.25, "clash": 0.25, "battle": 0.25}
+    variant_fractions: dict = field(default_factory=dict)
+    # "game_based": use fractions directly as game probabilities.
+    # "sample_based": adjust game probs each iteration to hit target sample fractions.
+    variant_mixing_mode: str = "game_based"
+    # Variant weights for gating evaluation (defaults to variant_fractions if empty).
+    gating_variant_weights: dict = field(default_factory=dict)
+    # Interval for dedicated per-variant evaluation (0 = disabled).
+    variant_eval_interval: int = 0
+
     def validate(self):
         if self.game not in GAME_REGISTRY:
             raise ValueError(f"Unknown game: {self.game}")
@@ -161,6 +178,20 @@ class TrainConfig:
             raise ValueError(f"gating_panel_size must be >= 1, got {self.gating_panel_size}")
         if self.iterations < 1:
             raise ValueError(f"iterations must be >= 1, got {self.iterations}")
+        valid_mixing_modes = {"game_based", "sample_based"}
+        if self.variant_mixing_mode not in valid_mixing_modes:
+            raise ValueError(f"Unknown variant_mixing_mode: {self.variant_mixing_mode}")
+        valid_variants = {"skirmish", "showdown", "clash", "battle"}
+        if self.variant_fractions:
+            unknown = set(self.variant_fractions) - valid_variants
+            if unknown:
+                raise ValueError(f"Unknown variant names in variant_fractions: {unknown}")
+            if abs(sum(self.variant_fractions.values()) - 1.0) > 1e-4:
+                raise ValueError(f"variant_fractions must sum to 1.0, got {sum(self.variant_fractions.values()):.4f}")
+        if self.gating_variant_weights:
+            unknown = set(self.gating_variant_weights) - valid_variants
+            if unknown:
+                raise ValueError(f"Unknown variant names in gating_variant_weights: {unknown}")
 
     @property
     def network_name(self) -> str:

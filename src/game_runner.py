@@ -28,6 +28,99 @@ def _fmt_pct(x):
     return f"{int(pct)}%" if pct == int(pct) else f"{pct:.1f}%"
 
 
+# ============================================================================
+# Unified Star Gambit variant mixing helpers
+# ============================================================================
+
+UNIFIED_VARIANT_NAMES = ["skirmish", "showdown", "clash", "battle"]
+_UNIFIED_GAME_NAMES = frozenset({
+    "star_gambit_unified",
+    "star_gambit_unified_skirmish",
+    "star_gambit_unified_showdown",
+    "star_gambit_unified_clash",
+    "star_gambit_unified_battle",
+})
+
+
+def _is_unified_game(config):
+    return config.game in _UNIFIED_GAME_NAMES
+
+
+def _compute_unified_probs(config, prev_sample_counts=None):
+    """Variant selection probabilities [skirmish, showdown, clash, battle].
+
+    game_based: variant_fractions used directly as game probabilities.
+    sample_based: adjust game probabilities each iteration so actual sample
+                  fractions approach the target (uses previous iteration's counts).
+    """
+    if config.variant_fractions:
+        target = [config.variant_fractions.get(v, 0.0) for v in UNIFIED_VARIANT_NAMES]
+    else:
+        target = [0.25] * 4
+    total = sum(target) or 1.0
+    target = [t / total for t in target]
+
+    if config.variant_mixing_mode != "sample_based" or prev_sample_counts is None:
+        probs = target
+    else:
+        total_samples = sum(prev_sample_counts)
+        if total_samples == 0:
+            probs = target
+        else:
+            actual = [c / total_samples for c in prev_sample_counts]
+            # Scale each variant's game prob by target/actual so sample fractions converge.
+            adjusted = [target[v] / actual[v] if actual[v] > 1e-6 else target[v] * 4.0
+                        for v in range(4)]
+            s = sum(adjusted) or 1.0
+            probs = [a / s for a in adjusted]
+
+    # Guarantee a minimum probability so no variant is starved of games.
+    MIN_PROB = 0.02
+    probs = [max(p, MIN_PROB) for p in probs]
+    s = sum(probs)
+    return [p / s for p in probs]
+
+
+def _compute_gating_probs(config):
+    """Variant selection probabilities to use during gating evaluation."""
+    weights = config.gating_variant_weights or config.variant_fractions or {}
+    if not weights:
+        return [0.25] * 4
+    probs = [weights.get(v, 0.0) for v in UNIFIED_VARIANT_NAMES]
+    total = sum(probs) or 1.0
+    return [p / total for p in probs]
+
+
+def _make_game_instance(config, probs=None):
+    """Create a game instance; for star_gambit_unified injects variant probs."""
+    Game = config.Game
+    if config.game == "star_gambit_unified" and probs is not None:
+        return Game(probs=probs)
+    return Game()
+
+
+def _count_variant_samples(paths, iteration):
+    """Count samples per variant from an iteration's history files.
+
+    Returns [skirmish, showdown, clash, battle] counts or None if unavailable.
+    Reads channel 32+v at grid position (6,6) — board center, always a valid hex.
+    """
+    c_files = _glob_hist_files(paths["history"], f"{iteration:04d}-*-canonical-*")
+    if not c_files:
+        return None
+    counts = [0, 0, 0, 0]
+    for c_path in c_files:
+        try:
+            c = load_compressed(c_path).float()
+            if c.ndim != 4 or c.shape[1] < 36:
+                continue
+            for v in range(4):
+                counts[v] += int((c[:, 32 + v, 6, 6] > 0.5).sum().item())
+        except Exception:
+            pass
+    return counts if sum(counts) > 0 else None
+
+
 def save_compressed(tensor, path, half_storage=True, zstd_level=1):
     """Save tensor with zstd compression, optionally as half-precision."""
     buffer = io.BytesIO()
@@ -197,6 +290,8 @@ SelfPlayResult = namedtuple(
         "min_inference_ms",
         "max_inference_ms",
         "theoretical_hr",
+        "variant_game_counts",   # dict {vid: count} or {} for non-unified games
+        "variant_win_rates",     # dict {vid: [rate_per_player...]} or {} for non-unified
     ],
 )
 
@@ -753,7 +848,7 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
     # Find files in tmp_history
     file_triples = glob_file_triples(tmp_hist, f"{iteration:04d}-*-canonical-*.ptz")
     if not file_triples:
-        return
+        return np.zeros(4)
 
     # Pass 1: compute per-sample loss by loading one file at a time
     nn = neural_net.NNWrapper.load_checkpoint(
@@ -779,6 +874,8 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
     del loss_arrays
     sample_count = len(loss)
     total_loss = np.sum(loss)
+
+    surprise_pcts = np.percentile(loss, [25, 50, 75, 95]) if sample_count > 0 else np.zeros(4)
 
     # Compute copy counts vectorized
     if total_loss <= 0:
@@ -848,6 +945,8 @@ def resample_by_surprise(config, paths, experiment_name, iteration):
         for fp in (c_path, v_path, pi_path):
             if os.path.exists(fp):
                 os.remove(fp)
+
+    return surprise_pcts
 
 
 @tracy_zone
@@ -1397,7 +1496,8 @@ class StreamingCompressedDataset(IterableDataset):
 
 
 @tracy_zone
-def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth):
+def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth,
+              variant_probs=None):
     import neural_net
 
     Game = config.Game
@@ -1437,7 +1537,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     # Clean tmp_history before self-play
     shutil.rmtree(paths["tmp_history"], ignore_errors=True)
 
-    pm = alphazero.PlayManager(Game(), params)
+    pm = alphazero.PlayManager(_make_game_instance(config, variant_probs), params)
     grargs = GRArgs(
         title="Self Play",
         game=Game,
@@ -1512,6 +1612,15 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         median_inference_ms = ((inf_sorted[n_it // 2] + inf_sorted[(n_it - 1) // 2]) / 2) * 1000
     else:
         avg_inference_ms = min_inference_ms = max_inference_ms = median_inference_ms = 0
+    variant_game_counts = {}
+    variant_win_rates = {}
+    for vid in range(pm.num_tracked_variants()):
+        vgames = pm.variant_games_completed(vid)
+        variant_game_counts[vid] = vgames
+        if vgames > 0:
+            vscores = pm.variant_scores(vid)
+            vn = sum(vscores) or 1.0
+            variant_win_rates[vid] = [float(vscores[j]) / vn for j in range(len(vscores))]
     del gr, pm, nn
     gc.collect()
     return SelfPlayResult(
@@ -1526,6 +1635,8 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         avg_inference_ms=avg_inference_ms, median_inference_ms=median_inference_ms,
         min_inference_ms=min_inference_ms, max_inference_ms=max_inference_ms,
         theoretical_hr=theoretical_hr,
+        variant_game_counts=variant_game_counts,
+        variant_win_rates=variant_win_rates,
     )
 
 
@@ -1548,7 +1659,7 @@ def _resolve_checkpoint(Game, primary_dir, experiment_name, iteration, fallback_
 
 @tracy_zone
 def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch_size=64,
-              fallback_checkpoint_dir=None):
+              fallback_checkpoint_dir=None, variant_probs=None):
     import neural_net
 
     Game = config.Game
@@ -1604,7 +1715,7 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
     params.seat_perms = seat_perms
     set_eval_types(params, players)
 
-    pm = alphazero.PlayManager(Game(), params)
+    pm = alphazero.PlayManager(_make_game_instance(config, variant_probs), params)
     grargs = GRArgs(
         title=f"Bench {iteration} v {past_iter}",
         game=Game,
@@ -1644,9 +1755,27 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
     nn_rate /= n_perms
     draw_rate /= n_perms
 
+    # Per-variant win/draw rates (only populated for unified games with num_variants > 0).
+    variant_nn_rates = {}
+    variant_draw_rates = {}
+    for vid in range(pm.num_tracked_variants()):
+        vgames = pm.variant_games_completed(vid)
+        if vgames == 0:
+            continue
+        vscores = pm.variant_scores(vid)
+        vnn = 0.0
+        # Same perm-aggregation logic: sum nn-seat wins across all seat perms.
+        for perm_idx in range(pm.num_seat_perms()):
+            perm = seat_perms[perm_idx]
+            for seat in range(num_players):
+                if perm[seat] == 0:
+                    vnn += vscores[seat] / vgames
+        variant_nn_rates[vid] = vnn / n_perms
+        variant_draw_rates[vid] = vscores[num_players] / vgames  # draw slot is last
+
     del gr, nn, nn_past, pm
     gc.collect()
-    return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm
+    return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm, variant_nn_rates, variant_draw_rates
 
 
 def get_lr(config, iteration, lr_state):
@@ -1818,6 +1947,236 @@ def _bootstrap_retrain(nn, reservoir_files, window_files, config, run, source_n,
     return total_train_steps
 
 
+def _analyze_iteration_variants(config, paths, experiment_name, iteration):
+    """Compute per-variant pi-loss, v-loss, and target entropy after training.
+
+    Loads up to 4096 samples from the current iteration's history files, runs
+    inference with the newly-trained checkpoint, and returns per-variant mean losses.
+
+    Returns dict: {variant_name: {"pi_loss": float, "v_loss": float, "entropy": float}}
+    Returns {} for non-unified games or if history files are missing.
+    """
+    import neural_net
+
+    Game = config.Game
+    hist_location = paths["history"]
+
+    file_triples = glob_file_triples(hist_location, f"{iteration:04d}-*-canonical-*.ptz")
+    if not file_triples:
+        return {}
+
+    MAX_SAMPLES = 4096
+    all_c, all_v, all_pi = [], [], []
+    total = 0
+    for c_path, v_path, pi_path, size in file_triples:
+        if total >= MAX_SAMPLES:
+            break
+        c = load_compressed(c_path).float()
+        v = load_compressed(v_path).float()
+        pi = load_compressed(pi_path).float()
+        take = min(size, MAX_SAMPLES - total)
+        all_c.append(c[:take])
+        all_v.append(v[:take])
+        all_pi.append(pi[:take])
+        total += take
+
+    if not all_c:
+        return {}
+
+    c_data = torch.cat(all_c)
+    v_data = torch.cat(all_v)
+    pi_data = torch.cat(all_pi)
+    del all_c, all_v, all_pi
+
+    # Variant membership: channels 32-35 one-hot, sampled at center of 13×13 grid
+    variant_ids = c_data[:, 32:36, 6, 6].argmax(dim=1).numpy()
+
+    try:
+        nn = neural_net.NNWrapper.load_checkpoint(
+            Game, paths["checkpoint"], f"{iteration + 1:04d}-{experiment_name}.pt"
+        )
+    except Exception:
+        del c_data, v_data, pi_data
+        return {}
+
+    device = nn.device
+    nn.nnet.eval()
+
+    all_pi_loss, all_v_loss, all_entropy = [], [], []
+    bs = config.train_batch_size
+    with torch.no_grad():
+        for start in range(0, len(c_data), bs):
+            end = min(start + bs, len(c_data))
+            cb = c_data[start:end].to(device, non_blocking=True)
+            vb = v_data[start:end].to(device, non_blocking=True)
+            pib = pi_data[start:end].to(device, non_blocking=True)
+            out_v, out_pi = nn.nnet(cb)
+            all_pi_loss.append(nn.sample_loss_pi(pib, out_pi).cpu().numpy())
+            all_v_loss.append(nn.sample_loss_v(vb, out_v).cpu().numpy())
+            # Target entropy: only over non-zero (valid-move) entries
+            all_entropy.append((-(pib * (pib + 1e-9).log()).sum(dim=1)).cpu().numpy())
+
+    pi_losses = np.concatenate(all_pi_loss)
+    v_losses = np.concatenate(all_v_loss)
+    entropies = np.concatenate(all_entropy)
+    del nn, c_data, v_data, pi_data
+    gc.collect()
+
+    result = {}
+    for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+        mask = variant_ids == vid
+        if mask.sum() == 0:
+            continue
+        result[vname] = {
+            "pi_loss": float(pi_losses[mask].mean()),
+            "v_loss": float(v_losses[mask].mean()),
+            "entropy": float(entropies[mask].mean()),
+        }
+    return result
+
+
+def _generate_visualizations(config, paths, iteration, run, total_train_steps):
+    """Generate and log phase-aware action heatmap and win rate matrix as aim images.
+
+    Only called for unified games. All errors are caught silently so a missing
+    dependency or bad data never interrupts training.
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import aim as aim_lib
+    except ImportError:
+        return
+
+    try:
+        hist_location = paths["history"]
+        file_triples = glob_file_triples(hist_location, f"{iteration:04d}-*-canonical-*.ptz")
+        if not file_triples:
+            return
+
+        MAX_SAMPLES = 8192
+        all_c, all_pi = [], []
+        total = 0
+        for c_path, v_path, pi_path, size in file_triples:
+            if total >= MAX_SAMPLES:
+                break
+            c = load_compressed(c_path).float()
+            pi = load_compressed(pi_path).float()
+            take = min(size, MAX_SAMPLES - total)
+            all_c.append(c[:take])
+            all_pi.append(pi[:take])
+            total += take
+
+        if not all_c:
+            return
+
+        c_data = torch.cat(all_c)
+        pi_np = torch.cat(all_pi).numpy()
+        del all_c, all_pi
+
+        # Phase bucketing via reserve channels (24-29) broadcast at center hex (6,6)
+        reserves = c_data[:, 24:30, 6, 6].sum(dim=1).numpy()
+        deploy_mask = reserves > 0.01
+        combat_mask = ~deploy_mask
+
+        # Unit presence (channels 1-8 summed over board) splits early vs late combat
+        unit_presence = c_data[:, 1:9, :, :].sum(dim=(1, 2, 3)).numpy()
+        if combat_mask.sum() > 0:
+            threshold = float(np.median(unit_presence[combat_mask]))
+        else:
+            threshold = 0.0
+        early_mask = combat_mask & (unit_presence > threshold)
+        late_mask = combat_mask & (unit_presence <= threshold)
+        del c_data
+
+        # Hex valid-cell mask for the 13×13 unified board (board_side=6)
+        hex_mask = np.zeros((13, 13), dtype=bool)
+        for r in range(13):
+            for c in range(13):
+                q = r - 6
+                rh = c - 6
+                s = -q - rh
+                if abs(q) <= 6 and abs(rh) <= 6 and abs(s) <= 6:
+                    hex_mask[r, c] = True
+
+        def spatial_heatmap(mask):
+            if mask.sum() == 0:
+                return np.full((13, 13), np.nan)
+            sp = pi_np[mask, :1690].reshape(-1, 13, 13, 10).sum(axis=-1).sum(axis=0)
+            total = sp.sum()
+            grid = sp / total if total > 0 else sp
+            return np.where(hex_mask, grid, np.nan)
+
+        # --- Figure 1: action frequency (3 panels) ---
+        fig1, axes = plt.subplots(1, 3, figsize=(15, 5))
+        fig1.suptitle(f"Iteration {iteration} — Action Frequency by Phase", fontsize=12)
+
+        # Panel A: deploy bar chart
+        ax = axes[0]
+        dep_pi = pi_np[deploy_mask, 1690:1708].sum(axis=0) if deploy_mask.sum() > 0 else np.zeros(18)
+        dep_total = dep_pi.sum()
+        if dep_total > 0:
+            dep_pi = dep_pi / dep_total
+        unit_names = ["Fighter", "Cruiser", "Dreadnought"]
+        unit_colors = ["#4e79a7", "#f28e2b", "#59a14f"]
+        facing_labels = ["E", "NE", "NW", "W", "SW", "SE"]
+        x = np.arange(6)
+        bar_w = 0.25
+        for ui, (uname, col) in enumerate(zip(unit_names, unit_colors)):
+            vals = dep_pi[ui * 6: ui * 6 + 6]
+            ax.bar(x + ui * bar_w, vals, bar_w, label=uname, color=col, alpha=0.85)
+        ax.set_xticks(x + bar_w)
+        ax.set_xticklabels(facing_labels, fontsize=8)
+        ax.set_title(f"Deploy Phase\n(n={deploy_mask.sum()})", fontsize=10)
+        ax.set_ylabel("Fraction of deploy pi mass")
+        ax.legend(fontsize=7)
+
+        # Panel B: early combat spatial heatmap
+        ax = axes[1]
+        grid = spatial_heatmap(early_mask)
+        im = ax.imshow(grid, cmap="YlOrRd", vmin=0, interpolation="nearest")
+        ax.set_title(f"Early Combat\n(n={early_mask.sum()})", fontsize=10)
+        ax.set_xlabel("col"); ax.set_ylabel("row")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+        # Panel C: late/attrition spatial heatmap
+        ax = axes[2]
+        grid = spatial_heatmap(late_mask)
+        im = ax.imshow(grid, cmap="YlOrRd", vmin=0, interpolation="nearest")
+        ax.set_title(f"Late/Attrition\n(n={late_mask.sum()})", fontsize=10)
+        ax.set_xlabel("col"); ax.set_ylabel("row")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+        plt.tight_layout()
+
+        # --- Figure 2: win rate matrix ---
+        wr_path = os.path.join(paths["experiment"], "win_rate.csv")
+        fig2 = None
+        if os.path.exists(wr_path):
+            wr_mat = np.genfromtxt(wr_path, delimiter=",")
+            n = min(iteration + 2, wr_mat.shape[0])
+            wr_display = np.where(np.isnan(wr_mat[:n, :n]), 0.5, wr_mat[:n, :n])
+            sz = max(4, n // 3)
+            fig2, ax2 = plt.subplots(figsize=(sz, sz))
+            im2 = ax2.imshow(wr_display, cmap="RdYlGn", vmin=0, vmax=1, interpolation="nearest")
+            ax2.set_title(f"Win Rate Matrix (iteration {iteration})", fontsize=11)
+            ax2.set_xlabel("Opponent iteration")
+            ax2.set_ylabel("Agent iteration")
+            plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+            plt.tight_layout()
+
+        run.track(aim_lib.Image(fig1), name="action_heatmap",
+                  epoch=iteration, step=total_train_steps)
+        if fig2 is not None:
+            run.track(aim_lib.Image(fig2), name="win_rate_matrix",
+                      epoch=iteration, step=total_train_steps)
+    except Exception:
+        pass
+    finally:
+        plt.close("all")
+
+
 def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
     """Main training loop.
 
@@ -1909,6 +2268,9 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         wr = np.empty((total_agents, total_agents))
         wr[:] = np.nan
         elo = np.zeros(total_agents)
+        if _is_unified_game(config):
+            wr_v = [np.full((total_agents, total_agents), np.nan) for _ in range(4)]
+            elo_v = [np.zeros(total_agents) for _ in range(4)]
         current_best = 0
         total_train_steps = 0
         lr_state = _default_lr_state(config)
@@ -2018,7 +2380,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 elif phase == "Calibrate ELO":
                     compare_start = max(0, source_n - config.bootstrap_compare_past)
                     for past_iter in tqdm.tqdm(range(compare_start, source_n), desc="  ELO", leave=False):
-                        nn_rate, draw_rate, _, _, _, _, _, _ = play_past(
+                        nn_rate, draw_rate, _, _, _, _, _, _, _, _ = play_past(
                             config, paths, experiment_name, config.compare_mcts_visits,
                             source_n, past_iter, config.past_compare_batch_size,
                             fallback_checkpoint_dir=source_paths["checkpoint"],
@@ -2065,6 +2427,24 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         elo = np.zeros(total_agents)
         old_size = min(tmp_elo.shape[0], total_agents)
         elo[:old_size] = tmp_elo[:old_size]
+        if _is_unified_game(config):
+            wr_v = []
+            elo_v = []
+            for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+                vwr_path = os.path.join(experiment_dir, f"win_rate_{vname}.csv")
+                velo_path = os.path.join(experiment_dir, f"elo_{vname}.csv")
+                m = np.full((total_agents, total_agents), np.nan)
+                if os.path.exists(vwr_path):
+                    tmp = np.genfromtxt(vwr_path, delimiter=",")
+                    sz = min(tmp.shape[0], total_agents)
+                    m[:sz, :sz] = tmp[:sz, :sz]
+                wr_v.append(m)
+                ev = np.zeros(total_agents)
+                if os.path.exists(velo_path):
+                    tmp = np.genfromtxt(velo_path, delimiter=",")
+                    sz = min(len(tmp), total_agents)
+                    ev[:sz] = tmp[:sz]
+                elo_v.append(ev)
         current_best = np.argmax(elo[: start + 1])
         total_train_steps = int(
             np.genfromtxt(os.path.join(experiment_dir, "total_train_steps.txt"))
@@ -2084,6 +2464,13 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
     postfix = {"best": current_best}
     panel = [current_best]
 
+    # Unified variant mixing state (only used for star_gambit_unified).
+    unified_probs = None
+    prev_variant_sample_counts = None
+    if not _is_unified_game(config):
+        wr_v = None
+        elo_v = None
+
     with tqdm.tqdm(range(start, config.iterations), initial=start, total=config.iterations, desc="Build Amazing Network") as pbar:
         for i in pbar:
             stage_times = {}
@@ -2097,10 +2484,11 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             with TracyZone("stage_history"):
                 past_iter = max(0, i - config.compare_past)
                 if past_iter != i and math.isnan(wr[i, past_iter]):
-                    nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy, bench_mpt, bench_vm = play_past(
+                    nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy, bench_mpt, bench_vm, variant_nn_rates, variant_draw_rates = play_past(
                         config, paths, experiment_name,
                         config.compare_mcts_visits, i, past_iter, config.past_compare_batch_size,
                         fallback_checkpoint_dir=fallback_checkpoint_dir,
+                        variant_probs=unified_probs,
                     )
                     wr[i, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
                     wr[past_iter, i] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
@@ -2111,6 +2499,15 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     run.track(bench_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}", "search": "full"})
                     run.track(bench_mpt, name="moves_per_turn", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
                     run.track(bench_vm, name="avg_valid_moves", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
+                    for vid, vrate in variant_nn_rates.items():
+                        run.track(vrate, name="win_rate", epoch=i, step=total_train_steps,
+                                  context={"vs": f"-{config.compare_past}", "variant": UNIFIED_VARIANT_NAMES[vid]})
+                        if wr_v is not None:
+                            wr_v[vid][i, past_iter] = vrate
+                            wr_v[vid][past_iter, i] = 1.0 - vrate
+                    for vid, drate in variant_draw_rates.items():
+                        run.track(drate, name="draw_rate", epoch=i, step=total_train_steps,
+                                  context={"vs": f"-{config.compare_past}", "variant": UNIFIED_VARIANT_NAMES[vid]})
                     postfix[f"vs -{config.compare_past}"] = _fmt_pct(nn_rate + draw_rate / Game.NUM_PLAYERS())
                     gc.collect()
             stage_times["history"] = time.time() - stage_start
@@ -2120,6 +2517,12 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 elo = get_elo(elo, wr, i)
                 run.track(elo[i], name="elo", epoch=i, step=total_train_steps, context={"type": "current"})
                 run.track(elo[current_best], name="elo", epoch=i, step=total_train_steps, context={"type": "best"})
+                if elo_v is not None:
+                    for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+                        if not np.all(np.isnan(wr_v[vid][i])):
+                            elo_v[vid] = get_elo(elo_v[vid], wr_v[vid], i)
+                        run.track(elo_v[vid][i], name="variant_elo", epoch=i, step=total_train_steps,
+                                  context={"variant": vname})
                 postfix["elo"] = int(elo[i])
                 pbar.set_postfix(postfix)
                 np.savetxt(os.path.join(experiment_dir, "elo.csv"), elo, delimiter=",")
@@ -2127,11 +2530,20 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             stage_start = time.time()
             with TracyZone("stage_selfplay"):
+                if _is_unified_game(config):
+                    prev_variant_sample_counts = (
+                        _count_variant_samples(paths, i - 1) if i > 0 else None
+                    )
+                    unified_probs = _compute_unified_probs(config, prev_variant_sample_counts)
+                    for vi, vname in enumerate(UNIFIED_VARIANT_NAMES):
+                        run.track(unified_probs[vi], name="variant_prob", epoch=i,
+                                  step=total_train_steps, context={"variant": vname})
                 sp = self_play(
                     config, paths, experiment_name,
                     current_best, i,
                     config.selfplay_mcts_visits,
                     config.fast_mcts_visits,
+                    variant_probs=unified_probs,
                 )
                 for j in range(len(sp.win_rates) - 1):
                     run.track(sp.win_rates[j], name="win_rate", epoch=i, step=total_train_steps, context={"vs": "self", "player": j + 1, "from": "all_games"})
@@ -2163,6 +2575,23 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 run.track(float(sp.max_inference_ms), name="inference_ms", epoch=i, step=total_train_steps, context={"vs": "self", "stat": "max"})
                 postfix["wr"] = "/".join(_fmt_pct(x) for x in sp.win_rates)
                 pbar.set_postfix(postfix)
+                if sp.variant_game_counts:
+                    total_vg = sum(sp.variant_game_counts.values()) or 1
+                    for vid, cnt in sp.variant_game_counts.items():
+                        run.track(cnt / total_vg, name="variant_game_frac", epoch=i,
+                                  step=total_train_steps,
+                                  context={"variant": UNIFIED_VARIANT_NAMES[vid], "vs": "self"})
+                if sp.variant_win_rates:
+                    for vid, vrates in sp.variant_win_rates.items():
+                        vname = UNIFIED_VARIANT_NAMES[vid]
+                        for j in range(len(vrates) - 1):
+                            run.track(vrates[j], name="win_rate", epoch=i,
+                                      step=total_train_steps,
+                                      context={"vs": "self", "player": j + 1,
+                                               "variant": vname, "from": "all_games"})
+                        run.track(vrates[-1], name="draw_rate", epoch=i,
+                                  step=total_train_steps,
+                                  context={"vs": "self", "variant": vname, "from": "all_games"})
             stage_times["selfplay"] = time.time() - stage_start
 
             stage_start = time.time()
@@ -2172,8 +2601,11 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             stage_start = time.time()
             with TracyZone("stage_resampling"):
-                resample_by_surprise(config, paths, experiment_name, i)
+                surprise_pcts = resample_by_surprise(config, paths, experiment_name, i)
             stage_times["resampling"] = time.time() - stage_start
+            for label, pct in zip(["p25", "p50", "p75", "p95"], surprise_pcts):
+                run.track(float(pct), name="surprise_loss", epoch=i, step=total_train_steps,
+                          context={"pct": label})
 
             stage_start = time.time()
             with TracyZone("stage_training"):
@@ -2200,6 +2632,19 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             stage_times["training"] = time.time() - stage_start
 
             stage_start = time.time()
+            with TracyZone("stage_variant_analysis"):
+                if _is_unified_game(config):
+                    variant_stats = _analyze_iteration_variants(config, paths, experiment_name, i)
+                    for vname, stats in variant_stats.items():
+                        run.track(stats["pi_loss"], name="loss", epoch=i, step=total_train_steps,
+                                  context={"type": "policy", "variant": vname})
+                        run.track(stats["v_loss"], name="loss", epoch=i, step=total_train_steps,
+                                  context={"type": "value", "variant": vname})
+                        run.track(stats["entropy"], name="loss", epoch=i, step=total_train_steps,
+                                  context={"type": "target_entropy", "variant": vname})
+            stage_times["variant_analysis"] = time.time() - stage_start
+
+            stage_start = time.time()
             with TracyZone("stage_reservoir"):
                 update_reservoir(config, paths, i, hist_size)
                 gc.collect()
@@ -2216,13 +2661,15 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 panel_mpt = 0
                 panel_vm = 0
                 best_win_rate = 0
+                gating_probs = _compute_gating_probs(config) if _is_unified_game(config) else None
                 for gate_net in tqdm.tqdm(
                     panel, desc=f"Pitting against Panel {panel}", leave=False
                 ):
-                    nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy, gate_mpt, gate_vm = play_past(
+                    nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy, gate_mpt, gate_vm, variant_nn_rates, variant_draw_rates = play_past(
                         config, paths, experiment_name,
                         config.compare_mcts_visits, next_net, gate_net, config.gate_compare_batch_size,
                         fallback_checkpoint_dir=fallback_checkpoint_dir,
+                        variant_probs=gating_probs,
                     )
                     panel_nn_rate += nn_rate
                     panel_draw_rate += draw_rate
@@ -2242,6 +2689,15 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         run.track(gate_entropy, name="search_entropy", epoch=next_net, step=total_train_steps, context={"vs": "best", "search": "full"})
                         run.track(gate_mpt, name="moves_per_turn", epoch=next_net, step=total_train_steps, context={"vs": "best"})
                         run.track(gate_vm, name="avg_valid_moves", epoch=next_net, step=total_train_steps, context={"vs": "best"})
+                        for vid, vrate in variant_nn_rates.items():
+                            run.track(vrate, name="win_rate", epoch=next_net, step=total_train_steps,
+                                      context={"vs": "best", "variant": UNIFIED_VARIANT_NAMES[vid]})
+                            if wr_v is not None:
+                                wr_v[vid][next_net, gate_net] = vrate
+                                wr_v[vid][gate_net, next_net] = 1.0 - vrate
+                        for vid, drate in variant_draw_rates.items():
+                            run.track(drate, name="draw_rate", epoch=next_net, step=total_train_steps,
+                                      context={"vs": "best", "variant": UNIFIED_VARIANT_NAMES[vid]})
                         best_win_rate = nn_rate + draw_rate / Game.NUM_PLAYERS()
                         postfix["vs best"] = _fmt_pct(best_win_rate)
                         pbar.set_postfix(postfix)
@@ -2278,7 +2734,25 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     while len(panel) > config.gating_panel_size:
                         panel = panel[1:]
                 np.savetxt(os.path.join(experiment_dir, "win_rate.csv"), wr, delimiter=",")
+                if wr_v is not None:
+                    for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+                        np.savetxt(os.path.join(experiment_dir, f"win_rate_{vname}.csv"), wr_v[vid], delimiter=",")
+                        np.savetxt(os.path.join(experiment_dir, f"elo_{vname}.csv"), elo_v[vid], delimiter=",")
             stage_times["gating"] = time.time() - stage_start
+
+            # Log variant_sample_frac at end of iteration from this iteration's actual data.
+            if _is_unified_game(config):
+                current_counts = _count_variant_samples(paths, i)
+                if current_counts:
+                    total_sc = sum(current_counts) or 1
+                    for vi, vname in enumerate(UNIFIED_VARIANT_NAMES):
+                        run.track(current_counts[vi] / total_sc, name="variant_sample_frac",
+                                  epoch=i, step=total_train_steps, context={"variant": vname})
+
+            if _is_unified_game(config) and i % 10 == 0:
+                stage_start = time.time()
+                _generate_visualizations(config, paths, i, run, total_train_steps)
+                stage_times["visualizations"] = time.time() - stage_start
 
             total_time = time.time() - iteration_start
             for stage_name, stage_time in stage_times.items():

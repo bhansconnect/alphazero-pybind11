@@ -136,6 +136,14 @@ star_gambit_gs_test = executable(
 )
 test('gtest tests', star_gambit_gs_test)
 
+star_gambit_unified_gs_test = executable(
+  'star_gambit_unified_gs_test',
+  'star_gambit_unified_gs_test.cc',
+  dependencies: [gtest_dep, eigen_dep, absl_hash_dep, absl_container_dep],
+  link_with: [star_gambit_gs, mcts],
+)
+test('gtest tests', star_gambit_unified_gs_test)
+
 photosynthesis_gs_test = executable(
   'photosynthesis_gs_test',
   'photosynthesis_gs_test.cc',

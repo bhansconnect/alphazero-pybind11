@@ -2068,13 +2068,30 @@ def _log_win_rate_matrix(paths, iteration, run, total_train_steps):
             return
         wr_mat = np.genfromtxt(wr_path, delimiter=",")
         n = min(iteration + 2, wr_mat.shape[0])
-        wr_display = np.where(np.isnan(wr_mat[:n, :n]), 0.5, wr_mat[:n, :n])
+        # Mask unplayed matchups so they render distinctly from genuine 0.5
+        # draws (previously they were painted yellow-green like a fair draw).
+        wr_display = np.ma.masked_invalid(wr_mat[:n, :n])
         sz = min(max(4, n // 3), 12)
         fig, ax = plt.subplots(figsize=(sz, sz))
-        im = ax.imshow(wr_display, cmap="RdYlGn", vmin=0, vmax=1, interpolation="nearest")
+        cmap = plt.get_cmap("RdYlGn").copy()
+        cmap.set_bad("#d0d0d0")
+        # origin="lower" flips the y axis so the latest agent (highest index)
+        # sits at the top — biggest-vs-biggest lands in the upper-right corner.
+        im = ax.imshow(wr_display, cmap=cmap, vmin=0, vmax=1,
+                       interpolation="nearest", origin="lower")
         ax.set_title(f"Win Rate Matrix (iteration {iteration})", fontsize=11)
         ax.set_xlabel("Opponent iteration"); ax.set_ylabel("Agent iteration")
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        # Overlay numeric labels for small matrices.
+        if n <= 12:
+            for i in range(n):
+                for j in range(n):
+                    v = wr_mat[i, j]
+                    if np.isnan(v):
+                        continue
+                    ax.text(j, i, f"{v:.2f}",
+                            ha="center", va="center", fontsize=7,
+                            color="black")
         plt.tight_layout()
         run.track(aim_lib.Image(fig), name="win_rate_matrix",
                   epoch=iteration, step=total_train_steps)
@@ -2173,6 +2190,37 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         # Per-unit-type presence at each hex: channels 1=Fighter, 2=Cruiser, 3=Dreadnought
         unit_presence = [c_data[:, ch, :, :].numpy() > 0.5 for ch in [1, 2, 3]]
 
+        # Valid spatial action slots per unit type (10 slots, 0..9).
+        # Fighter: move f/fl/fr (0,1,2), fire forward (5)
+        # Cruiser: move f/fl/fr/l/r (0..4), fire f/fl/fr (5,6,7)
+        # Dreadnought: move fl/fr/l/r (1..4), fire fl/fr/rl/rr (6..9)
+        VALID_SLOTS_BY_UNIT = np.zeros((3, 10), dtype=bool)
+        VALID_SLOTS_BY_UNIT[0, [0, 1, 2, 5]]             = True
+        VALID_SLOTS_BY_UNIT[1, [0, 1, 2, 3, 4, 5, 6, 7]] = True
+        VALID_SLOTS_BY_UNIT[2, [1, 2, 3, 4, 6, 7, 8, 9]] = True
+
+        # Valid deploy facings in canonical (current-player == P0) perspective.
+        VALID_DEPLOY_FACINGS = np.zeros((3, 6), dtype=bool)
+        VALID_DEPLOY_FACINGS[0, [1, 2, 3]]    = True   # Fighter:     NE, NW, W
+        VALID_DEPLOY_FACINGS[1, [1, 2, 3]]    = True   # Cruiser:     NE, NW, W
+        VALID_DEPLOY_FACINGS[2, [0, 1, 2, 3]] = True   # Dreadnought: E, NE, NW, W
+
+        # Which variants each unit type can exist in (Skirmish has no Dread,
+        # Showdown has no Cruiser). Used by fig4/5/6 to grey out N/A cells.
+        UNIT_VALID_IN_VARIANT = np.array([
+            [True,  True,  True,  True ],   # Fighter
+            [True,  False, True,  True ],   # Cruiser
+            [False, True,  True,  True ],   # Dreadnought
+        ], dtype=bool)
+
+        # Inner board_side per variant id (variants 0-2 use 5; Battle uses 6).
+        # Drives deploy-hex annotations on per-variant heatmaps.
+        VARIANT_BOARD_SIDE = [5, 5, 5, 6]
+
+        # Minimum sample count below which a renormalized distribution is too
+        # noisy to plot; we render an "insufficient data" placeholder instead.
+        MIN_SAMPLES_FOR_PLOT = 50
+
         # Per-sample unit counts by type (my + opponent).
         # Fighter=1 hex, Cruiser=2 hexes, Dreadnought=3 hexes — divide channel sum by hex size.
         _hex_sizes = [1, 2, 3]
@@ -2195,26 +2243,137 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                     hex_mask[r, c] = True
 
         def _spatial_heatmap(sample_mask, unit_idx=None):
-            """Normalized (13,13) heatmap. unit_idx filters to that unit type if given."""
-            if sample_mask.sum() == 0:
+            """Normalized (13,13) heatmap of pi mass at source hex.
+
+            Mass is restricted to (hex, slot) pairs that are physically valid:
+            a slot is counted at a hex only if a unit of a type that can use
+            that slot occupies the hex. Renormalizes over that valid support.
+            """
+            n = int(sample_mask.sum())
+            if n == 0:
                 return np.full((13, 13), np.nan)
-            sp = pi_spatial[sample_mask]                         # (n, 13, 13, 10)
-            if unit_idx is not None:
-                up = unit_presence[unit_idx][sample_mask]        # (n, 13, 13) bool
-                sp = sp * up[:, :, :, np.newaxis]
-            grid = sp.sum(axis=(0, 3))                           # (13, 13)
+            sp = pi_spatial[sample_mask]                              # (n, 13, 13, 10)
+            grid = np.zeros((13, 13))
+            units = [unit_idx] if unit_idx is not None else [0, 1, 2]
+            for u in units:
+                up = unit_presence[u][sample_mask]                    # (n, 13, 13)
+                slot_mask = VALID_SLOTS_BY_UNIT[u]                    # (10,)
+                grid += (sp * up[:, :, :, np.newaxis] * slot_mask
+                         ).sum(axis=(0, 3))                           # (13, 13)
             total = grid.sum()
             return np.where(hex_mask, grid / total if total > 0 else grid, np.nan)
 
         def _action_dist(sample_mask, unit_idx):
-            """Normalized (10,) action-slot distribution for a unit type."""
+            """Normalized (10,) action-slot distribution for a unit type.
+
+            Masks invalid slots for the unit type and renormalizes over the
+            remaining valid slots.
+            """
             if sample_mask.sum() == 0:
                 return np.zeros(10)
-            sp = pi_spatial[sample_mask]                         # (n, 13, 13, 10)
-            up = unit_presence[unit_idx][sample_mask]            # (n, 13, 13) bool
-            dist = (sp * up[:, :, :, np.newaxis]).sum(axis=(0, 1, 2))
+            sp = pi_spatial[sample_mask]                              # (n, 13, 13, 10)
+            up = unit_presence[unit_idx][sample_mask]                 # (n, 13, 13)
+            slot_mask = VALID_SLOTS_BY_UNIT[unit_idx]                 # (10,)
+            dist = (sp * up[:, :, :, np.newaxis] * slot_mask
+                    ).sum(axis=(0, 1, 2))                             # (10,)
             total = dist.sum()
             return dist / total if total > 0 else dist
+
+        def _draw_na(ax, label="N/A"):
+            """Render a grey 'N/A' / insufficient-data placeholder panel."""
+            ax.set_facecolor("#dddddd")
+            ax.text(0.5, 0.5, label, transform=ax.transAxes,
+                    ha="center", va="center", fontsize=10, color="#888888")
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+        # ---- Hex-canvas rendering ---------------------------------------------------
+        # The 13×13 grid is indexed [q+6, r+6]. The game's actual hex layout
+        # (matching StarGambitGS::dump and play.py) places P0 deploy at the
+        # bottom-right corner and P1 deploy at the top-left. We render heatmaps
+        # using axial→pixel coords so peaks land at the corners a player expects.
+        from matplotlib.collections import PolyCollection
+
+        _HEX_DY = math.sqrt(3) / 2
+        _hex_unit_verts = np.array([
+            (math.cos(math.radians(60 * k + 30)),
+             math.sin(math.radians(60 * k + 30)))
+            for k in range(6)
+        ])  # pointy-top hexagon, circumradius=1
+
+        def _axial_to_xy(q, r):
+            """Axial (q, r) → screen (x, y) for pointy-top hexes, +y points down."""
+            x = q + r * 0.5
+            y = r * _HEX_DY
+            return x, y
+
+        def _hex_in_bounds(q, r, side=6):
+            return abs(q) <= side and abs(r) <= side and abs(-q - r) <= side
+
+        def _draw_hex_heatmap(ax, grid, cmap="YlOrRd", vmin=0, vmax=None,
+                              board_side_hint=None, show_colorbar=True,
+                              show_compass=True):
+            """Render a 13×13 grid (indexed [q+6, r+6]) as a hex polygon collection.
+
+            board_side_hint: int marks the P0 deploy hex for that inner board
+                size AND clips the rendered hexes to that variant's board
+                (so the outer empty ring is hidden for board_side=5 variants).
+                None renders all hexes within the unified board_side=6 hull
+                and marks both 5- and 6-side spawn hexes.
+            """
+            side = board_side_hint if board_side_hint is not None else 6
+            polys = []
+            values = []
+            for q in range(-side, side + 1):
+                for r in range(-side, side + 1):
+                    if not _hex_in_bounds(q, r, side):
+                        continue
+                    val = grid[q + 6, r + 6]
+                    if np.isnan(val):
+                        continue
+                    cx, cy = _axial_to_xy(q, r)
+                    polys.append(_hex_unit_verts * 0.95 + (cx, cy))
+                    values.append(val)
+            if not polys:
+                _draw_na(ax)
+                return None
+            if vmax is None:
+                vmax = max(values) if values else 1.0
+                if vmax <= 0:
+                    vmax = 1.0
+            coll = PolyCollection(polys, array=np.asarray(values),
+                                  cmap=cmap, edgecolors="white", linewidths=0.3)
+            coll.set_clim(vmin, vmax)
+            ax.add_collection(coll)
+
+            # Spawn markers.
+            spawn_sides = [board_side_hint] if board_side_hint is not None else [5, 6]
+            for s in spawn_sides:
+                cx, cy = _axial_to_xy(0, s)
+                ax.plot(cx, cy, marker="x", markersize=8, mew=1.5,
+                        color="#222222", linestyle="none")
+            # Axis cosmetics: equal aspect, +y down, no ticks; small compass.
+            x_min = -side - 0.5 * side - 1
+            x_max =  side + 0.5 * side + 1
+            y_min = -side * _HEX_DY - 1
+            y_max =  side * _HEX_DY + 1
+            ax.set_xlim(x_min, x_max)
+            ax.set_ylim(y_max, y_min)  # invert y so +y is down (matches dump())
+            ax.set_aspect("equal")
+            ax.set_xticks([]); ax.set_yticks([])
+            if show_compass:
+                ax.text(x_max - 0.4, 0, "E", ha="right", va="center",
+                        fontsize=7, color="#888888")
+                ax.text(x_min + 0.4, 0, "W", ha="left",  va="center",
+                        fontsize=7, color="#888888")
+                ax.text(0, y_min + 0.4, "↑P1", ha="center", va="top",
+                        fontsize=7, color="#888888")
+                ax.text(0, y_max - 0.4, "P0↓", ha="center", va="bottom",
+                        fontsize=7, color="#888888")
+            if show_colorbar:
+                import matplotlib.pyplot as _plt
+                _plt.colorbar(coll, ax=ax, fraction=0.046, pad=0.04)
+            return coll
 
         unit_names  = ["Fighter", "Cruiser", "Dreadnought"]
         unit_colors = ["#4e79a7", "#f28e2b", "#59a14f"]
@@ -2230,66 +2389,118 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         fig1, axes = plt.subplots(1, 4, figsize=(20, 5))
         fig1.suptitle(f"Iteration {iteration} — Action Frequency by Phase", fontsize=12)
 
-        ax = axes[0]
-        dep_pi = pi_np[deploy_mask, 1690:1708].sum(axis=0) if deploy_mask.sum() > 0 else np.zeros(18)
-        dep_total = dep_pi.sum()
-        if dep_total > 0:
-            dep_pi = dep_pi / dep_total
-        x = np.arange(6); bar_w = 0.25
-        for ui, (uname, col) in enumerate(zip(unit_names, unit_colors)):
-            ax.bar(x + ui * bar_w, dep_pi[ui * 6: ui * 6 + 6], bar_w,
-                   label=uname, color=col, alpha=0.85)
-        ax.set_xticks(x + bar_w); ax.set_xticklabels(facing_labels, fontsize=8)
-        ax.set_title(f"Deploy\n(n={deploy_mask.sum()})", fontsize=10)
-        ax.set_ylabel("Fraction of deploy pi mass"); ax.legend(fontsize=7)
+        from matplotlib.patches import Patch as _Patch
 
-        for ax, mask, title in [(axes[1], standstill_mask, "Standstill / Maneuver"),
-                                (axes[2], attrition_mask,  "Attrition (no portal dmg)"),
-                                (axes[3], portal_mask,     "Portal Damage")]:
-            grid = _spatial_heatmap(mask)
-            im = ax.imshow(grid, cmap="YlOrRd", vmin=0, interpolation="nearest")
-            ax.set_title(f"{title}\n(n={mask.sum()})", fontsize=10)
-            ax.set_xlabel("col"); ax.set_ylabel("row")
-            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        # --- Figure 1 (per-variant): each row is a variant; columns are
+        # Deploy bars + 3 spatial-phase heatmaps. Variants 0-2 use board_side=5
+        # so the outer ring of hexes is hidden.
+        fig1, axes = plt.subplots(4, 4, figsize=(20, 18))
+        fig1.suptitle(f"Iteration {iteration} — Action Frequency by Variant × Phase",
+                      fontsize=12)
+        deploy_valid_mask = np.concatenate(
+            [VALID_DEPLOY_FACINGS[ui] for ui in range(3)]).astype(bool)  # (18,)
+        phase_specs = [
+            ("Standstill / Maneuver",       standstill_mask),
+            ("Attrition (no portal dmg)",   attrition_mask),
+            ("Portal Damage",               portal_mask),
+        ]
+
+        for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+            vmask = variant_ids == vid
+            side = VARIANT_BOARD_SIDE[vid]
+
+            # ---- Deploy bars for this variant ----
+            ax = axes[vid, 0]
+            d_mask = deploy_mask & vmask
+            d_n = int(d_mask.sum())
+            if d_n >= MIN_SAMPLES_FOR_PLOT:
+                dep_pi = pi_np[d_mask, 1690:1708].sum(axis=0)
+                dep_pi = dep_pi * deploy_valid_mask
+                dep_total = dep_pi.sum()
+                if dep_total > 0:
+                    dep_pi = dep_pi / dep_total
+            else:
+                dep_pi = np.zeros(18)
+            x = np.arange(6); bar_w = 0.25
+            legend_handles = []
+            for ui, (uname, col) in enumerate(zip(unit_names, unit_colors)):
+                # Grey the bar if either the facing or the unit is invalid here.
+                unit_ok = UNIT_VALID_IN_VARIANT[ui, vid]
+                bar_colors = [col if (unit_ok and VALID_DEPLOY_FACINGS[ui, f])
+                              else "#dddddd" for f in range(6)]
+                ax.bar(x + ui * bar_w, dep_pi[ui * 6: ui * 6 + 6], bar_w,
+                       color=bar_colors, alpha=0.85)
+                legend_handles.append(_Patch(facecolor=col, alpha=0.85, label=uname))
+            ax.set_xticks(x + bar_w); ax.set_xticklabels(facing_labels, fontsize=8)
+            if d_n < MIN_SAMPLES_FOR_PLOT:
+                _draw_na(ax, label=f"n={d_n}\n(insufficient)")
+            ax.set_title(f"{vname.capitalize()} — Deploy\n(n={d_n})", fontsize=10)
+            ax.set_ylabel("Fraction of deploy pi mass\n(valid only)", fontsize=8)
+            ax.legend(handles=legend_handles, fontsize=7)
+
+            # ---- Spatial-phase heatmaps for this variant ----
+            for col_idx, (title, pmask) in enumerate(phase_specs, start=1):
+                ax = axes[vid, col_idx]
+                combo = pmask & vmask
+                n = int(combo.sum())
+                if n < MIN_SAMPLES_FOR_PLOT:
+                    _draw_na(ax, label=f"n={n}\n(insufficient)")
+                    ax.set_title(f"{vname.capitalize()} — {title}\n(n={n})",
+                                 fontsize=9)
+                    continue
+                grid = _spatial_heatmap(combo)
+                _draw_hex_heatmap(ax, grid, board_side_hint=side)
+                ax.set_title(f"{vname.capitalize()} — {title}\n(n={n})",
+                             fontsize=9)
         plt.tight_layout()
 
         fig2 = None
 
         # --- Figure 3: per-unit action breakdown (3 units × 4 phases) ---
         fig3, axes3 = plt.subplots(3, 4, figsize=(16, 10))
-        fig3.suptitle(f"Iteration {iteration} — Action Breakdown by Unit Type", fontsize=12)
+        fig3.suptitle(f"Iteration {iteration} — Action Breakdown by Unit Type "
+                      "(valid slots only)", fontsize=12)
         _phases = [(deploy_mask, "Deploy"), (standstill_mask, "Standstill"),
                    (attrition_mask, "Attrition"), (portal_mask, "Portal")]
         for ui, uname in enumerate(unit_names):
+            valid_slots = VALID_SLOTS_BY_UNIT[ui]
+            n_valid = int(valid_slots.sum())
             for pi_col, (mask, phase) in enumerate(_phases):
                 ax = axes3[ui, pi_col]
+                n = int(mask.sum())
+                bar_colors = [action_colors[s] if valid_slots[s] else "#dddddd"
+                              for s in range(10)]
+                if n < MIN_SAMPLES_FOR_PLOT:
+                    _draw_na(ax, label=f"n={n}\n(insufficient)")
+                    ax.set_title(f"{uname} — {phase}\n(n={n})", fontsize=9)
+                    continue
                 dist = _action_dist(mask, ui)
-                bars = ax.bar(range(10), dist, color=action_colors, alpha=0.85)
+                ax.bar(range(10), dist, color=bar_colors, alpha=0.85)
                 ax.set_xticks(range(10))
                 ax.set_xticklabels(action_labels, fontsize=6, rotation=45, ha="right")
-                ax.set_title(f"{uname} — {phase}\n(n={mask.sum()})", fontsize=9)
+                ax.set_title(f"{uname} — {phase}\n(n={n}, valid:{n_valid})",
+                             fontsize=9)
                 ax.set_ylabel("Fraction", fontsize=8)
         plt.tight_layout()
 
         # --- Figure 4: per-unit × per-variant spatial heatmaps (all positions) ---
         fig4, axes4 = plt.subplots(3, 4, figsize=(16, 9))
-        fig4.suptitle(f"Iteration {iteration} — Unit × Variant Action Heatmaps (All Positions)", fontsize=12)
-        # Invalid combos: Cruiser absent in Showdown(1), Dreadnought absent in Skirmish(0)
-        invalid = {(1, 1), (2, 0)}  # (unit_idx, variant_id) pairs always zero
+        fig4.suptitle(f"Iteration {iteration} — Unit × Variant Action Heatmaps "
+                      "(All Positions, valid slots only)", fontsize=12)
         for ui, uname in enumerate(unit_names):
             for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
                 ax = axes4[ui, vid]
                 vmask = variant_ids == vid
-                if (ui, vid) in invalid:
-                    ax.set_facecolor("#dddddd")
-                    ax.text(0.5, 0.5, "N/A", transform=ax.transAxes,
-                            ha="center", va="center", fontsize=10, color="#888888")
-                    ax.set_xticks([]); ax.set_yticks([])
+                n = int(vmask.sum())
+                if not UNIT_VALID_IN_VARIANT[ui, vid]:
+                    _draw_na(ax)
+                elif n < MIN_SAMPLES_FOR_PLOT:
+                    _draw_na(ax, label=f"n={n}\n(insufficient)")
                 else:
                     grid = _spatial_heatmap(vmask, unit_idx=ui)
-                    im = ax.imshow(grid, cmap="YlOrRd", vmin=0, interpolation="nearest")
-                    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-                ax.set_title(f"{uname}\n{vname.capitalize()} (n={vmask.sum()})", fontsize=8)
+                    _draw_hex_heatmap(ax, grid,
+                                       board_side_hint=VARIANT_BOARD_SIDE[vid])
+                ax.set_title(f"{uname}\n{vname.capitalize()} (n={n})", fontsize=8)
         plt.tight_layout()
 
         # --- Figure 5: unit count by type × phase × variant ---
@@ -2308,38 +2519,52 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                 combo = pmask & (variant_ids == vid)
                 n = int(combo.sum())
                 ax.set_title(f"{vname.capitalize()} — {pname}\n(n={n})", fontsize=7)
-                if n == 0:
-                    ax.set_facecolor("#eeeeee"); ax.set_xticks([]); ax.set_yticks([])
+                if n < MIN_SAMPLES_FOR_PLOT:
+                    _draw_na(ax, label=f"n={n}\n(insufficient)" if n > 0 else "N/A")
                     continue
-                my_avg  = [unit_counts_my[ui][combo].mean()  for ui in range(3)]
-                opp_avg = [unit_counts_opp[ui][combo].mean() for ui in range(3)]
-                ax.bar(_bar_x - _bar_w/2, my_avg,  _bar_w, label="Mine", color=unit_colors,      alpha=0.85)
-                ax.bar(_bar_x + _bar_w/2, opp_avg, _bar_w, label="Opp",  color=unit_colors, alpha=0.45)
+                my_avg  = [unit_counts_my[ui][combo].mean()
+                           if UNIT_VALID_IN_VARIANT[ui, vid] else np.nan
+                           for ui in range(3)]
+                opp_avg = [unit_counts_opp[ui][combo].mean()
+                           if UNIT_VALID_IN_VARIANT[ui, vid] else np.nan
+                           for ui in range(3)]
+                # Per-bar alpha — fade invalid (unit, variant) bars to grey.
+                my_colors  = [unit_colors[ui] if UNIT_VALID_IN_VARIANT[ui, vid]
+                              else "#dddddd" for ui in range(3)]
+                opp_colors = [unit_colors[ui] if UNIT_VALID_IN_VARIANT[ui, vid]
+                              else "#dddddd" for ui in range(3)]
+                ax.bar(_bar_x - _bar_w/2, np.nan_to_num(my_avg),  _bar_w,
+                       color=my_colors,  alpha=0.85)
+                ax.bar(_bar_x + _bar_w/2, np.nan_to_num(opp_avg), _bar_w,
+                       color=opp_colors, alpha=0.45)
                 ax.set_xticks(_bar_x); ax.set_xticklabels(["F", "C", "D"], fontsize=8)
                 ax.set_ylabel("Avg units", fontsize=7)
                 if pi_row == 0 and vid == 0:
-                    ax.legend(fontsize=6)
+                    legend_p = [_Patch(facecolor="#888888", alpha=0.85, label="Mine"),
+                                _Patch(facecolor="#888888", alpha=0.45, label="Opp")]
+                    ax.legend(handles=legend_p, fontsize=6)
         plt.tight_layout()
 
         # --- Figure 6: per-phase unit × variant spatial heatmaps ---
         fig6_list = []
         for pmask, pname in _phase_list:
             f, axs = plt.subplots(3, 4, figsize=(16, 9))
-            f.suptitle(f"Iteration {iteration} — Unit × Variant Heatmap: {pname}", fontsize=12)
+            f.suptitle(f"Iteration {iteration} — Unit × Variant Heatmap: {pname} "
+                       "(valid slots only)", fontsize=12)
             for ui, uname in enumerate(unit_names):
                 for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
                     ax = axs[ui, vid]
-                    if (ui, vid) in invalid:
-                        ax.set_facecolor("#dddddd")
-                        ax.text(0.5, 0.5, "N/A", transform=ax.transAxes,
-                                ha="center", va="center", fontsize=10, color="#888888")
-                        ax.set_xticks([]); ax.set_yticks([])
+                    vmask = pmask & (variant_ids == vid)
+                    n = int(vmask.sum())
+                    if not UNIT_VALID_IN_VARIANT[ui, vid]:
+                        _draw_na(ax)
+                    elif n < MIN_SAMPLES_FOR_PLOT:
+                        _draw_na(ax, label=f"n={n}\n(insufficient)")
                     else:
-                        vmask = pmask & (variant_ids == vid)
                         grid = _spatial_heatmap(vmask, unit_idx=ui)
-                        im = ax.imshow(grid, cmap="YlOrRd", vmin=0, interpolation="nearest")
-                        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-                    ax.set_title(f"{uname}\n{vname.capitalize()} (n={(pmask&(variant_ids==vid)).sum()})",
+                        _draw_hex_heatmap(ax, grid,
+                                           board_side_hint=VARIANT_BOARD_SIDE[vid])
+                    ax.set_title(f"{uname}\n{vname.capitalize()} (n={n})",
                                  fontsize=8)
             plt.tight_layout()
             fig6_list.append((f, pname))
@@ -2354,25 +2579,36 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
             fig7.suptitle(f"Iteration {iteration} — Value Calibration", fontsize=12)
             bins = np.linspace(0, 1, 11)
             bin_centers = (bins[:-1] + bins[1:]) / 2
+            MIN_BIN_COUNT = 10
             for ax, (vname, stats) in zip(axes7, variant_stats.items()):
                 vp = stats["v_pred"]
                 va = stats["v_actual"]
                 bin_idx = np.digitize(vp, bins) - 1
                 bin_idx = np.clip(bin_idx, 0, 9)
+                counts = np.array([(bin_idx == b).sum() for b in range(10)])
+                # Only plot bins with enough support to be informative.
                 actual_means = np.array([
-                    va[bin_idx == b].mean() if (bin_idx == b).sum() > 0 else np.nan
+                    va[bin_idx == b].mean() if counts[b] >= MIN_BIN_COUNT else np.nan
                     for b in range(10)
                 ])
-                counts = np.array([(bin_idx == b).sum() for b in range(10)])
                 ax.plot([0, 1], [0, 1], "k--", alpha=0.4, label="Perfect")
                 valid = ~np.isnan(actual_means)
                 sc = ax.scatter(bin_centers[valid], actual_means[valid],
                                 c=counts[valid], cmap="YlOrRd", s=60, zorder=3)
                 ax.plot(bin_centers[valid], actual_means[valid], alpha=0.7)
+                # Annotate per-bin n below the curve.
+                for b in range(10):
+                    if counts[b] > 0:
+                        ax.text(bin_centers[b], 0.02, f"{counts[b]}",
+                                ha="center", va="bottom", fontsize=6,
+                                color="#666666",
+                                alpha=1.0 if counts[b] >= MIN_BIN_COUNT else 0.4)
                 plt.colorbar(sc, ax=ax, label="n samples")
                 ax.set_xlim(0, 1); ax.set_ylim(0, 1)
                 ax.set_xlabel("Predicted win prob"); ax.set_ylabel("Actual win rate")
-                ax.set_title(f"{vname.capitalize()}\n(n={len(vp)})", fontsize=9)
+                ax.set_title(f"{vname.capitalize()}\n(n={len(vp)}, "
+                             f"bins≥{MIN_BIN_COUNT}: {int(valid.sum())})",
+                             fontsize=9)
                 ax.legend(fontsize=7)
             plt.tight_layout()
 

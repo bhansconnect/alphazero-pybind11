@@ -1511,8 +1511,8 @@ def _print_inline_openings(report: IterationReport, snaps: list, ui: GameUI,
             path_str = _format_action_sequence(op.path_actions, root_state, ui, short=True)
             n_minor = len(op.minor_variations)
             print(f"{indent}{op.name:<5s} [{label:<10s}] "
-                  f"reach={op.reach:.3f}  d={op.depth}  "
-                  f"+{n_minor}m   {path_str}")
+                  f"reach={op.reach:.3f}  depth={op.depth}  "
+                  f"variants={n_minor:<2d}  {path_str}")
 
             # Optional inline board for this opening's terminal position.
             if tree_config.show_inline_boards and i < tree_config.display_cap:

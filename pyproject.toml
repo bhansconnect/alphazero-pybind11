@@ -21,6 +21,11 @@ dependencies = [
 build = ["meson-python>=0.16.0", "meson>=1.0.0", "ninja>=1.8.2", "pybind11>=2.12"]
 dev = ["pytest>=7.0", "ruff>=0.4"]
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests that take significant time (deselect with '-m \"not slow\"')",
+]
+
 [tool.uv]
 default-groups = ["build", "dev"]
 

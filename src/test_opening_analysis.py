@@ -241,93 +241,109 @@ def make_node(state_hash, depth, incoming_action, reach_prob, sampling_pi,
 
 class TestOpeningExtractor:
 
-    def test_main_line_stops_when_top_child_not_dominant(self):
-        """Walk stops when top child is not at least ratio× second-best."""
-        # node1: dominant top child (cond 0.7 vs 0.15) — ratio 4.67, extend.
-        # node2: NOT dominant (0.40 vs 0.35) — ratio 1.14, stop here as branch point.
-        node3 = make_node(3, 3, 0, 0.7 * 0.4, [1.0, 0, 0])  # leaf-ish
-        node2 = make_node(2, 2, 0, 0.7 * 0.4,
-                          [0.40, 0.35, 0.25], children={0: node3})
-        node1 = make_node(1, 1, 0, 0.7,
-                          [0.70, 0.15, 0.15], children={0: node2})
-        root = make_node(0, 0, None, 1.0, [0.70, 0.15, 0.15], children={0: node1})
-        openings, _ = extract_openings(
-            root,
-            TreeConfig(min_reach=0.01, opening_threshold=0.05,
-                       dominance_ratio=2.0, min_dominance_prob=0.15),
-        )
-        assert len(openings) == 1
-        op = openings[0]
-        # node1 had a dominant top (0.7/0.15 = 4.67), so we extended past it.
-        # node2 was NOT dominant (0.4/0.35 = 1.14), so the walk stopped there.
-        # Main line: [node1, node2]; branch point = node2.
-        assert op.branch_point.state_hash == 2
-        assert op.depth == 2
-
-    def test_main_line_handles_wide_branching_with_clear_leader(self):
-        """4-way split with a clear leader: top1=0.5, top2=0.17 → still dominant (ratio 2.94)."""
-        # The old 0.5 threshold would have rejected this (0.5 is borderline);
-        # the dominance rule accepts it because 0.5 ≥ 2.0 × 0.17.
-        leaf = make_node(5, 2, 0, 0.5 * 0.5, [1.0, 0, 0, 0])
-        child = make_node(2, 1, 0, 0.5,
-                          [0.50, 0.17, 0.17, 0.16], children={0: leaf})
+    def test_dominance_walks_to_leaf_with_no_letter(self):
+        """A fully-dominant chain produces ONE opening named 'A'."""
+        # Each step: top1=0.70, top2=0.15, ratio 4.67 → dominant. Walk continues.
+        # Eventually no children → emit as leaf.
+        leaf = make_node(3, 3, 0, 0.7 * 0.7 * 0.7, [1.0, 0, 0])
+        mid = make_node(2, 2, 0, 0.7 * 0.7,
+                        [0.70, 0.15, 0.15], children={0: leaf})
+        first = make_node(1, 1, 0, 0.7,
+                          [0.70, 0.15, 0.15], children={0: mid})
         root = make_node(0, 0, None, 1.0,
-                         [0.50, 0.17, 0.17, 0.16], children={0: child})
+                         [0.70, 0.15, 0.15], children={0: first})
         openings, _ = extract_openings(
             root,
             TreeConfig(min_reach=0.01, opening_threshold=0.05,
                        dominance_ratio=2.0, min_dominance_prob=0.15),
         )
         assert len(openings) == 1
-        # Main line should extend through the 4-way split because top1=0.5 dominates 0.17.
-        assert openings[0].depth >= 2
+        op = openings[0]
+        assert op.name == "A"
+        assert op.depth == 3
+        assert op.terminal_node.state_hash == 3
 
-    def test_main_line_rejects_close_4_way(self):
-        """4-way split with no clear leader: top1=0.30, top2=0.25 → NOT dominant."""
-        c0 = make_node(10, 2, 0, 0.3 * 0.3, [1.0])
-        c1 = make_node(11, 2, 1, 0.3 * 0.25, [1.0])
-        c2 = make_node(12, 2, 2, 0.3 * 0.25, [1.0])
-        c3 = make_node(13, 2, 3, 0.3 * 0.20, [1.0])
-        branch = make_node(1, 1, 0, 0.3,
-                           [0.30, 0.25, 0.25, 0.20],
-                           children={0: c0, 1: c1, 2: c2, 3: c3})
-        root = make_node(0, 0, None, 1.0, [0.30], children={0: branch})
+    def test_fork_spawns_sisters_with_letters(self):
+        """4-way fork (no dominance) produces 4 sister openings A, B, C, D."""
+        c0 = make_node(10, 1, 0, 0.30, [1.0])
+        c1 = make_node(11, 1, 1, 0.25, [1.0])
+        c2 = make_node(12, 1, 2, 0.25, [1.0])
+        c3 = make_node(13, 1, 3, 0.20, [1.0])
+        root = make_node(0, 0, None, 1.0,
+                         [0.30, 0.25, 0.25, 0.20],
+                         children={0: c0, 1: c1, 2: c2, 3: c3})
         openings, _ = extract_openings(
             root,
             TreeConfig(min_reach=0.01, opening_threshold=0.05,
                        dominance_ratio=2.0, min_dominance_prob=0.15),
         )
-        # 4-way close split: top1 ratio is only 0.30/0.25 = 1.2 < 2.0. Branch immediately.
-        op = openings[0]
-        assert op.branch_point.state_hash == 1   # branched at root child
-        assert len(op.variations) >= 2           # multiple variations registered
+        # 4 sister openings, sorted by reach.
+        assert len(openings) == 4
+        names = [op.name for op in openings]
+        assert names == ["A", "B", "C", "D"]
+        # Highest-reach sister got "A".
+        assert openings[0].reach == pytest.approx(0.30)
+        # All share family_name "" (top-level fork).
+        for op in openings:
+            assert op.family_name == ""
+        # Each opening lists the other 3 as sisters.
+        for op in openings:
+            assert len(op.sister_names) == 3
+
+    def test_nested_fork_produces_two_letter_names(self):
+        """Root forks → A, B. A forks again → AA, AB. Names compose."""
+        # After root-fork action 0 → branch (which itself forks 2 ways).
+        # After root-fork action 1 → leaf.
+        sub_a = make_node(20, 2, 0, 0.5 * 0.4, [1.0])
+        sub_b = make_node(21, 2, 1, 0.5 * 0.4, [1.0])
+        branch = make_node(1, 1, 0, 0.5,
+                           [0.40, 0.40, 0.20],
+                           children={0: sub_a, 1: sub_b})
+        leaf2 = make_node(2, 1, 1, 0.4, [1.0])
+        root = make_node(0, 0, None, 1.0,
+                         [0.50, 0.40, 0.10],
+                         children={0: branch, 1: leaf2})
+        openings, _ = extract_openings(
+            root,
+            TreeConfig(min_reach=0.01, opening_threshold=0.05,
+                       dominance_ratio=2.0, min_dominance_prob=0.15),
+        )
+        # At root: top1=0.50, top2=0.40, ratio 1.25 → NOT dominant → fork.
+        # Two sisters by root-reach: branch (0.5) is "A", leaf2 (0.4) is "B".
+        # A then forks again at depth 1 → AA, AB.
+        names = sorted(op.name for op in openings)
+        assert names == ["AA", "AB", "B"]
 
     def test_opening_threshold_filtering(self):
-        """Root children below opening_threshold are excluded."""
+        """Root children below opening_threshold are excluded from walk."""
         child0 = make_node(1, 1, 0, 0.04, [1.0, 0, 0])
         child1 = make_node(2, 1, 1, 0.08, [1.0, 0, 0])
         root = make_node(0, 0, None, 1.0, [0.04, 0.08, 0.0],
-                        children={0: child0, 1: child1})
-
+                         children={0: child0, 1: child1})
         openings, below = extract_openings(
             root,
             TreeConfig(min_reach=0.01, opening_threshold=0.05,
                        dominance_ratio=2.0, min_dominance_prob=0.15),
         )
+        # Only action 1 is above threshold (0.08 > 0.05). Action 0 is below.
+        # Walk: 1 above-thresh child, forced continuation → walk into child1.
+        # child1 has no children → emit as leaf. So 1 opening.
         assert len(openings) == 1
-        assert openings[0].main_line_actions[0] == 1
+        assert openings[0].path_actions == [1]
+        # Action 0 appears in below_threshold (root-level diagnostic).
         assert (0, pytest.approx(0.04)) in [(a, pytest.approx(r)) for a, r in below]
 
-    def test_variation_extraction(self):
-        """A branch point with 3 above-threshold children produces 3 variations."""
-        var_a = make_node(10, 2, 0, 0.3 * 0.3, [1.0, 0, 0])
-        var_b = make_node(11, 2, 1, 0.3 * 0.4, [1.0, 0, 0])
-        var_c = make_node(12, 2, 2, 0.3 * 0.3, [1.0, 0, 0])
-        # Branch-point distribution: top1=0.4, top2=0.3 → ratio 1.33 < 2.0 → branches.
-        branch = make_node(1, 1, 0, 0.3,
-                          [0.3, 0.4, 0.3],
-                          children={0: var_a, 1: var_b, 2: var_c})
-        root = make_node(0, 0, None, 1.0, [0.3, 0.0, 0.0], children={0: branch})
+    def test_minor_variations_at_dominance_step(self):
+        """Lesser siblings at a dominance step become minor variations."""
+        # branch has 3 children above min_reach. top1=0.7 dominant over 0.15.
+        # The two lesser siblings should appear as minor_variations of the opening.
+        leaf_main = make_node(10, 2, 0, 0.7, [1.0])
+        leaf_minor1 = make_node(11, 2, 1, 0.15, [1.0])
+        leaf_minor2 = make_node(12, 2, 2, 0.15, [1.0])
+        first = make_node(1, 1, 0, 1.0,
+                          [0.70, 0.15, 0.15],
+                          children={0: leaf_main, 1: leaf_minor1, 2: leaf_minor2})
+        root = make_node(0, 0, None, 1.0, [1.0], children={0: first})
         openings, _ = extract_openings(
             root,
             TreeConfig(min_reach=0.01, opening_threshold=0.05,
@@ -335,11 +351,14 @@ class TestOpeningExtractor:
         )
         assert len(openings) == 1
         op = openings[0]
-        assert op.branch_point.state_hash == 1
-        assert len(op.variations) == 3
+        # 2 lesser siblings should be recorded as minor variations.
+        assert len(op.minor_variations) == 2
+        # They branched off at depth 2 (where first played its dominant move).
+        for mv in op.minor_variations:
+            assert mv.depth == 2
 
     def test_transposition_dedup_by_identity_hash(self):
-        """Two openings reaching the same identity hash collapse to one."""
+        """Two action paths reaching the same leaf state collapse to one opening."""
         a = make_node(99, 1, 0, 0.4, [1.0, 0, 0])
         b = make_node(99, 1, 1, 0.3, [1.0, 0, 0])
         root = make_node(0, 0, None, 1.0, [0.4, 0.3, 0.0], children={0: a, 1: b})
@@ -349,23 +368,21 @@ class TestOpeningExtractor:
                        dominance_ratio=2.0, min_dominance_prob=0.15),
         )
         assert len(openings) == 1
-        assert openings[0].terminal_reach == pytest.approx(0.7)
-        assert openings[0].transposition_labels
+        # Reach is summed (0.4 + 0.3 = 0.7).
+        assert openings[0].reach == pytest.approx(0.7)
+        assert openings[0].transposition_labels   # other path recorded
 
     def test_dominance_floor_blocks_extension_on_noise(self):
-        """Even if ratio is huge, top1 below the absolute floor doesn't dominate.
+        """top1 below min_dominance_prob doesn't count as dominant.
 
-        E.g., top1=0.10, top2=0.005, ratio=20 — but the policy is too diffuse
-        overall to call top1 a confident continuation.
+        Policy [0.10, 0.005, 0.005, …]: ratio is huge but top1 < 0.15 floor.
+        With only one above-threshold child, walk treats as forced continuation
+        anyway, but minor-variation siblings should NOT be recorded as
+        "lesser siblings of a dominance step" since this wasn't a dominance step.
         """
-        leaf = make_node(2, 2, 0, 0.1 * 0.1, [1.0])
-        # Top child is 0.10, ratio is huge but absolute is below the 0.15 floor.
-        # With opening_threshold=0.05, the root child is above threshold but
-        # the main line should NOT extend past it.
+        leaf = make_node(2, 2, 0, 0.10 * 0.10, [1.0])
         wide_pi = [0.005] * 20
         wide_pi[0] = 0.10
-        # Make some children, but only top1 above threshold for extension test.
-        # Just one child suffices.
         child = make_node(1, 1, 0, 0.10, wide_pi, children={0: leaf})
         root_pi = [0.005] * 20
         root_pi[0] = 0.10
@@ -376,8 +393,7 @@ class TestOpeningExtractor:
                        dominance_ratio=2.0, min_dominance_prob=0.15),
         )
         assert len(openings) == 1
-        # Walk should have stopped at `child` (the root child) because its
-        # top is 0.10 < min_dominance_prob 0.15.
+        # Walk stops at `child` because its grandchild's reach (0.01) is below threshold.
         assert openings[0].depth == 1
 
 
@@ -386,30 +402,29 @@ class TestOpeningExtractor:
 # ---------------------------------------------------------------------------
 
 
-def make_opening(identity_hash, main_line_actions, terminal_reach,
-                 main_line_state_hashes=None, depth=None):
-    """Build a synthetic Opening with given properties."""
-    if main_line_state_hashes is None:
-        main_line_state_hashes = list(range(1, len(main_line_actions) + 1))
+def make_opening(identity_hash, path_actions, reach,
+                 path_state_hashes=None, depth=None, name="A"):
+    """Build a synthetic Opening with given properties (new model)."""
+    if path_state_hashes is None:
+        path_state_hashes = list(range(1, len(path_actions) + 1))
     if depth is None:
-        depth = len(main_line_actions)
-    # Build minimal TreeNodes along the main line.
+        depth = len(path_actions)
     nodes = []
-    for i, (act, sh) in enumerate(zip(main_line_actions, main_line_state_hashes)):
+    for i, (act, sh) in enumerate(zip(path_actions, path_state_hashes)):
         nodes.append(make_node(sh, depth=i + 1, incoming_action=act,
-                              reach_prob=terminal_reach, sampling_pi=[1.0]))
-    branch_point = nodes[-1] if nodes else make_node(identity_hash, 0, None,
-                                                     terminal_reach, [1.0])
-    # Override the branch point's hash to be the identity.
-    branch_point.state_hash = identity_hash
+                              reach_prob=reach, sampling_pi=[1.0]))
+    terminal = nodes[-1] if nodes else make_node(identity_hash, 0, None,
+                                                  reach, [1.0])
+    terminal.state_hash = identity_hash
     return Opening(
-        main_line_actions=main_line_actions,
-        main_line_nodes=nodes,
-        branch_point=branch_point,
+        name=name,
+        path_nodes=nodes,
+        path_actions=path_actions,
+        terminal_node=terminal,
         identity_hash=identity_hash,
-        terminal_reach=terminal_reach,
+        reach=reach,
         depth=depth,
-        parent_conditional_prob=1.0,
+        minor_variations=[],
     )
 
 
@@ -425,12 +440,12 @@ def make_report(iteration, mode_name, openings):
 class TestCrossIterationNarrator:
 
     def test_still_same_identity_hash(self):
-        op_a = make_opening(identity_hash=42, main_line_actions=[1, 2],
-                           terminal_reach=0.3,
-                           main_line_state_hashes=[10, 42])
-        op_b = make_opening(identity_hash=42, main_line_actions=[1, 2],
-                           terminal_reach=0.35,
-                           main_line_state_hashes=[10, 42])
+        op_a = make_opening(identity_hash=42, path_actions=[1, 2],
+                           reach=0.3,
+                           path_state_hashes=[10, 42])
+        op_b = make_opening(identity_hash=42, path_actions=[1, 2],
+                           reach=0.35,
+                           path_state_hashes=[10, 42])
         snaps = classify_across_iterations([
             make_report(1, "selfplay", [op_a]),
             make_report(5, "selfplay", [op_b]),
@@ -443,13 +458,13 @@ class TestCrossIterationNarrator:
     def test_deepened_prior_identity_on_current_path(self):
         """Iter A's identity hash sits on iter B's main-line path → deepened."""
         # Iter A: identity hash 42 at depth 2.
-        op_a = make_opening(identity_hash=42, main_line_actions=[1, 2],
-                           terminal_reach=0.3,
-                           main_line_state_hashes=[10, 42])
+        op_a = make_opening(identity_hash=42, path_actions=[1, 2],
+                           reach=0.3,
+                           path_state_hashes=[10, 42])
         # Iter B: identity hash 99 at depth 4; hash 42 sits on its path.
-        op_b = make_opening(identity_hash=99, main_line_actions=[1, 2, 3, 4],
-                           terminal_reach=0.4,
-                           main_line_state_hashes=[10, 42, 77, 99])
+        op_b = make_opening(identity_hash=99, path_actions=[1, 2, 3, 4],
+                           reach=0.4,
+                           path_state_hashes=[10, 42, 77, 99])
         snaps = classify_across_iterations([
             make_report(1, "selfplay", [op_a]),
             make_report(5, "selfplay", [op_b]),
@@ -460,12 +475,12 @@ class TestCrossIterationNarrator:
 
     def test_shallowed_current_identity_on_prior_path(self):
         """Iter A's main line passes through iter B's identity → shallowed."""
-        op_a = make_opening(identity_hash=99, main_line_actions=[1, 2, 3, 4],
-                           terminal_reach=0.4,
-                           main_line_state_hashes=[10, 42, 77, 99])
-        op_b = make_opening(identity_hash=42, main_line_actions=[1, 2],
-                           terminal_reach=0.3,
-                           main_line_state_hashes=[10, 42])
+        op_a = make_opening(identity_hash=99, path_actions=[1, 2, 3, 4],
+                           reach=0.4,
+                           path_state_hashes=[10, 42, 77, 99])
+        op_b = make_opening(identity_hash=42, path_actions=[1, 2],
+                           reach=0.3,
+                           path_state_hashes=[10, 42])
         snaps = classify_across_iterations([
             make_report(1, "selfplay", [op_a]),
             make_report(5, "selfplay", [op_b]),
@@ -474,12 +489,12 @@ class TestCrossIterationNarrator:
 
     def test_diverged_same_first_move_different_path(self):
         """Same first move, but main lines diverge before either's branch point."""
-        op_a = make_opening(identity_hash=42, main_line_actions=[1, 2, 3],
-                           terminal_reach=0.3,
-                           main_line_state_hashes=[10, 20, 42])
-        op_b = make_opening(identity_hash=88, main_line_actions=[1, 5, 6],
-                           terminal_reach=0.35,
-                           main_line_state_hashes=[10, 50, 88])
+        op_a = make_opening(identity_hash=42, path_actions=[1, 2, 3],
+                           reach=0.3,
+                           path_state_hashes=[10, 20, 42])
+        op_b = make_opening(identity_hash=88, path_actions=[1, 5, 6],
+                           reach=0.35,
+                           path_state_hashes=[10, 50, 88])
         snaps = classify_across_iterations([
             make_report(1, "selfplay", [op_a]),
             make_report(5, "selfplay", [op_b]),
@@ -491,12 +506,12 @@ class TestCrossIterationNarrator:
         assert "dropped" in labels_in_iter5
 
     def test_new_no_overlap_at_all(self):
-        op_a = make_opening(identity_hash=42, main_line_actions=[1, 2],
-                           terminal_reach=0.3,
-                           main_line_state_hashes=[10, 42])
-        op_b = make_opening(identity_hash=99, main_line_actions=[5, 6],
-                           terminal_reach=0.35,
-                           main_line_state_hashes=[50, 99])
+        op_a = make_opening(identity_hash=42, path_actions=[1, 2],
+                           reach=0.3,
+                           path_state_hashes=[10, 42])
+        op_b = make_opening(identity_hash=99, path_actions=[5, 6],
+                           reach=0.35,
+                           path_state_hashes=[50, 99])
         snaps = classify_across_iterations([
             make_report(1, "selfplay", [op_a]),
             make_report(5, "selfplay", [op_b]),
@@ -506,9 +521,9 @@ class TestCrossIterationNarrator:
         assert "dropped" in labels_in_iter5
 
     def test_dropped_prior_not_in_current(self):
-        op_a = make_opening(identity_hash=42, main_line_actions=[1, 2],
-                           terminal_reach=0.3,
-                           main_line_state_hashes=[10, 42])
+        op_a = make_opening(identity_hash=42, path_actions=[1, 2],
+                           reach=0.3,
+                           path_state_hashes=[10, 42])
         # Iter B: no openings at all.
         snaps = classify_across_iterations([
             make_report(1, "selfplay", [op_a]),

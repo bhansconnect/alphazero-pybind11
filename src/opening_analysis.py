@@ -305,31 +305,63 @@ def collect_state_hashes_on_path(root: TreeNode, target_hash: int) -> Optional[l
 # ---------------------------------------------------------------------------
 # Layer 2: opening extractor
 #
-# Turns a raw probability tree into a clean human-readable hierarchy of
-# openings and variations. Identity is the state hash at each opening's
-# branch point (the first node where the policy fans out below
-# main_line_threshold). This handles transpositions: two action sequences
-# reaching the same state collapse to one identity.
+# An opening is a DEEPEST confident position reachable from the start. We walk
+# from root: dominance carries the line forward (no new name letter), and a
+# true fork (no dominance among 2+ above-threshold children) spawns sister
+# openings (each gets one letter A, B, C, … sorted by reach). The walk's leaves
+# — positions where no child clears `opening_threshold` — are the openings.
+# Lesser siblings at dominance steps are recorded as `minor_variations`
+# attached to the line at that depth.
+#
+# Identity is the state hash of the terminal (leaf) node. Transpositions —
+# different action paths reaching the same leaf state — collapse to one.
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class Opening:
-    """An opening (top-level) or variation (recursive sub-opening).
+class MinorVariation:
+    """A non-dominant sibling recorded as an alternative on a dominant line.
 
-    A main line is a chain of nodes ending at the first branch point. The
-    branch point's state hash is the opening's identity. Sub-variations are
-    siblings at the branch point, each recursively an Opening.
+    These show up where the network had a clear top move but other moves were
+    above min_reach (and worth surfacing as "you could play X instead, with
+    reach Y, but it's the lesser line").
     """
-    main_line_actions: list      # action indices along the main line
-    main_line_nodes: list        # TreeNodes along the main line, ending at branch_point
-    branch_point: TreeNode
-    identity_hash: int           # = branch_point.state_hash
-    terminal_reach: float        # reach_prob at branch_point (absolute, from start)
-    depth: int                   # number of plies in the main line
-    parent_conditional_prob: float   # P(this opening's first move | at parent's branch point); 1.0 for top-level
-    transposition_labels: list = field(default_factory=list)   # alt action sequences reaching identity_hash
-    variations: list = field(default_factory=list)             # list[Opening]
+    depth: int                # ply where this branched off (parent's depth + 1)
+    action: int               # action that would lead into the variant
+    branch_node: TreeNode     # node at the end of `action`
+    conditional_prob: float   # P(this move | at the dominance fork)
+    reach_prob: float         # absolute reach
+
+
+@dataclass
+class Opening:
+    """A deepest confident position reachable from the start.
+
+    The opening's "line" is the path from root to terminal_node. Along that
+    path, at any dominance step, the network chose one move clearly over its
+    siblings; those siblings appear in `minor_variations` annotated with the
+    depth at which they branched off. Sister openings (other openings that
+    forked from the same point) are not stored here — they are separate
+    Opening entries with the same `family_name` (everything but the last
+    letter of `name`).
+    """
+    name: str                            # ECO-style: A, B, AA, AB, AAA, …
+    path_nodes: list                     # TreeNodes from depth 1 down to terminal
+    path_actions: list                   # action indices along the path
+    terminal_node: TreeNode              # the leaf — the opening "position"
+    identity_hash: int                   # = terminal_node.state_hash
+    reach: float                         # = terminal_node.reach_prob (absolute from start)
+    depth: int                           # = len(path_nodes); plies from start
+    minor_variations: list               # list[MinorVariation], depth-ordered
+    transposition_labels: list = field(default_factory=list)
+    # Sister openings: derived from the family_name structure across all
+    # openings in the same iteration; computed at extraction time.
+    sister_names: list = field(default_factory=list)
+
+    @property
+    def family_name(self) -> str:
+        """Empty string for openings without a sister fork (single-letter name)."""
+        return self.name[:-1] if len(self.name) > 1 else ""
 
 
 def _is_dominant(cur: TreeNode, dominance_ratio: float, min_dominance_prob: float):
@@ -369,126 +401,168 @@ def _is_dominant(cur: TreeNode, dominance_ratio: float, min_dominance_prob: floa
     return top_action, (top_prob >= dominance_ratio * second_prob)
 
 
-def _walk_main_line(start_node: TreeNode, dominance_ratio: float,
-                    min_dominance_prob: float):
-    """Walk from start_node down while the top child is "dominant."
-
-    Returns (nodes_along_line, branch_point). The branch point is the last
-    node walked — either where the policy fans out or where the game ends.
-    """
-    nodes = [start_node]
-    cur = start_node
-    while cur.children and not cur.is_terminal:
-        best_action, dominant = _is_dominant(cur, dominance_ratio, min_dominance_prob)
-        if not dominant or best_action is None:
-            break
-        cur = cur.children[best_action]
-        nodes.append(cur)
-    return nodes, cur
-
-
-def _build_opening_from(start_node: TreeNode, conditional_prob: float,
-                       tree_config: TreeConfig) -> Opening:
-    """Recursively build an Opening rooted at start_node.
-
-    `conditional_prob` = P(playing the action that leads into start_node | at
-    parent's branch point). For top-level openings this is the action's
-    sampling_pi at the root. For sub-variations it's the sampling_pi at the
-    parent opening's branch point.
-    """
-    nodes, branch_point = _walk_main_line(
-        start_node, tree_config.dominance_ratio, tree_config.min_dominance_prob,
-    )
-    actions = [n.incoming_action for n in nodes]
-    variations: list[Opening] = []
-    if not branch_point.is_terminal:
-        # Variations are children of the branch point, sorted by reach descending.
-        sorted_children = sorted(
-            branch_point.children.items(),
-            key=lambda kv: -kv[1].reach_prob,
-        )
-        for action, child in sorted_children:
-            cond = (
-                float(branch_point.sampling_pi[action])
-                if action < len(branch_point.sampling_pi) else 0.0
-            )
-            variations.append(_build_opening_from(child, cond, tree_config))
-    return Opening(
-        main_line_actions=actions,
-        main_line_nodes=nodes,
-        branch_point=branch_point,
-        identity_hash=branch_point.state_hash,
-        terminal_reach=branch_point.reach_prob,
-        depth=len(nodes),
-        parent_conditional_prob=conditional_prob,
-        variations=variations,
-    )
-
-
 def extract_openings(root: TreeNode, tree_config: TreeConfig):
-    """Extract top-level openings from a raw tree.
+    """Extract openings from a raw tree using the dominance-vs-fork walk.
 
     Returns (openings, below_threshold_roots) where:
-    - openings: list[Opening] sorted by terminal_reach descending
+    - openings: list[Opening] sorted by reach descending. Each opening is a
+      leaf of the walk: the deepest confident position with reach >=
+      opening_threshold.
     - below_threshold_roots: list[(action, reach_prob)] for root children
-      with reach < opening_threshold (shown in the report's footer for context)
+      that didn't reach opening_threshold, shown in the report footer.
     """
     openings: list[Opening] = []
     below: list[tuple[int, float]] = []
-    for action, root_child in root.children.items():
-        cond = float(root.sampling_pi[action]) if action < len(root.sampling_pi) else 0.0
-        if root_child.reach_prob < tree_config.opening_threshold:
-            below.append((action, root_child.reach_prob))
-            continue
-        openings.append(_build_opening_from(root_child, cond, tree_config))
 
-    # Dedupe transpositions by identity hash. Keep the higher-reach action
-    # sequence as canonical, record the other(s) as transposition_labels, and
-    # sum reach probabilities.
-    by_id: dict[int, Opening] = {}
+    # Note root-level below-threshold children for footer.
+    for action, child in root.children.items():
+        if child.reach_prob < tree_config.opening_threshold:
+            below.append((action, child.reach_prob))
+
+    def _walk(cur_node, path, name, minor_vars):
+        """Recursive walk. `path` is the list of nodes from depth-1 to `cur_node`."""
+        # Terminal game state → emit as leaf opening (no further walking possible).
+        if cur_node.is_terminal:
+            _emit(cur_node, path, name, minor_vars)
+            return
+
+        # Children above opening_threshold are candidates for continuation.
+        above_thresh = {
+            a: ch for a, ch in cur_node.children.items()
+            if ch.reach_prob >= tree_config.opening_threshold
+        }
+        if not above_thresh:
+            # No continuation has enough reach — this is the opening leaf.
+            _emit(cur_node, path, name, minor_vars)
+            return
+
+        # Check dominance among the policy (not just above_thresh children).
+        dom_action, dominant = _is_dominant(
+            cur_node, tree_config.dominance_ratio, tree_config.min_dominance_prob,
+        )
+
+        if dominant and dom_action in above_thresh:
+            # Main line continues into the dominant child. Lesser above-min_reach
+            # siblings register as minor variations on this opening.
+            new_minors = list(minor_vars)
+            next_depth = cur_node.depth + 1
+            for a, ch in cur_node.children.items():
+                if a == dom_action:
+                    continue
+                cond = (
+                    float(cur_node.sampling_pi[a])
+                    if a < len(cur_node.sampling_pi) else 0.0
+                )
+                new_minors.append(MinorVariation(
+                    depth=next_depth, action=a, branch_node=ch,
+                    conditional_prob=cond, reach_prob=ch.reach_prob,
+                ))
+            dom_child = cur_node.children[dom_action]
+            _walk(dom_child, path + [dom_child], name, new_minors)
+            return
+
+        # No dominance.
+        if len(above_thresh) == 1:
+            # Only one continuation has enough reach — treat as a forced
+            # continuation (no new letter). The unchosen children below
+            # opening_threshold but above min_reach are recorded as minor vars
+            # so the user knows alternative continuations existed at policy level.
+            only_action, only_child = next(iter(above_thresh.items()))
+            new_minors = list(minor_vars)
+            next_depth = cur_node.depth + 1
+            for a, ch in cur_node.children.items():
+                if a == only_action:
+                    continue
+                cond = (
+                    float(cur_node.sampling_pi[a])
+                    if a < len(cur_node.sampling_pi) else 0.0
+                )
+                new_minors.append(MinorVariation(
+                    depth=next_depth, action=a, branch_node=ch,
+                    conditional_prob=cond, reach_prob=ch.reach_prob,
+                ))
+            _walk(only_child, path + [only_child], name, new_minors)
+            return
+
+        # True fork: 2+ above-threshold children, no dominance. Each spawns a
+        # sister opening with a new letter. Letters assigned by reach desc.
+        sorted_forks = sorted(above_thresh.items(), key=lambda kv: -kv[1].reach_prob)
+        # Cap at 26 sisters; the rest are recorded as minor variations to keep them visible.
+        named_forks = sorted_forks[:26]
+        unnamed_forks = sorted_forks[26:]
+
+        spillover_minors = list(minor_vars)
+        next_depth = cur_node.depth + 1
+        for a, ch in unnamed_forks:
+            cond = (
+                float(cur_node.sampling_pi[a])
+                if a < len(cur_node.sampling_pi) else 0.0
+            )
+            spillover_minors.append(MinorVariation(
+                depth=next_depth, action=a, branch_node=ch,
+                conditional_prob=cond, reach_prob=ch.reach_prob,
+            ))
+
+        for i, (a, ch) in enumerate(named_forks):
+            letter = chr(ord('A') + i)
+            _walk(ch, path + [ch], name + letter, list(spillover_minors))
+
+    def _emit(leaf_node, path, name, minor_vars):
+        # Only emit if reach is above threshold (sanity — we shouldn't reach
+        # here otherwise, but defensive).
+        if leaf_node.reach_prob < tree_config.opening_threshold:
+            return
+        # If name is empty (e.g. root was immediately terminal), pin to "A".
+        emit_name = name if name else "A"
+        openings.append(Opening(
+            name=emit_name,
+            path_nodes=list(path),
+            path_actions=[n.incoming_action for n in path],
+            terminal_node=leaf_node,
+            identity_hash=leaf_node.state_hash,
+            reach=leaf_node.reach_prob,
+            depth=len(path),
+            minor_variations=minor_vars,
+        ))
+
+    _walk(root, [], "", [])
+
+    # Transposition dedup: two action paths reaching the same leaf state hash.
+    by_id: dict = {}
     for op in openings:
         if op.identity_hash in by_id:
             existing = by_id[op.identity_hash]
-            if op.terminal_reach > existing.terminal_reach:
-                op.terminal_reach += existing.terminal_reach
+            if op.reach > existing.reach:
+                op.reach += existing.reach
                 op.transposition_labels = (
-                    existing.transposition_labels
-                    + [existing.main_line_actions]
+                    existing.transposition_labels + [existing.path_actions]
                 )
                 by_id[op.identity_hash] = op
             else:
-                existing.terminal_reach += op.terminal_reach
-                existing.transposition_labels.append(op.main_line_actions)
+                existing.reach += op.reach
+                existing.transposition_labels.append(op.path_actions)
         else:
             by_id[op.identity_hash] = op
 
-    openings = sorted(by_id.values(), key=lambda o: -o.terminal_reach)
+    openings = sorted(by_id.values(), key=lambda o: -o.reach)
+
+    # Fill in sister_names: openings sharing the same family_name are sisters.
+    by_family: dict = {}
+    for op in openings:
+        by_family.setdefault(op.family_name, []).append(op)
+    for op in openings:
+        op.sister_names = [
+            other.name for other in by_family.get(op.family_name, [])
+            if other.name != op.name
+        ]
+
     below.sort(key=lambda kv: -kv[1])
     return openings, below
 
 
-def total_variation_count(opening: Opening) -> int:
-    """Recursive count of all sub-variations in an opening (excluding the opening itself)."""
-    n = len(opening.variations)
-    for v in opening.variations:
-        n += total_variation_count(v)
-    return n
-
-
-def deepest_main_line(opening: Opening) -> int:
-    """Recursively find the deepest main-line depth in this opening's subtree (counting from root)."""
-    deepest = opening.branch_point.depth
-    for v in opening.variations:
-        deepest = max(deepest, deepest_main_line(v))
-    return deepest
-
-
-def all_main_line_state_hashes(opening: Opening) -> set[int]:
-    """All state hashes along this opening's main line (used for cross-iter matching)."""
-    hashes = {n.state_hash for n in opening.main_line_nodes}
-    for v in opening.variations:
-        hashes |= all_main_line_state_hashes(v)
-    return hashes
+def deepest_opening(openings: list) -> int:
+    """Deepest main-line length across a list of openings."""
+    return max((op.depth for op in openings), default=0)
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +579,7 @@ class IterationReport:
     iteration: int
     mode_name: str
     root_node: TreeNode
-    openings: list                  # list[Opening], sorted by terminal_reach desc
+    openings: list                  # list[Opening], sorted by reach desc
     below_threshold: list           # list[(action, reach_prob)]
     tree_node_count: int
 
@@ -519,19 +593,19 @@ class OpeningSnapshot:
     """An opening labeled relative to the previous iteration."""
     iteration: int
     opening: Opening
-    family_key: int        # = main_line_actions[0]; -1 if empty
+    family_key: int        # = path_actions[0] (first move); -1 if empty
     label: str             # one of: first_seen, still, deepened, shallowed, diverged, new, dropped
     matched_prior: Optional["OpeningSnapshot"] = None
     note: str = ""
 
 
 def _family_key(opening: Opening) -> int:
-    return opening.main_line_actions[0] if opening.main_line_actions else -1
+    return opening.path_actions[0] if opening.path_actions else -1
 
 
 def _path_hashes(opening: Opening) -> set[int]:
-    """State hashes along the main line (not including sub-variations)."""
-    return {n.state_hash for n in opening.main_line_nodes}
+    """State hashes along the opening's path (used for cross-iter matching)."""
+    return {n.state_hash for n in opening.path_nodes}
 
 
 class CrossIterClassifier:
@@ -667,13 +741,13 @@ def _classify_one_iter(report, prev_index, prev_path_hashes):
                 break
         if family_match is not None:
             div_ply = 0
-            for i, a in enumerate(op.main_line_actions):
-                if (i >= len(family_match.opening.main_line_actions)
-                        or family_match.opening.main_line_actions[i] != a):
+            for i, a in enumerate(op.path_actions):
+                if (i >= len(family_match.opening.path_actions)
+                        or family_match.opening.path_actions[i] != a):
                     div_ply = i
                     break
             else:
-                div_ply = len(op.main_line_actions)
+                div_ply = len(op.path_actions)
             note = (
                 f"shares family with iter {family_match.iteration}'s line; "
                 f"diverges at ply {div_ply + 1}"
@@ -738,12 +812,12 @@ def _format_action_sequence(actions: list, root_state, ui: GameUI) -> str:
     return " / ".join(parts) if parts else "(empty)"
 
 
-def _render_main_line(opening: Opening, root_node: TreeNode, ui: GameUI, indent: str = "  ") -> list:
-    """Render the opening's main line as text lines."""
+def _render_path(opening: Opening, root_node: TreeNode, ui: GameUI, indent: str = "  ") -> list:
+    """Render the opening's path from start to terminal as text lines."""
     lines = []
     parent_node = root_node
     parent_state = root_node.state
-    for node in opening.main_line_nodes:
+    for node in opening.path_nodes:
         a = node.incoming_action
         if a is None:
             continue
@@ -752,51 +826,59 @@ def _render_main_line(opening: Opening, root_node: TreeNode, ui: GameUI, indent:
             float(parent_node.sampling_pi[a])
             if a < len(parent_node.sampling_pi) else 0.0
         )
-        # ply number is the depth (root has depth 0; nodes start at depth 1)
         ply_num = node.depth
         lines.append(f"{indent}{ply_num:>3d}. {label:<30s}  p={cond:.3f}  reach={node.reach_prob:.3f}")
         parent_node = node
         parent_state = node.state
     if not lines:
-        lines.append(f"{indent}(no main-line moves — branch point is the start position)")
+        lines.append(f"{indent}(opening is the start position itself)")
     return lines
 
 
-def _render_variations_summary(opening: Opening, ui: GameUI, indent: str = "  ", max_show: int = 12) -> list:
-    """Render a one-line-each summary of the opening's variations."""
+def _render_minor_variations(opening: Opening, ui: GameUI, root_node: TreeNode,
+                             indent: str = "  ", max_show: int = 12) -> list:
+    """Render the opening's minor variations (lesser-prob alternatives at dominance steps).
+
+    Each minor variation is shown with the depth it branched off, the move,
+    and its conditional/reach probabilities. The move label is formatted
+    against the state at the parent depth.
+    """
+    if not opening.minor_variations:
+        return []
     lines = []
-    branch_state = opening.branch_point.state
-    branch_node = opening.branch_point
-    if not opening.variations:
-        return lines
+    # We need the state at each depth along the path to format minor variation
+    # moves correctly. Build a depth→state map from the path.
+    depth_to_state: dict = {0: root_node.state}
+    for node in opening.path_nodes:
+        depth_to_state[node.depth] = node.state
+        # Also: parent depth for "what state are we in BEFORE this node's move"
+    # For each minor variation, the parent state is at (mv.depth - 1).
+    # The path_nodes are indexed by their depths, and the parent of depth d is
+    # the node at depth d-1 (or root for d=1).
+    grouped: dict = {}
+    for mv in opening.minor_variations:
+        grouped.setdefault(mv.depth, []).append(mv)
+
+    total = sum(len(g) for g in grouped.values())
     shown = 0
-    for var in opening.variations:
+    for d in sorted(grouped):
         if shown >= max_show:
-            remaining = len(opening.variations) - shown
-            lines.append(f"{indent}… and {remaining} more variation{'s' if remaining != 1 else ''}")
+            remaining = total - shown
+            lines.append(f"{indent}… and {remaining} more minor variation{'s' if remaining != 1 else ''}")
             break
-        if not var.main_line_actions:
+        parent_state = depth_to_state.get(d - 1)
+        for mv in sorted(grouped[d], key=lambda v: -v.reach_prob):
+            if shown >= max_show:
+                break
+            label = (
+                ui.format_move(parent_state, int(mv.action))
+                if parent_state is not None else f"action#{int(mv.action)}"
+            )
+            lines.append(
+                f"{indent}at ply {d:<2d}  cond={mv.conditional_prob:.3f}  "
+                f"reach={mv.reach_prob:.3f}  {label}"
+            )
             shown += 1
-            continue
-        first_action = var.main_line_actions[0]
-        label = (
-            ui.format_move(branch_state, int(first_action))
-            if branch_state is not None else f"action#{int(first_action)}"
-        )
-        cond = (
-            float(branch_node.sampling_pi[first_action])
-            if first_action < len(branch_node.sampling_pi) else 0.0
-        )
-        n_sub = len(var.variations)
-        sub_descr = f", then {n_sub} sub-variation{'s' if n_sub != 1 else ''}" if n_sub > 0 else ""
-        if var.branch_point.is_terminal:
-            sub_descr = " (terminal)"
-        descriptor = f"main line {var.depth} plies{sub_descr}"
-        lines.append(
-            f"{indent}· cond={cond:.3f}  reach={var.terminal_reach:.3f}  "
-            f"{label:<28s}  → {descriptor}"
-        )
-        shown += 1
     return lines
 
 
@@ -824,13 +906,15 @@ def render_iteration_report(report: IterationReport,
     out.append("")
 
     n_openings = len(report.openings)
-    total_vars = sum(total_variation_count(op) for op in report.openings)
-    deepest = max((op.depth for op in report.openings), default=0)
+    n_with_minors = sum(1 for op in report.openings if op.minor_variations)
+    total_minors = sum(len(op.minor_variations) for op in report.openings)
+    deepest = deepest_opening(report.openings)
     out.append(
         f"Summary: {n_openings} opening{'s' if n_openings != 1 else ''} "
         f"({report.root_entropy:.2f} nats root entropy), "
-        f"{total_vars} variation{'s' if total_vars != 1 else ''} total, "
-        f"deepest opening {deepest} plies."
+        f"deepest {deepest} plies. "
+        f"{total_minors} minor variation{'s' if total_minors != 1 else ''} across "
+        f"{n_with_minors} opening{'s' if n_with_minors != 1 else ''}."
     )
     out.append(f"Tree size: {report.tree_node_count} nodes above min_reach.")
     out.append("")
@@ -839,26 +923,31 @@ def render_iteration_report(report: IterationReport,
     snap_by_id = {id(s.opening): s for s in snapshots if s.label != "dropped"}
 
     if n_openings == 0:
-        out.append("(No openings reached the opening threshold. Root policy is too diffuse —")
-        out.append(" the network has not yet learned consistent first moves.)")
+        out.append("(No openings reached the opening threshold. Either the policy is too")
+        out.append(" diffuse — the network hasn't learned consistent lines yet — or the")
+        out.append(" tree was pruned too aggressively. Try lowering opening_threshold or")
+        out.append(" min_reach.)")
         out.append("")
     else:
         display_count = min(n_openings, tree_config.display_cap)
         for i in range(display_count):
             op = report.openings[i]
-            name = _opening_name(i)
             snap = snap_by_id.get(id(op))
             label_str = f"  [{snap.label}]" if snap else ""
 
             out.append(sub_bar)
             out.append(
-                f" Opening {name}{label_str} · reach {op.terminal_reach:.3f} · "
-                f"main line {op.depth} plies · "
-                f"{len(op.variations)} variation{'s' if len(op.variations) != 1 else ''}"
+                f" Opening {op.name}{label_str} · reach {op.reach:.3f} · "
+                f"depth {op.depth} plies · "
+                f"{len(op.minor_variations)} minor variation{'s' if len(op.minor_variations) != 1 else ''}"
             )
             out.append(sub_bar)
             if snap and snap.note:
                 out.append(f"({snap.note})")
+            if op.sister_names:
+                sis = ", ".join(op.sister_names[:8])
+                more = "" if len(op.sister_names) <= 8 else f" (+{len(op.sister_names) - 8} more)"
+                out.append(f"Sister openings (same fork point): {sis}{more}")
 
             if op.transposition_labels:
                 for alt in op.transposition_labels:
@@ -866,28 +955,30 @@ def render_iteration_report(report: IterationReport,
                     out.append(f"  Transposition: also reachable via {alt_str}")
 
             out.append("")
-            out.append("Main line:")
-            out.extend(_render_main_line(op, report.root_node, ui))
+            out.append("Path from start:")
+            out.extend(_render_path(op, report.root_node, ui))
+            term = op.terminal_node
             out.append(
-                f"     (branch point — entropy {op.branch_point.entropy:.2f} nats, "
-                f"{len(op.branch_point.children)} children explored)"
+                f"     (terminal — entropy {term.entropy:.2f} nats, "
+                f"{len(term.children)} children below threshold)"
             )
 
             out.append("")
-            out.append("Position at branch point:")
-            if op.branch_point.state is not None:
-                board = ui.display_board(op.branch_point.state)
+            out.append("Position at end of opening:")
+            if term.state is not None:
+                board = ui.display_board(term.state)
                 for line in board.splitlines():
                     out.append(f"  {line}")
             else:
                 out.append("  (state unavailable)")
 
             out.append("")
-            if op.variations:
-                out.append("Variations at branch point:")
-                out.extend(_render_variations_summary(op, ui, max_show=tree_config.display_cap))
+            if op.minor_variations:
+                out.append("Minor variations along the line:")
+                out.extend(_render_minor_variations(op, ui, report.root_node,
+                                                    max_show=tree_config.display_cap))
             else:
-                out.append("(No further variations above min_reach.)")
+                out.append("(No minor variations — every step along this line was a fork or a non-dominant single child.)")
             out.append("")
 
         if n_openings > tree_config.display_cap:
@@ -922,11 +1013,11 @@ def render_iteration_report(report: IterationReport,
         out.append(sub_bar)
         for s in dropped:
             actions_str = _format_action_sequence(
-                s.opening.main_line_actions, report.root_node.state, ui
+                s.opening.path_actions, report.root_node.state, ui
             )
             out.append(
                 f"  was at iter {s.matched_prior.iteration if s.matched_prior else '?'}: "
-                f"reach {s.opening.terminal_reach:.3f}  ({actions_str})"
+                f"reach {s.opening.reach:.3f}  ({actions_str})"
             )
         out.append("")
 
@@ -1042,7 +1133,7 @@ def render_summary(reports: list, snapshots_per_iter: list, ui: GameUI,
     # Sort families by max reach observed
     sorted_families = sorted(
         families.items(),
-        key=lambda kv: -max(s.opening.terminal_reach for _i, s in kv[1]),
+        key=lambda kv: -max(s.opening.reach for _i, s in kv[1]),
     )
 
     out.append("## Per-family tracker")
@@ -1075,7 +1166,7 @@ def render_summary(reports: list, snapshots_per_iter: list, ui: GameUI,
             note = snap.note.replace("|", "\\|") if snap.note else ""
             out.append(
                 f"| {iteration:04d} | {snap.label} | "
-                f"{snap.opening.terminal_reach:.3f} | {snap.opening.depth} | "
+                f"{snap.opening.reach:.3f} | {snap.opening.depth} | "
                 f"{ident} | {note} |"
             )
         out.append("")
@@ -1083,7 +1174,7 @@ def render_summary(reports: list, snapshots_per_iter: list, ui: GameUI,
         # Show the most recent main line in this family
         last_iter, last_snap = entries[-1]
         actions_str = _format_action_sequence(
-            last_snap.opening.main_line_actions, root_state_for_label, ui
+            last_snap.opening.path_actions, root_state_for_label, ui
         )
         out.append(f"Most recent main line (iter {last_iter:04d}): {actions_str}")
         out.append("")
@@ -1410,26 +1501,21 @@ def _print_inline_openings(report: IterationReport, snaps: list, ui: GameUI,
         snap_by_id = {id(s.opening): s for s in snaps if s.label != "dropped"}
         root_state = report.root_node.state
         for i, op in enumerate(report.openings):
-            name = _opening_name(i)
             snap = snap_by_id.get(id(op))
             label = snap.label if snap else "?"
-            # First-move label, truncated for readability
-            first_action = op.main_line_actions[0] if op.main_line_actions else None
-            if first_action is not None and root_state is not None:
-                move_label = ui.format_move(root_state, int(first_action))
-            else:
-                move_label = "(empty)"
-            move_label = move_label[:42]
-            n_var = len(op.variations)
-            print(f"{indent}{name} [{label:<10s}] "
-                  f"reach={op.terminal_reach:.3f}  depth={op.depth}  "
-                  f"{n_var} var   {move_label}")
+            # Show the full path as the opening label (truncated for readability).
+            path_str = _format_action_sequence(op.path_actions, root_state, ui)
+            path_str = path_str[:60]
+            n_minor = len(op.minor_variations)
+            print(f"{indent}{op.name:<5s} [{label:<10s}] "
+                  f"reach={op.reach:.3f}  depth={op.depth}  "
+                  f"{n_minor} minor   {path_str}")
 
-            # Optional inline board for this opening's branch point.
+            # Optional inline board for this opening's terminal position.
             if tree_config.show_inline_boards and i < tree_config.display_cap:
-                bp_state = op.branch_point.state
-                if bp_state is not None:
-                    board = ui.display_board(bp_state)
+                term_state = op.terminal_node.state
+                if term_state is not None:
+                    board = ui.display_board(term_state)
                     for bline in board.splitlines():
                         print(f"{indent}    │ {bline}")
                     print("")

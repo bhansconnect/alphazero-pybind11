@@ -2249,34 +2249,57 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         _KIND_MASKS = {"all": ALL_KIND_MASK, "move": MOVE_KIND_MASK, "fire": FIRE_KIND_MASK}
 
         def _spatial_heatmap(sample_mask, unit_idx=None, action_kind="all"):
-            """Normalized (13,13) heatmap of pi mass at source hex.
+            """(13,13) heatmap of π mass per unit-instance at each source hex.
 
             Mass is restricted to (hex, slot) pairs whose slot is type-legal
-            for a unit type present at that hex. action_kind in {"all","move","fire"}
-            further restricts which slots contribute. Renormalizes over that support.
+            for a unit type present at that hex. action_kind in
+            {"all","move","fire"} further restricts which slots contribute.
+
+            The grid is normalized by total unit-instance count of the
+            relevant type(s) across the samples — so attrition (fewer units
+            alive in later phases) doesn't artificially shrink the heatmap;
+            you see "what each remaining unit does," not "how many units
+            there are doing it."
+
+            Returns (grid, mass_per_unit):
+              grid[r,c]      = avg π mass at hex (r,c) per unit-instance,
+                               NaN outside the hex hull. Cross-panel
+                               comparable.
+              mass_per_unit  = total π mass per unit-instance for this
+                               unit/kind selection. Equal to nansum(grid).
             """
             n = int(sample_mask.sum())
             if n == 0:
-                return np.full((13, 13), np.nan)
+                return np.full((13, 13), np.nan), 0.0
             sp = pi_spatial[sample_mask]                              # (n, 13, 13, 10)
             grid = np.zeros((13, 13))
             units = [unit_idx] if unit_idx is not None else [0, 1, 2]
             kind_mask = _KIND_MASKS[action_kind]
+            denom = 0.0
             for u in units:
                 up = unit_presence[u][sample_mask]                    # (n, 13, 13)
                 slot_mask = VALID_SLOTS_BY_UNIT[u] & kind_mask        # (10,)
                 grid += (sp * up[:, :, :, np.newaxis] * slot_mask
                          ).sum(axis=(0, 3))                           # (13, 13)
-            total = grid.sum()
-            return np.where(hex_mask, grid / total if total > 0 else grid, np.nan)
+                denom += float(unit_counts_my[u][sample_mask].sum())
+            if denom <= 0:
+                return np.full((13, 13), np.nan), 0.0
+            grid = grid / denom
+            mass_per_unit = float(grid.sum())
+            return np.where(hex_mask, grid, np.nan), mass_per_unit
 
         def _action_dist(sample_mask, unit_idx):
-            """Per-slot policy mass distribution and average mass-per-sample.
+            """Per-slot policy mass for a unit type, with per-unit magnitude.
 
-            Returns (dist10, mass_per_n) where dist10 sums to 1 across the 10
-            slots (renormalized over type-legal slots), and mass_per_n is the
-            raw Σπ on this unit type's type-legal slots divided by the number
-            of samples — a cross-cell-comparable scale.
+            Returns (dist10, mass_per_unit):
+              dist10        sums to 1 across the 10 slots (renormalized
+                            over type-legal slots) — "of this unit type's
+                            action mass in these samples, what share goes
+                            to each slot".
+              mass_per_unit = Σπ on this unit type's type-legal slots
+                            divided by total unit-instance count of this
+                            type across the samples — cross-cell magnitude
+                            that is NOT confounded by unit attrition.
             """
             n = int(sample_mask.sum())
             if n == 0:
@@ -2287,8 +2310,9 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
             dist = (sp * up[:, :, :, np.newaxis] * slot_mask
                     ).sum(axis=(0, 1, 2))                             # (10,)
             total = float(dist.sum())
-            mass_per_n = total / n
-            return (dist / total if total > 0 else dist), mass_per_n
+            denom = float(unit_counts_my[unit_idx][sample_mask].sum())
+            mass_per_unit = (total / denom) if denom > 0 else 0.0
+            return (dist / total if total > 0 else dist), mass_per_unit
 
         def _draw_na(ax, label="N/A"):
             """Render a grey 'N/A' / insufficient-data placeholder panel."""
@@ -2350,8 +2374,8 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                 return None
             if vmax is None:
                 vmax = max(values) if values else 1.0
-                if vmax <= 0:
-                    vmax = 1.0
+            if vmax <= 0:
+                vmax = 1.0
             coll = PolyCollection(polys, array=np.asarray(values),
                                   cmap=cmap, edgecolors="white", linewidths=0.3)
             coll.set_clim(vmin, vmax)
@@ -2405,10 +2429,15 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         # --- Figure 1 (per-variant): each row is a variant. Columns are
         # Deploy bars + (Move, Fire) heatmaps for each of 3 phases = 7 cols.
         # Variants 0-2 use board_side=5 so the outer ring of hexes is hidden.
+        # Heatmap values are π mass per unit-instance; vmax is shared across
+        # all 6 phase heatmaps within a variant row so cross-phase magnitude
+        # is visible at a glance (rare-action panels look dim, common-action
+        # panels look bright). Variant rows have independent scales.
         fig1, axes = plt.subplots(4, 7, figsize=(34, 20))
         fig1.suptitle(
             f"Iteration {iteration} — Action Frequency by Variant × Phase "
-            "(Move slots 0-4 vs Fire slots 5-9; type-legal slots only)",
+            "(π mass per unit-instance; Move slots 0-4 vs Fire slots 5-9; "
+            "vmax shared per variant row)",
             fontsize=13)
         deploy_valid_mask = np.concatenate(
             [VALID_DEPLOY_FACINGS[ui] for ui in range(3)]).astype(bool)  # (18,)
@@ -2417,6 +2446,34 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
             ("Attrition (no portal dmg)",   attrition_mask),
             ("Portal Damage",               portal_mask),
         ]
+
+        # Pass 1: pre-compute every spatial panel so we can share vmax per row.
+        spatial_cache = {}  # (vid, phase_idx, kind) -> (grid_or_None, mass, n)
+        for vid in range(len(UNIFIED_VARIANT_NAMES)):
+            vmask_v = variant_ids == vid
+            for phase_idx, (_, pmask) in enumerate(phase_specs):
+                combo = pmask & vmask_v
+                n_combo = int(combo.sum())
+                for kind in ("move", "fire"):
+                    if n_combo < MIN_SAMPLES_FOR_PLOT:
+                        spatial_cache[(vid, phase_idx, kind)] = (None, 0.0, n_combo)
+                    else:
+                        grid, mass = _spatial_heatmap(combo, action_kind=kind)
+                        spatial_cache[(vid, phase_idx, kind)] = (grid, mass, n_combo)
+
+        # Per-variant-row vmax (None falls back to per-panel auto in renderer)
+        row_vmax = {}
+        for vid in range(len(UNIFIED_VARIANT_NAMES)):
+            peaks = []
+            for phase_idx in range(len(phase_specs)):
+                for kind in ("move", "fire"):
+                    grid, _, _ = spatial_cache[(vid, phase_idx, kind)]
+                    if grid is None or np.all(np.isnan(grid)):
+                        continue
+                    m = np.nanmax(grid)
+                    if np.isfinite(m):
+                        peaks.append(m)
+            row_vmax[vid] = max(peaks) if peaks else None
 
         for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
             vmask = variant_ids == vid
@@ -2452,30 +2509,35 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
             ax.legend(handles=legend_handles, fontsize=7)
 
             # ---- Spatial-phase heatmaps: (Move, Fire) per phase ----
-            for phase_idx, (title, pmask) in enumerate(phase_specs):
-                combo = pmask & vmask
-                n = int(combo.sum())
+            vmax = row_vmax[vid]
+            for phase_idx, (title, _) in enumerate(phase_specs):
                 for kind_idx, kind in enumerate(("move", "fire")):
                     col_idx = 1 + phase_idx * 2 + kind_idx
                     ax = axes[vid, col_idx]
+                    grid, mass, n = spatial_cache[(vid, phase_idx, kind)]
                     label = "Move" if kind == "move" else "Fire"
-                    if n < MIN_SAMPLES_FOR_PLOT:
+                    if n < MIN_SAMPLES_FOR_PLOT or grid is None:
                         _draw_na(ax, label=f"n={n}\n(insufficient)")
                         ax.set_title(f"{vname.capitalize()} — {title}\n{label} (n={n})",
                                      fontsize=9)
                         continue
-                    grid = _spatial_heatmap(combo, action_kind=kind)
-                    _draw_hex_heatmap(ax, grid, board_side_hint=side)
-                    ax.set_title(f"{vname.capitalize()} — {title}\n{label} (n={n})",
-                                 fontsize=9)
+                    _draw_hex_heatmap(ax, grid, board_side_hint=side, vmax=vmax)
+                    ax.set_title(
+                        f"{vname.capitalize()} — {title}\n"
+                        f"{label} (n={n}, Σπ/unit={mass:.3f})",
+                        fontsize=9)
         plt.tight_layout()
 
         fig2 = None
 
-        # --- Figure 3: per-unit action breakdown (3 units × 4 phases) ---
+        # --- Figure 3: per-unit action breakdown (3 units × 4 phases).
+        # Bars sum to 1 within each cell (slot share). Σπ/unit in the title
+        # is the cross-cell-comparable magnitude: total π mass for this
+        # unit type per unit-instance, so attrition doesn't bias it.
         fig3, axes3 = plt.subplots(3, 4, figsize=(20, 12))
         fig3.suptitle(f"Iteration {iteration} — Action Breakdown by Unit Type "
-                      "(type-legal slots only)", fontsize=13)
+                      "(type-legal slots only; Σπ/unit gives per-instance "
+                      "magnitude)", fontsize=13)
         _phases = [(deploy_mask, "Deploy"), (standstill_mask, "Standstill"),
                    (attrition_mask, "Attrition"), (portal_mask, "Portal")]
         for ui, uname in enumerate(unit_names):
@@ -2490,43 +2552,66 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                     _draw_na(ax, label=f"n={n}\n(insufficient)")
                     ax.set_title(f"{uname} — {phase}\n(n={n})", fontsize=9)
                     continue
-                dist, mass_per_n = _action_dist(mask, ui)
+                dist, mass_per_unit = _action_dist(mask, ui)
                 ax.bar(range(10), dist, color=bar_colors, alpha=0.85)
                 ax.set_xticks(range(10))
                 ax.set_xticklabels(action_labels, fontsize=6, rotation=45, ha="right")
                 ax.set_title(
                     f"{uname} — {phase}\n"
-                    f"(n={n}, valid:{n_valid}, Σπ/n={mass_per_n:.3f})",
+                    f"(n={n}, valid:{n_valid}, Σπ/unit={mass_per_unit:.3f})",
                     fontsize=9)
                 ax.set_ylabel("Fraction", fontsize=8)
         plt.tight_layout()
 
         # --- Figure 4: per-unit × per-variant spatial heatmaps (all positions).
-        # 3 rows (units) × 8 cols ((variant, kind) pairs). Each variant gets a
-        # (Move, Fire) pair so you can compare combat vs maneuver at a glance.
+        # 3 rows (units) × 8 cols ((variant, kind) pairs). vmax is shared
+        # within each (unit, variant) pair so move/fire are directly
+        # comparable; pairs across variants/units are NOT scale-coupled.
         fig4, axes4 = plt.subplots(3, 8, figsize=(28, 12))
         fig4.suptitle(
             f"Iteration {iteration} — Unit × Variant Action Heatmaps "
-            "(All Positions; Move slots 0-4 vs Fire slots 5-9; type-legal slots only)",
+            "(All Positions; π mass per unit-instance; "
+            "vmax shared per (unit, variant) pair)",
             fontsize=13)
         for ui, uname in enumerate(unit_names):
             for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
                 vmask = variant_ids == vid
                 n = int(vmask.sum())
+                # Compute both kinds first so the (move, fire) pair can share vmax.
+                kind_data = {}
+                for kind in ("move", "fire"):
+                    if not UNIT_VALID_IN_VARIANT[ui, vid] or n < MIN_SAMPLES_FOR_PLOT:
+                        kind_data[kind] = (None, 0.0)
+                    else:
+                        grid, mass = _spatial_heatmap(
+                            vmask, unit_idx=ui, action_kind=kind)
+                        kind_data[kind] = (grid, mass)
+                peaks = [np.nanmax(g) for g, _ in kind_data.values()
+                         if g is not None and not np.all(np.isnan(g))]
+                peaks = [p for p in peaks if np.isfinite(p)]
+                pair_vmax = max(peaks) if peaks else None
                 for kind_idx, kind in enumerate(("move", "fire")):
                     col_idx = vid * 2 + kind_idx
                     ax = axes4[ui, col_idx]
                     label = "Move" if kind == "move" else "Fire"
+                    grid, mass = kind_data[kind]
                     if not UNIT_VALID_IN_VARIANT[ui, vid]:
                         _draw_na(ax)
-                    elif n < MIN_SAMPLES_FOR_PLOT:
+                        ax.set_title(f"{uname} — {label}\n{vname.capitalize()} (N/A)",
+                                     fontsize=8)
+                    elif n < MIN_SAMPLES_FOR_PLOT or grid is None:
                         _draw_na(ax, label=f"n={n}\n(insufficient)")
+                        ax.set_title(f"{uname} — {label}\n{vname.capitalize()} (n={n})",
+                                     fontsize=8)
                     else:
-                        grid = _spatial_heatmap(vmask, unit_idx=ui, action_kind=kind)
-                        _draw_hex_heatmap(ax, grid,
-                                          board_side_hint=VARIANT_BOARD_SIDE[vid])
-                    ax.set_title(f"{uname} — {label}\n{vname.capitalize()} (n={n})",
-                                 fontsize=8)
+                        _draw_hex_heatmap(
+                            ax, grid,
+                            board_side_hint=VARIANT_BOARD_SIDE[vid],
+                            vmax=pair_vmax)
+                        ax.set_title(
+                            f"{uname} — {label}\n"
+                            f"{vname.capitalize()} (n={n}, Σπ/unit={mass:.3f})",
+                            fontsize=8)
         plt.tight_layout()
 
         # --- Figure 5: unit count by type × phase × variant ---
@@ -2537,23 +2622,41 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
             (portal_mask,     "Portal"),
         ]
         fig5, axes5u = plt.subplots(4, 4, figsize=(16, 12))
-        fig5.suptitle(f"Iteration {iteration} — Unit Count by Type × Phase × Variant", fontsize=12)
+        fig5.suptitle(f"Iteration {iteration} — Unit Count by Type × Phase × Variant "
+                      "(y-axis shared per variant column)", fontsize=12)
         _bar_x = np.arange(3); _bar_w = 0.35
+
+        # Precompute averages so we can lock the y-axis per variant column.
+        # Shape: [phase][variant][side][unit] where side 0=mine, 1=opp.
+        avgs = np.full((len(_phase_list), len(UNIFIED_VARIANT_NAMES), 2, 3), np.nan)
+        ns   = np.zeros((len(_phase_list), len(UNIFIED_VARIANT_NAMES)), dtype=int)
+        for pi_row, (pmask, _) in enumerate(_phase_list):
+            for vid in range(len(UNIFIED_VARIANT_NAMES)):
+                combo = pmask & (variant_ids == vid)
+                ns[pi_row, vid] = int(combo.sum())
+                if ns[pi_row, vid] < MIN_SAMPLES_FOR_PLOT:
+                    continue
+                for ui in range(3):
+                    if not UNIT_VALID_IN_VARIANT[ui, vid]:
+                        continue
+                    avgs[pi_row, vid, 0, ui] = unit_counts_my[ui][combo].mean()
+                    avgs[pi_row, vid, 1, ui] = unit_counts_opp[ui][combo].mean()
+
+        # Per-variant y-max: largest avg across all phases / sides / units, +10% headroom.
+        ymax_per_variant = np.nanmax(avgs, axis=(0, 2, 3))
+        ymax_per_variant = np.where(np.isnan(ymax_per_variant), 1.0, ymax_per_variant)
+        ymax_per_variant = np.maximum(ymax_per_variant * 1.1, 0.5)
+
         for pi_row, (pmask, pname) in enumerate(_phase_list):
             for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
                 ax = axes5u[pi_row, vid]
-                combo = pmask & (variant_ids == vid)
-                n = int(combo.sum())
+                n = int(ns[pi_row, vid])
                 ax.set_title(f"{vname.capitalize()} — {pname}\n(n={n})", fontsize=7)
                 if n < MIN_SAMPLES_FOR_PLOT:
                     _draw_na(ax, label=f"n={n}\n(insufficient)" if n > 0 else "N/A")
                     continue
-                my_avg  = [unit_counts_my[ui][combo].mean()
-                           if UNIT_VALID_IN_VARIANT[ui, vid] else np.nan
-                           for ui in range(3)]
-                opp_avg = [unit_counts_opp[ui][combo].mean()
-                           if UNIT_VALID_IN_VARIANT[ui, vid] else np.nan
-                           for ui in range(3)]
+                my_avg  = avgs[pi_row, vid, 0]
+                opp_avg = avgs[pi_row, vid, 1]
                 # Per-bar alpha — fade invalid (unit, variant) bars to grey.
                 my_colors  = [unit_colors[ui] if UNIT_VALID_IN_VARIANT[ui, vid]
                               else "#dddddd" for ui in range(3)]
@@ -2564,6 +2667,7 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                 ax.bar(_bar_x + _bar_w/2, np.nan_to_num(opp_avg), _bar_w,
                        color=opp_colors, alpha=0.45)
                 ax.set_xticks(_bar_x); ax.set_xticklabels(["F", "C", "D"], fontsize=8)
+                ax.set_ylim(0, ymax_per_variant[vid])
                 ax.set_ylabel("Avg units", fontsize=7)
                 if pi_row == 0 and vid == 0:
                     legend_p = [_Patch(facecolor="#888888", alpha=0.85, label="Mine"),
@@ -2572,32 +2676,57 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         plt.tight_layout()
 
         # --- Figure 6: per-phase unit × variant spatial heatmaps.
-        # Same 3×8 layout as Figure 4, one figure per phase.
+        # Same 3×8 layout as Figure 4, one figure per phase. vmax is shared
+        # within each (unit, variant) pair for move/fire comparison; cross-
+        # phase magnitude comparison goes through Fig 1 (or by reading the
+        # Σπ/unit numbers in titles here).
         fig6_list = []
         for pmask, pname in _phase_list:
             f, axs = plt.subplots(3, 8, figsize=(28, 12))
             f.suptitle(
                 f"Iteration {iteration} — Unit × Variant Heatmap: {pname} "
-                "(Move slots 0-4 vs Fire slots 5-9; type-legal slots only)",
+                "(π mass per unit-instance; vmax shared per (unit, variant) pair)",
                 fontsize=13)
             for ui, uname in enumerate(unit_names):
                 for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
                     vmask = pmask & (variant_ids == vid)
                     n = int(vmask.sum())
+                    kind_data = {}
+                    for kind in ("move", "fire"):
+                        if not UNIT_VALID_IN_VARIANT[ui, vid] or n < MIN_SAMPLES_FOR_PLOT:
+                            kind_data[kind] = (None, 0.0)
+                        else:
+                            grid, mass = _spatial_heatmap(
+                                vmask, unit_idx=ui, action_kind=kind)
+                            kind_data[kind] = (grid, mass)
+                    peaks = [np.nanmax(g) for g, _ in kind_data.values()
+                             if g is not None and not np.all(np.isnan(g))]
+                    peaks = [p for p in peaks if np.isfinite(p)]
+                    pair_vmax = max(peaks) if peaks else None
                     for kind_idx, kind in enumerate(("move", "fire")):
                         col_idx = vid * 2 + kind_idx
                         ax = axs[ui, col_idx]
                         label = "Move" if kind == "move" else "Fire"
+                        grid, mass = kind_data[kind]
                         if not UNIT_VALID_IN_VARIANT[ui, vid]:
                             _draw_na(ax)
-                        elif n < MIN_SAMPLES_FOR_PLOT:
+                            ax.set_title(
+                                f"{uname} — {label}\n{vname.capitalize()} (N/A)",
+                                fontsize=8)
+                        elif n < MIN_SAMPLES_FOR_PLOT or grid is None:
                             _draw_na(ax, label=f"n={n}\n(insufficient)")
+                            ax.set_title(
+                                f"{uname} — {label}\n{vname.capitalize()} (n={n})",
+                                fontsize=8)
                         else:
-                            grid = _spatial_heatmap(vmask, unit_idx=ui, action_kind=kind)
-                            _draw_hex_heatmap(ax, grid,
-                                              board_side_hint=VARIANT_BOARD_SIDE[vid])
-                        ax.set_title(f"{uname} — {label}\n{vname.capitalize()} (n={n})",
-                                     fontsize=8)
+                            _draw_hex_heatmap(
+                                ax, grid,
+                                board_side_hint=VARIANT_BOARD_SIDE[vid],
+                                vmax=pair_vmax)
+                            ax.set_title(
+                                f"{uname} — {label}\n"
+                                f"{vname.capitalize()} (n={n}, Σπ/unit={mass:.3f})",
+                                fontsize=8)
             plt.tight_layout()
             fig6_list.append((f, pname))
 
@@ -2995,8 +3124,9 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         run.track(vrate, name="win_rate", epoch=i, step=total_train_steps,
                                   context={"vs": f"-{config.compare_past}", "variant": UNIFIED_VARIANT_NAMES[vid]})
                         if wr_v is not None:
-                            wr_v[vid][i, past_iter] = vrate
-                            wr_v[vid][past_iter, i] = 1.0 - vrate
+                            vadj = vrate + variant_draw_rates.get(vid, 0.0) / Game.NUM_PLAYERS()
+                            wr_v[vid][i, past_iter] = vadj
+                            wr_v[vid][past_iter, i] = 1.0 - vadj
                     for vid, drate in variant_draw_rates.items():
                         run.track(drate, name="draw_rate", epoch=i, step=total_train_steps,
                                   context={"vs": f"-{config.compare_past}", "variant": UNIFIED_VARIANT_NAMES[vid]})
@@ -3018,6 +3148,15 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 postfix["elo"] = int(elo[i])
                 pbar.set_postfix(postfix)
                 np.savetxt(os.path.join(experiment_dir, "elo.csv"), elo, delimiter=",")
+                # Persist wr matrices here too. Without this, a crash between
+                # training (which writes checkpoint i+1) and gating's save would
+                # cause iter i to be skipped on resume, leaving wr[i, i-compare_past]
+                # permanently NaN and dragging variant elo down by 100s of points.
+                np.savetxt(os.path.join(experiment_dir, "win_rate.csv"), wr, delimiter=",")
+                if wr_v is not None:
+                    for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+                        np.savetxt(os.path.join(experiment_dir, f"win_rate_{vname}.csv"), wr_v[vid], delimiter=",")
+                        np.savetxt(os.path.join(experiment_dir, f"elo_{vname}.csv"), elo_v[vid], delimiter=",")
             stage_times["elo"] = time.time() - stage_start
 
             stage_start = time.time()
@@ -3215,8 +3354,9 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                             run.track(vrate, name="win_rate", epoch=next_net, step=total_train_steps,
                                       context={"vs": "best", "variant": UNIFIED_VARIANT_NAMES[vid]})
                             if wr_v is not None:
-                                wr_v[vid][next_net, gate_net] = vrate
-                                wr_v[vid][gate_net, next_net] = 1.0 - vrate
+                                vadj = vrate + variant_draw_rates.get(vid, 0.0) / Game.NUM_PLAYERS()
+                                wr_v[vid][next_net, gate_net] = vadj
+                                wr_v[vid][gate_net, next_net] = 1.0 - vadj
                         for vid, drate in variant_draw_rates.items():
                             run.track(drate, name="draw_rate", epoch=next_net, step=total_train_steps,
                                       context={"vs": "best", "variant": UNIFIED_VARIANT_NAMES[vid]})

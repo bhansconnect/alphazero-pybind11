@@ -793,18 +793,22 @@ def _opening_name(idx: int) -> str:
     return _opening_name(idx // 26 - 1) + chr(ord('A') + idx % 26)
 
 
-def _format_action_sequence(actions: list, root_state, ui: GameUI) -> str:
+def _format_action_sequence(actions: list, root_state, ui: GameUI, short: bool = False) -> str:
     """Format a sequence of action indices as a human-readable line string.
 
     Replays from root_state to keep formatting context (whose turn, etc.).
+    If `short=True`, uses `ui.format_move_short` (compact codes) instead of
+    `ui.format_move` (verbose descriptions). Short form is used for dense
+    inline lists; full form is used in per-iteration text reports.
     """
+    formatter = ui.format_move_short if short else ui.format_move
     parts = []
     state = root_state.copy() if root_state is not None else None
     for a in actions:
         if a is None:
             continue
         if state is not None:
-            label = ui.format_move(state, int(a))
+            label = formatter(state, int(a))
             state.play_move(int(a))
         else:
             label = f"action#{int(a)}"
@@ -1503,13 +1507,12 @@ def _print_inline_openings(report: IterationReport, snaps: list, ui: GameUI,
         for i, op in enumerate(report.openings):
             snap = snap_by_id.get(id(op))
             label = snap.label if snap else "?"
-            # Show the full path as the opening label (truncated for readability).
-            path_str = _format_action_sequence(op.path_actions, root_state, ui)
-            path_str = path_str[:60]
+            # Dense short-form path (e.g. "d f nw / d f se") for at-a-glance scanning.
+            path_str = _format_action_sequence(op.path_actions, root_state, ui, short=True)
             n_minor = len(op.minor_variations)
             print(f"{indent}{op.name:<5s} [{label:<10s}] "
-                  f"reach={op.reach:.3f}  depth={op.depth}  "
-                  f"{n_minor} minor   {path_str}")
+                  f"reach={op.reach:.3f}  d={op.depth}  "
+                  f"+{n_minor}m   {path_str}")
 
             # Optional inline board for this opening's terminal position.
             if tree_config.show_inline_boards and i < tree_config.display_cap:

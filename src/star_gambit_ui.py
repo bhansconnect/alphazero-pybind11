@@ -662,6 +662,10 @@ class StarGambitUI(GameUI):
         """Return human-friendly move description."""
         return format_action(action, self.cfg, gs)
 
+    def format_move_short(self, gs, action) -> str:
+        """Return just the short code (e.g. 'd f nw', 'm c1 fl'), no description."""
+        return decode_action(action, self.cfg, gs)
+
     def get_valid_move_descriptions(self, gs, valid_moves) -> list[tuple[int, str]]:
         """Return (action_id, description) for all valid moves."""
         result = []

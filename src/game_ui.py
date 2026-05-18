@@ -24,6 +24,15 @@ class GameUI:
         """Return human-friendly name for an action."""
         return str(action)
 
+    def format_move_short(self, gs, action) -> str:
+        """Return compact (single-token, no description) name for an action.
+
+        Used when many moves need to fit on one line, e.g. opening-tree
+        sequence displays. Defaults to `format_move`; games with a verbose
+        format_move should override to return only the short code.
+        """
+        return self.format_move(gs, action)
+
     def get_valid_move_descriptions(self, gs, valid_moves) -> list[tuple[int, str]]:
         """Return list of (action_id, description) for valid moves."""
         return [(i, str(i)) for i in range(len(valid_moves)) if valid_moves[i]]

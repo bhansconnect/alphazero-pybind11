@@ -22,6 +22,7 @@ import alphazero
 from neural_net import get_device, get_storage_dtype, to_half_safe
 from config import load_config, find_latest_checkpoint
 from tracy_utils import tracy_zone, tracy_thread, TracyZone, tracy_frame
+import frozen_eval
 
 def _fmt_pct(x):
     pct = x * 100
@@ -214,6 +215,29 @@ def _load_hist_tensor(path):
     if path.endswith(".ptz"):
         return load_compressed(path)
     return torch.load(path, map_location="cpu", mmap=True)
+
+
+def _sample_recent_history_batch(paths, batch_size):
+    """Sample a batch of canonical positions from the most recent history file.
+
+    Used by per-checkpoint diagnostics (effective rank). Returns a CPU float
+    tensor of shape [<=batch_size, C, H, W], or None if no history exists.
+    """
+    hist_dir = paths["history"]
+    files = sorted(glob.glob(os.path.join(hist_dir, "*-canonical-*.ptz")), reverse=True)
+    if not files:
+        files = sorted(glob.glob(os.path.join(hist_dir, "*-canonical-*.pt")), reverse=True)
+    if not files:
+        return None
+    tensor = _load_hist_tensor(files[0]).float()
+    n = tensor.size(0)
+    if n == 0:
+        return None
+    take = min(batch_size, n)
+    if take == n:
+        return tensor
+    idx = torch.randperm(n)[:take]
+    return tensor[idx]
 
 
 def prepare_inference_model(nn, config):
@@ -3529,6 +3553,63 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         np.savetxt(os.path.join(experiment_dir, f"win_rate_{vname}.csv"), wr_v[vid], delimiter=",")
                         np.savetxt(os.path.join(experiment_dir, f"elo_{vname}.csv"), elo_v[vid], delimiter=",")
             stage_times["gating"] = time.time() - stage_start
+
+            # Per-checkpoint diagnostics (Features 1, 3).
+            # Load the new checkpoint once and run all enabled diagnostics.
+            wants_frozen = config.frozen_eval_anchor_iter > 0
+            wants_rank = config.effective_rank_enabled
+            if wants_frozen or wants_rank:
+                stage_start = time.time()
+                with TracyZone("stage_diagnostics"):
+                    diag_nn = None
+                    try:
+                        import neural_net
+                        diag_nn = neural_net.NNWrapper.load_checkpoint(
+                            Game, paths["checkpoint"],
+                            f"{next_net:04d}-{experiment_name}.pt",
+                        )
+                    except Exception as exc:
+                        print(f"  Diagnostics warning: failed to load checkpoint "
+                              f"{next_net}: {exc}")
+
+                    if diag_nn is not None and wants_rank:
+                        try:
+                            sample = _sample_recent_history_batch(
+                                paths, config.effective_rank_batch_size,
+                            )
+                            if sample is not None:
+                                pr = diag_nn.effective_rank(sample)
+                                run.track(pr, name="effective_rank",
+                                          epoch=next_net, step=total_train_steps,
+                                          context={})
+                        except Exception as exc:
+                            print(f"  Effective rank warning: {exc}")
+
+                    if diag_nn is not None and wants_frozen:
+                        snap_ok = frozen_eval.ensure_snapshot(
+                            config, paths, experiment_name,
+                            config.frozen_eval_anchor_iter,
+                        )
+                        if snap_ok and (i % max(1, config.frozen_eval_interval) == 0):
+                            try:
+                                metrics = frozen_eval.evaluate_checkpoint(
+                                    diag_nn, config, paths,
+                                    config.frozen_eval_anchor_iter,
+                                )
+                                frozen_eval.log_metrics_to_aim(
+                                    run, metrics,
+                                    anchor_iter=config.frozen_eval_anchor_iter,
+                                    epoch=next_net,
+                                    step=total_train_steps,
+                                )
+                            except Exception as exc:
+                                print(f"  Frozen eval warning: skipped iter "
+                                      f"{next_net}: {exc}")
+
+                    if diag_nn is not None:
+                        del diag_nn
+                    gc.collect()
+                stage_times["diagnostics"] = time.time() - stage_start
 
             # Log variant_sample_frac at end of iteration from this iteration's actual data.
             if _is_unified_game(config):

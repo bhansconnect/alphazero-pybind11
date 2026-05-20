@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstring>
 #include <iostream>
+#include <stdexcept>
 
 #include "color.h"
 #include "game_state.h"
@@ -676,6 +678,85 @@ class PhotosynthesisGS : public GameState {
     }
     out += '\n';
     return out;
+  }
+
+  // Pickle support. Serializes all state including the variable-length
+  // score_tiles_ vectors (length-prefixed). Templated in-header to support
+  // PhotosynthesisGS<2>, <3>, <4>.
+  [[nodiscard]] std::string to_bytes() const override {
+    std::string out;
+    auto append = [&](const void* p, size_t n) {
+      out.append(static_cast<const char*>(p), n);
+    };
+    const size_t board_bytes = NUM_PLAYERS * HEIGHT * WIDTH;
+    append(board_.data(), board_bytes);
+    append(activated_tiles_.data(), HEIGHT * WIDTH);
+    out.push_back(static_cast<char>(first_player_));
+    out.push_back(static_cast<char>(player_));
+    append(&turn_, 4);
+    out.push_back(static_cast<char>(sun_phase_));
+    append(sun_points_.data(), NUM_PLAYERS);
+    append(buyable_plants_.data(), NUM_PLAYERS * 4);
+    append(available_plants_.data(), NUM_PLAYERS * 4);
+    append(score_tiles_collected_.data(), NUM_PLAYERS * 4);
+    append(score_.data(), NUM_PLAYERS * 2);
+    // Variable-length score_tiles_: 4 vectors of uint8_t, length-prefixed (1B each).
+    for (int i = 0; i < 4; ++i) {
+      uint8_t len = static_cast<uint8_t>(score_tiles_[i].size());
+      out.push_back(static_cast<char>(len));
+      if (len > 0) {
+        append(score_tiles_[i].data(), len);
+      }
+    }
+    return out;
+  }
+
+  [[nodiscard]] static PhotosynthesisGS<NUM_PLAYERS> from_bytes(
+      const std::string& data) {
+    BoardTensor board{};
+    SizedMatrix<uint8_t, HEIGHT, WIDTH> activated{};
+    SizedVector<uint8_t, NUM_PLAYERS> sun_points{};
+    SizedMatrix<uint8_t, NUM_PLAYERS, 4> buyable{};
+    SizedMatrix<uint8_t, NUM_PLAYERS, 4> available{};
+    SizedMatrix<uint8_t, NUM_PLAYERS, 4> tiles_collected{};
+    SizedVector<uint16_t, NUM_PLAYERS> score{};
+    std::array<std::vector<uint8_t>, 4> score_tiles{};
+
+    size_t off = 0;
+    auto read_into = [&](void* p, size_t n) {
+      if (off + n > data.size()) {
+        throw std::runtime_error("PhotosynthesisGS::from_bytes: short data");
+      }
+      std::memcpy(p, &data[off], n);
+      off += n;
+    };
+    const size_t board_bytes = NUM_PLAYERS * HEIGHT * WIDTH;
+    read_into(board.data(), board_bytes);
+    read_into(activated.data(), HEIGHT * WIDTH);
+    uint8_t first_player = static_cast<uint8_t>(data[off++]);
+    uint8_t player = static_cast<uint8_t>(data[off++]);
+    uint32_t turn = 0;
+    read_into(&turn, 4);
+    uint8_t sun_phase = static_cast<uint8_t>(data[off++]);
+    read_into(sun_points.data(), NUM_PLAYERS);
+    read_into(buyable.data(), NUM_PLAYERS * 4);
+    read_into(available.data(), NUM_PLAYERS * 4);
+    read_into(tiles_collected.data(), NUM_PLAYERS * 4);
+    read_into(score.data(), NUM_PLAYERS * 2);
+    for (int i = 0; i < 4; ++i) {
+      uint8_t len = static_cast<uint8_t>(data[off++]);
+      score_tiles[i].resize(len);
+      if (len > 0) {
+        read_into(score_tiles[i].data(), len);
+      }
+    }
+    if (off != data.size()) {
+      throw std::runtime_error("PhotosynthesisGS::from_bytes: trailing bytes");
+    }
+    return PhotosynthesisGS<NUM_PLAYERS>(board, activated, first_player, player,
+                                         turn, sun_phase, sun_points, buyable,
+                                         available, tiles_collected, score,
+                                         score_tiles);
   }
 
  private:

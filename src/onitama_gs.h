@@ -446,6 +446,10 @@ class DLLEXPORT OnitamaGS : public GameState {
   [[nodiscard]] Card p1_card1() { return CARDS[p1_card1_]; }
   [[nodiscard]] Card waiting_card() { return CARDS[waiting_card_]; }
 
+  // Pickle support — serializes board + turn + card indices + player + game params.
+  [[nodiscard]] std::string to_bytes() const override;
+  [[nodiscard]] static OnitamaGS from_bytes(const std::string& data);
+
  private:
   // Board contains a layer for each player.
   // A 0 means no piece, a 1 means a piece for that player.

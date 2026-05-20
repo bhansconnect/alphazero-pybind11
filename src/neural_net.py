@@ -675,6 +675,52 @@ class NNWrapper:
                 torch.mps.synchronize()
         return res
 
+    @tracy_zone
+    def effective_rank(self, batch):
+        """Participation ratio of the trunk's penultimate-layer activations.
+
+        Measures effective dimensionality of the network's representation
+        on a batch of inputs. Low values mean the representation has
+        collapsed into fewer effective dimensions than the layer has
+        channels — a classic capacity-binding signal in bootstrapped RL
+        (Kumar et al. 2021, "Implicit Under-Parameterization in Deep RL").
+
+        Hooks the output of `nnet.conv_layers` (the shared trunk feeding
+        both heads) via a temporary forward hook, so regular forward/predict
+        paths are untouched.
+
+        Args:
+            batch: tensor of canonical-form positions, shape [N, C, H, W].
+                CPU or any device — moved internally.
+
+        Returns:
+            participation ratio in [1, channels], or nan on empty input.
+        """
+        if batch is None or len(batch) == 0:
+            return float('nan')
+        captured = []
+        def _hook(_module, _inputs, outputs):
+            captured.append(outputs.detach())
+        self.nnet.eval()
+        handle = self.nnet.conv_layers.register_forward_hook(_hook)
+        try:
+            with torch.no_grad():
+                x = batch.to(self.device, non_blocking=self._non_blocking).float()
+                self.nnet(x)
+        finally:
+            handle.remove()
+        if not captured:
+            return float('nan')
+        feats = captured[0].float()           # [B, C, H, W]
+        feats = feats.mean(dim=(2, 3))        # spatial mean-pool -> [B, C]
+        feats = feats - feats.mean(dim=0, keepdim=True)  # center per-feature
+        s = torch.linalg.svdvals(feats)
+        s2 = s ** 2
+        denom = (s2 * s2).sum()
+        if denom.item() == 0:
+            return 1.0
+        return float(((s2.sum() ** 2) / denom).item())
+
     def sample_loss_pi(self, targets, outputs):
         return -1 * torch.sum(targets * outputs, axis=1)
 

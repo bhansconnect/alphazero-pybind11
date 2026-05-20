@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <sstream>
+#include <stdexcept>
 
 #include "color.h"
 
@@ -2235,6 +2237,104 @@ FireInfo StarGambitGS<Config>::get_fire_info(uint32_t move) const {
 }
 
 // =============================================================================
+// Pickle support: to_bytes / from_bytes for the templated StarGambitGS<Config>
+// =============================================================================
+//
+// Layout (variable-length):
+//   uint32 num_units | num_units * Unit (9B each, see struct Unit) |
+//   8B reserves (2 players * 4 unit types) |
+//   uint8 current_player | uint32 turn |
+//   uint8 has_taken_action | uint8 game_over | int8 winner |
+//   uint32 hist_len | hist_len * uint64 (position_history)
+
+template<typename Config>
+std::string StarGambitGS<Config>::to_bytes() const {
+  std::string out;
+  auto append = [&](const void* p, size_t n) {
+    out.append(static_cast<const char*>(p), n);
+  };
+  uint32_t num_units = static_cast<uint32_t>(units_.size());
+  append(&num_units, 4);
+  for (const auto& u : units_) {
+    uint8_t buf[9];
+    buf[0] = static_cast<uint8_t>(u.type);
+    buf[1] = u.player;
+    buf[2] = u.slot;
+    buf[3] = u.hp;
+    buf[4] = u.facing;
+    buf[5] = static_cast<uint8_t>(u.anchor_q);
+    buf[6] = static_cast<uint8_t>(u.anchor_r);
+    buf[7] = u.moves_left;
+    buf[8] = u.cannons_fired;
+    append(buf, 9);
+  }
+  for (int p = 0; p < NUM_PLAYERS; ++p) {
+    append(reserves_[p].data(), NUM_UNIT_TYPES);
+  }
+  out.push_back(static_cast<char>(current_player_));
+  append(&turn_, 4);
+  out.push_back(static_cast<char>(has_taken_action_ ? 1 : 0));
+  out.push_back(static_cast<char>(game_over_ ? 1 : 0));
+  out.push_back(static_cast<char>(winner_));
+  uint32_t hist_len = static_cast<uint32_t>(position_history_.size());
+  append(&hist_len, 4);
+  if (hist_len > 0) {
+    append(position_history_.data(), hist_len * sizeof(uint64_t));
+  }
+  return out;
+}
+
+template<typename Config>
+StarGambitGS<Config> StarGambitGS<Config>::from_bytes(const std::string& data) {
+  StarGambitGS<Config> gs;
+  size_t off = 0;
+  auto read_into = [&](void* p, size_t n) {
+    if (off + n > data.size()) {
+      throw std::runtime_error("StarGambitGS::from_bytes: short data");
+    }
+    std::memcpy(p, &data[off], n);
+    off += n;
+  };
+  uint32_t num_units = 0;
+  read_into(&num_units, 4);
+  gs.units_.clear();
+  gs.units_.reserve(num_units);
+  for (uint32_t i = 0; i < num_units; ++i) {
+    uint8_t buf[9];
+    read_into(buf, 9);
+    Unit u;
+    u.type = static_cast<UnitType>(buf[0]);
+    u.player = buf[1];
+    u.slot = buf[2];
+    u.hp = buf[3];
+    u.facing = buf[4];
+    u.anchor_q = static_cast<int8_t>(buf[5]);
+    u.anchor_r = static_cast<int8_t>(buf[6]);
+    u.moves_left = buf[7];
+    u.cannons_fired = buf[8];
+    gs.units_.push_back(u);
+  }
+  for (int p = 0; p < NUM_PLAYERS; ++p) {
+    read_into(gs.reserves_[p].data(), NUM_UNIT_TYPES);
+  }
+  gs.current_player_ = static_cast<uint8_t>(data[off++]);
+  read_into(&gs.turn_, 4);
+  gs.has_taken_action_ = data[off++] != 0;
+  gs.game_over_ = data[off++] != 0;
+  gs.winner_ = static_cast<int8_t>(data[off++]);
+  uint32_t hist_len = 0;
+  read_into(&hist_len, 4);
+  gs.position_history_.resize(hist_len);
+  if (hist_len > 0) {
+    read_into(gs.position_history_.data(), hist_len * sizeof(uint64_t));
+  }
+  if (off != data.size()) {
+    throw std::runtime_error("StarGambitGS::from_bytes: trailing bytes");
+  }
+  return gs;
+}
+
+// =============================================================================
 // Explicit Template Instantiations
 // =============================================================================
 
@@ -2335,6 +2435,81 @@ std::optional<Vector<float>> StarGambitUnifiedGS::scores() const noexcept {
 
 std::string StarGambitUnifiedGS::dump() const noexcept {
   return inner_->dump();
+}
+
+// -----------------------------------------------------------------------------
+// Pickle support: delegate to inner_'s to_bytes, prefix with variant info.
+//
+// Layout:
+//   16B variant_probs (4 floats) | 4B pinned_variant (int32) |
+//   1B current_variant_id | 4B inner_size | inner_size bytes
+// -----------------------------------------------------------------------------
+
+std::string StarGambitUnifiedGS::to_bytes() const {
+  std::string out;
+  auto append = [&](const void* p, size_t n) {
+    out.append(static_cast<const char*>(p), n);
+  };
+  append(variant_probs_.data(), 4 * sizeof(float));
+  int32_t pinned = pinned_variant_;
+  append(&pinned, 4);
+  out.push_back(static_cast<char>(static_cast<int>(current_variant_)));
+  std::string inner_bytes = inner_->to_bytes();
+  uint32_t inner_size = static_cast<uint32_t>(inner_bytes.size());
+  append(&inner_size, 4);
+  out.append(inner_bytes);
+  return out;
+}
+
+StarGambitUnifiedGS StarGambitUnifiedGS::from_bytes(const std::string& data) {
+  size_t off = 0;
+  auto read_into = [&](void* p, size_t n) {
+    if (off + n > data.size()) {
+      throw std::runtime_error("StarGambitUnifiedGS::from_bytes: short data");
+    }
+    std::memcpy(p, &data[off], n);
+    off += n;
+  };
+  std::array<float, 4> probs{};
+  read_into(probs.data(), 4 * sizeof(float));
+  int32_t pinned = 0;
+  read_into(&pinned, 4);
+  uint8_t variant_id = static_cast<uint8_t>(data[off++]);
+  if (variant_id > 3) {
+    throw std::runtime_error("StarGambitUnifiedGS::from_bytes: bad variant_id");
+  }
+  uint32_t inner_size = 0;
+  read_into(&inner_size, 4);
+  if (off + inner_size > data.size()) {
+    throw std::runtime_error("StarGambitUnifiedGS::from_bytes: short inner");
+  }
+  std::string inner_bytes = data.substr(off, inner_size);
+  off += inner_size;
+  if (off != data.size()) {
+    throw std::runtime_error("StarGambitUnifiedGS::from_bytes: trailing bytes");
+  }
+
+  StarGambitUnifiedGS gs(pinned, probs);
+  gs.current_variant_ = static_cast<Variant>(variant_id);
+  switch (gs.current_variant_) {
+    case Variant::Skirmish:
+      gs.inner_ = std::make_unique<StarGambitSkirmishGS>(
+          StarGambitSkirmishGS::from_bytes(inner_bytes));
+      break;
+    case Variant::Showdown:
+      gs.inner_ = std::make_unique<StarGambitShowdownGS>(
+          StarGambitShowdownGS::from_bytes(inner_bytes));
+      break;
+    case Variant::Clash:
+      gs.inner_ = std::make_unique<StarGambitClashGS>(
+          StarGambitClashGS::from_bytes(inner_bytes));
+      break;
+    case Variant::Battle:
+      gs.inner_ = std::make_unique<StarGambitBattleGS>(
+          StarGambitBattleGS::from_bytes(inner_bytes));
+      break;
+  }
+  return gs;
 }
 
 // -----------------------------------------------------------------------------

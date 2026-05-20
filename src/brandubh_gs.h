@@ -190,6 +190,13 @@ class DLLEXPORT BrandubhGS : public GameState {
   // Returns a string representation of the game state.
   [[nodiscard]] std::string dump() const noexcept override;
 
+  // Pickle support — serializes board + turn + max_turns + player +
+  // repetition count. Repetition history map is dropped (defaults applied
+  // on reconstruction); fine for snapshot use since the map only affects
+  // draw-by-3-repetition detection within an active game.
+  [[nodiscard]] std::string to_bytes() const override;
+  [[nodiscard]] static BrandubhGS from_bytes(const std::string& data);
+
  private:
   // Board contains a layer for the king, other white pieces, and black
   // pieces. A 0 means no piece, a 1 means a piece of the respective type.

@@ -93,14 +93,23 @@ def calc_elo(past_elo, win_rates):
 def pit_agents(config, Game, players, mcts_visits, bs, name,
                player_epsilon=None, player_mcts_root_temp=None,
                player_root_fpu_zero=None,
-               tree_reuse=True, cache_size=0, caches=None):
+               tree_reuse=True, cache_size=0, caches=None,
+               variant_probs=None, return_per_variant=False):
     """Play agents against each other across all seat permutations in one run.
 
     Args:
         caches: optional list of shared_ptr<ShardedS3FIFOCache> per model group.
                 When provided, cache_size is ignored (set to 0 internally).
+        variant_probs: optional [skirmish, showdown, clash, battle] weights
+                for star_gambit_unified games. None / non-unified games
+                ignore this and use the default constructor.
+        return_per_variant: if True and the game tracks variants (unified),
+                also returns per-variant per-player win rates as a dict
+                {variant_id: [wr_per_player]}.
 
-    Returns list of win rates per player index.
+    Returns list of win rates per player index. If return_per_variant is True,
+    returns a tuple (win_rates, per_variant_dict) — dict may be empty for
+    games without variant tracking.
     """
     num_players = Game.NUM_PLAYERS()
     cb = num_players
@@ -173,10 +182,14 @@ def pit_agents(config, Game, players, mcts_visits, bs, name,
             seen_groups[g] = i
         unique_players[i] = players[seen_groups[g]]
 
-    if caches is not None:
-        pm = alphazero.PlayManager(Game(), params, caches=caches)
+    if variant_probs is not None and getattr(config, "game", None) == "star_gambit_unified":
+        base_game = Game(probs=list(variant_probs))
     else:
-        pm = alphazero.PlayManager(Game(), params)
+        base_game = Game()
+    if caches is not None:
+        pm = alphazero.PlayManager(base_game, params, caches=caches)
+    else:
+        pm = alphazero.PlayManager(base_game, params)
     grargs = GRArgs(
         title=name,
         game=Game,
@@ -201,7 +214,33 @@ def pit_agents(config, Game, players, mcts_visits, bs, name,
     for i in range(num_players):
         win_rates[i] /= num_players
 
+    per_variant = {}
+    if return_per_variant:
+        # Same seat-permutation averaging logic as above, but using the
+        # PM's per-(variant, perm) score breakdown.
+        for vid in range(pm.num_tracked_variants()):
+            vwr = [0.0] * num_players
+            any_games = False
+            for perm_idx in range(pm.num_seat_perms()):
+                vperm_games = pm.variant_perm_games_completed(vid, perm_idx)
+                if vperm_games == 0:
+                    continue
+                any_games = True
+                vperm_scores = pm.variant_perm_scores(vid, perm_idx)
+                rotation = perm_idx
+                for seat in range(num_players):
+                    original_player = (seat + rotation) % num_players
+                    wins = (vperm_scores[seat]
+                            + vperm_scores[num_players] / num_players)
+                    vwr[original_player] += wins / vperm_games
+            if any_games:
+                for i in range(num_players):
+                    vwr[i] /= num_players
+                per_variant[vid] = vwr
+
     gc.collect()
+    if return_per_variant:
+        return win_rates, per_variant
     return win_rates
 
 

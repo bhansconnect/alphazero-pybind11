@@ -168,6 +168,29 @@ class TrainConfig:
     # Interval for dedicated per-variant evaluation (0 = disabled).
     variant_eval_interval: int = 0
 
+    # Frozen eval set (Feature 1, see plan i-want-the-vs-refactored-hippo.md)
+    # 0 = disabled. K = snapshot positions via burst self-play with checkpoint K
+    # and evaluate KL(MCTS||raw) + value error on them every checkpoint.
+    frozen_eval_anchor_iter: int = 0
+    frozen_eval_positions: int = 1024
+    frozen_eval_interval: int = 1
+    # Minimum complete games to play during snapshot. Guards against the
+    # long-game edge case where pool fills in few games and one game dominates
+    # the sample. Default is sane for any game; raise for more source diversity.
+    frozen_eval_min_games: int = 20
+
+    # Self-match at multiplied visits (Feature 2)
+    # 0 = disabled. 2, 4, 8, ... = play current net at selfplay_mcts_visits vs
+    # current net at selfplay_mcts_visits * multiplier.
+    selfmatch_visit_multiplier: int = 0
+    selfmatch_games: int = 100
+    selfmatch_interval: int = 1
+
+    # Effective rank (Feature 3) — participation ratio of penultimate-layer
+    # activations. Cheap; default ON.
+    effective_rank_enabled: bool = True
+    effective_rank_batch_size: int = 512
+
     def validate(self):
         if self.game not in GAME_REGISTRY:
             raise ValueError(f"Unknown game: {self.game}")

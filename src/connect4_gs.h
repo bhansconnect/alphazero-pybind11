@@ -79,6 +79,10 @@ class DLLEXPORT Connect4GS : public GameState {
   // Returns a string representation of the game state.
   [[nodiscard]] std::string dump() const noexcept override;
 
+  // Pickle support — serializes board + player + turn.
+  [[nodiscard]] std::string to_bytes() const override;
+  [[nodiscard]] static Connect4GS from_bytes(const std::string& data);
+
  private:
   // Board contains a layer for each player.
   // A 0 means no piece, a 1 means a piece for that player.

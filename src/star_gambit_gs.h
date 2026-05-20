@@ -583,6 +583,11 @@ class StarGambitGS : public GameState {
 
   [[nodiscard]] std::string dump() const noexcept override;
 
+  // Pickle support — serializes units, reserves, current_player, turn,
+  // flags, winner, and position_history. Variable-length, length-prefixed.
+  [[nodiscard]] std::string to_bytes() const override;
+  [[nodiscard]] static StarGambitGS<Config> from_bytes(const std::string& data);
+
   // Helper methods
   [[nodiscard]] bool is_turn_one() const { return turn_ == 1 || turn_ == 2; }
   [[nodiscard]] bool has_taken_action() const { return has_taken_action_; }
@@ -779,6 +784,10 @@ class StarGambitUnifiedGS : public GameState {
       const PlayHistory& base) const noexcept override;
 
   [[nodiscard]] std::string dump() const noexcept override;
+
+  // Pickle support — serializes variant config + delegates to inner_'s to_bytes.
+  [[nodiscard]] std::string to_bytes() const override;
+  [[nodiscard]] static StarGambitUnifiedGS from_bytes(const std::string& data);
 
   [[nodiscard]] int num_variants() const noexcept override { return 4; }
   [[nodiscard]] int get_variant_id() const noexcept override { return static_cast<int>(current_variant_); }

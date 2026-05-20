@@ -163,6 +163,7 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     }
     variant_perm_scores_.push_back(std::move(vps));
   }
+  variant_metrics_.resize(nvar);
 }
 
 void PlayManager::play() {
@@ -292,6 +293,16 @@ void PlayManager::play() {
               ++variant_scores_[vid].games_completed;
               variant_perm_scores_[vid][game.perm_index].scores += scores.value();
               ++variant_perm_scores_[vid][game.perm_index].games_completed;
+              auto& vm = variant_metrics_[vid];
+              vm.game_length += game.gs->current_turn();
+              vm.total_avg_leaf_depth += game.total_avg_leaf_depth;
+              vm.total_search_entropy += game.total_search_entropy;
+              vm.fast_total_avg_leaf_depth += game.fast_total_avg_leaf_depth;
+              vm.fast_total_search_entropy += game.fast_total_search_entropy;
+              vm.total_valid_moves += game.total_valid_moves;
+              vm.total_move_count += game.move_count;
+              vm.full_move_count += game.full_move_count;
+              vm.fast_move_count += game.fast_move_count;
             }
             if (resign_score.has_value()) {
               resign_scores_ += resign_score.value();

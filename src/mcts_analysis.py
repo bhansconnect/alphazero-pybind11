@@ -2218,13 +2218,16 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
             _plot_by_mode(axes[panel], reward_es, [reward_means[e] for e in reward_es])
 
             # Horizontal dashed lines for vc=1 baselines
+            has_baseline_label = False
             for mode, color in [("base", "tab:blue"), ("selfplay", "tab:orange")]:
                 baseline = (1, mode)
                 if baseline in reward_means:
                     axes[panel].axhline(y=reward_means[baseline], color=color,
                                         linestyle="--", alpha=0.5,
                                         label=f"vc=1 {mode}")
-            axes[panel].legend(fontsize=8)
+                    has_baseline_label = True
+            if has_baseline_label:
+                axes[panel].legend(fontsize=8)
 
             reward_vcs = sorted(set(e.vc for e in reward_es))
             axes[panel].set_xscale("log")
@@ -2376,7 +2379,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
     # Figure: Search Timing from benchmark (Sims/s and per-position time)
     benchmark_timing = metrics.get("benchmark_timing", {}) if metrics else {}
     if benchmark_timing:
-        from matplotlib.cm import get_cmap
+        import matplotlib as mpl
         from matplotlib.patches import Patch
 
         sorted_timing_entries = sorted(benchmark_timing.keys(), key=entry_sort_key)
@@ -2388,7 +2391,7 @@ def visualize_and_save(entries, anchor, elo=None, win_matrix=None, metrics=None,
 
         # Color by batch_size
         unique_bs = sorted(set(e.batch_size for e in sorted_timing_entries))
-        cmap = get_cmap("viridis", max(len(unique_bs), 2))
+        cmap = mpl.colormaps["viridis"].resampled(max(len(unique_bs), 2))
         bs_to_color = {bs: cmap(i / max(len(unique_bs) - 1, 1)) for i, bs in enumerate(unique_bs)}
         colors = [bs_to_color[e.batch_size] for e in sorted_timing_entries]
 

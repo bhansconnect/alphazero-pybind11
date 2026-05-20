@@ -205,6 +205,11 @@ class DLLEXPORT OpenTaflGS : public GameState {
   // Returns a string representation of the game state.
   [[nodiscard]] std::string dump() const noexcept override;
 
+  // Pickle support — serializes board + turn + max_turns + player +
+  // repetition count. Repetition history map is dropped on reconstruction.
+  [[nodiscard]] std::string to_bytes() const override;
+  [[nodiscard]] static OpenTaflGS from_bytes(const std::string& data);
+
  private:
   // Board contains a layer for the king, other white pieces, and black
   // pieces. A 0 means no piece, a 1 means a piece of the respective type.

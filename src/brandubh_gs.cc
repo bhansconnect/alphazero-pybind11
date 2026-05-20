@@ -1,9 +1,81 @@
 #include "brandubh_gs.h"
 
+#include <cstring>
+#include <stdexcept>
+
 #include "color.h"
 #include "tafl_helper.h"
 
 namespace alphazero::brandubh_gs {
+
+// Layout (variable-length, repetition map preserved):
+//   board (3*7*7 = 147B) | turn (2B) | max_turns (2B) | player (1B) |
+//   rep_count (1B) | uint32 num_rep_entries |
+//   num_rep_entries * (147B board + 1B player + 1B count)
+static constexpr size_t kFixedHeaderSize =
+    BOARD_SHAPE[0] * BOARD_SHAPE[1] * BOARD_SHAPE[2] + 2 + 2 + 1 + 1;
+
+[[nodiscard]] std::string BrandubhGS::to_bytes() const {
+  std::string out;
+  const size_t board_bytes =
+      BOARD_SHAPE[0] * BOARD_SHAPE[1] * BOARD_SHAPE[2];
+  out.reserve(kFixedHeaderSize + 4 +
+              repetition_counts_.size() * (board_bytes + 2));
+  auto append = [&](const void* p, size_t n) {
+    out.append(static_cast<const char*>(p), n);
+  };
+  append(board_.data(), board_bytes);
+  append(&turn_, 2);
+  append(&max_turns_, 2);
+  out.push_back(static_cast<char>(player_));
+  out.push_back(static_cast<char>(current_repetition_count_));
+  uint32_t num_entries = static_cast<uint32_t>(repetition_counts_.size());
+  append(&num_entries, 4);
+  for (const auto& [key_ptr, count] : repetition_counts_) {
+    append(key_ptr->t.data(), board_bytes);
+    out.push_back(static_cast<char>(key_ptr->p));
+    out.push_back(static_cast<char>(count));
+  }
+  return out;
+}
+
+[[nodiscard]] BrandubhGS BrandubhGS::from_bytes(const std::string& data) {
+  if (data.size() < kFixedHeaderSize + 4) {
+    throw std::runtime_error("BrandubhGS::from_bytes: data too short");
+  }
+  BoardTensor board{};
+  size_t off = 0;
+  const size_t board_bytes =
+      BOARD_SHAPE[0] * BOARD_SHAPE[1] * BOARD_SHAPE[2];
+  std::memcpy(board.data(), &data[off], board_bytes); off += board_bytes;
+  uint16_t turn = 0;
+  std::memcpy(&turn, &data[off], 2);                   off += 2;
+  uint16_t max_turns = 0;
+  std::memcpy(&max_turns, &data[off], 2);              off += 2;
+  int8_t player = static_cast<int8_t>(data[off++]);
+  uint8_t rep = static_cast<uint8_t>(data[off++]);
+  uint32_t num_entries = 0;
+  std::memcpy(&num_entries, &data[off], 4);            off += 4;
+  if (off + num_entries * (board_bytes + 2) != data.size()) {
+    throw std::runtime_error(
+        "BrandubhGS::from_bytes: repetition entry count mismatch");
+  }
+  // Rebuild the intern set + repetition counts map. Each entry's
+  // shared_ptr<RepetitionKey> must come from the intern set (that's how
+  // map identity works in operator==/hash).
+  auto intern = std::make_shared<absl::flat_hash_set<RepetitionKeyWrapper>>();
+  absl::flat_hash_map<const std::shared_ptr<RepetitionKey>, uint8_t> counts;
+  for (uint32_t i = 0; i < num_entries; ++i) {
+    BoardTensor entry_board{};
+    std::memcpy(entry_board.data(), &data[off], board_bytes); off += board_bytes;
+    uint8_t entry_player = static_cast<uint8_t>(data[off++]);
+    uint8_t entry_count = static_cast<uint8_t>(data[off++]);
+    auto [it, _] = intern->emplace(entry_board, entry_player);
+    counts[it->data] = entry_count;
+  }
+  return BrandubhGS(board, player, turn, max_turns, rep,
+                    std::move(counts), intern);
+}
 
 [[nodiscard]] std::unique_ptr<GameState> BrandubhGS::copy() const noexcept {
   return std::make_unique<BrandubhGS>(board_, player_, turn_, max_turns_,

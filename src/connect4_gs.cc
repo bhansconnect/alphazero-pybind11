@@ -1,6 +1,12 @@
 #include "connect4_gs.h"
 
+#include <cstring>
+#include <stdexcept>
+
 namespace alphazero::connect4_gs {
+
+// Layout: 2*6*7 int8 board (84B) | int8 player (1B) | int32 turn (4B) = 89B
+static constexpr size_t kSerializedSize = 84 + 1 + 4;
 
 [[nodiscard]] std::unique_ptr<GameState> Connect4GS::copy() const noexcept {
   return std::make_unique<Connect4GS>(board_, player_, turn_);
@@ -161,6 +167,26 @@ void Connect4GS::play_move(uint32_t move) {
   }
   syms.push_back(mirror);
   return syms;
+}
+
+[[nodiscard]] std::string Connect4GS::to_bytes() const {
+  std::string out(kSerializedSize, '\0');
+  std::memcpy(&out[0], board_.data(), 84);
+  out[84] = static_cast<char>(player_);
+  std::memcpy(&out[85], &turn_, 4);
+  return out;
+}
+
+[[nodiscard]] Connect4GS Connect4GS::from_bytes(const std::string& data) {
+  if (data.size() != kSerializedSize) {
+    throw std::runtime_error("Connect4GS::from_bytes: wrong byte length");
+  }
+  BoardTensor board{};
+  std::memcpy(board.data(), &data[0], 84);
+  int8_t player = static_cast<int8_t>(data[84]);
+  int32_t turn = 0;
+  std::memcpy(&turn, &data[85], 4);
+  return Connect4GS(board, player, turn);
 }
 
 [[nodiscard]] std::string Connect4GS::dump() const noexcept {

@@ -123,6 +123,19 @@ class WEAKDLLEXPORT GameState {
   // Returns a string representation of the game state.
   [[nodiscard]] virtual std::string dump() const noexcept = 0;
 
+  // Serialize all state needed to reconstruct this game (board, player,
+  // turn, cards, variant-specific state) into a binary blob. Used to make
+  // game states picklable from Python via py::pickle.
+  //
+  // Each concrete game class overrides to_bytes (returns its state) and
+  // provides a `static GameClass from_bytes(const std::string&)` factory.
+  // The default raises so games without an implementation fail loudly
+  // rather than silently producing wrong results.
+  [[nodiscard]] virtual std::string to_bytes() const {
+    throw std::runtime_error(
+        "to_bytes() not implemented for this game type");
+  }
+
 };
 
 namespace detail {

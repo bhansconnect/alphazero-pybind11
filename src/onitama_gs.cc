@@ -1,6 +1,13 @@
 #include "onitama_gs.h"
 
+#include <cstring>
+#include <stdexcept>
+
 namespace alphazero::onitama_gs {
+
+// Layout: board (4*5*5 int8 = 100B) | turn (2B) | num_cards (1B) |
+//         max_turns (2B) | player (1B) | 5 card indices (5*1B) = 111B
+static constexpr size_t kSerializedSize = 100 + 2 + 1 + 2 + 1 + 5;
 
 [[nodiscard]] std::unique_ptr<GameState> OnitamaGS::copy() const noexcept {
   return std::make_unique<OnitamaGS>(board_, player_, p0_card0_, p0_card1_,
@@ -311,6 +318,44 @@ void OnitamaGS::play_move(uint32_t move) {
   PlayHistory p1_swap = swap_cards(base, 1);
   PlayHistory both_swap = swap_cards(p0_swap, 1);
   return {base, p0_swap, p1_swap, both_swap};
+}
+
+[[nodiscard]] std::string OnitamaGS::to_bytes() const {
+  std::string out(kSerializedSize, '\0');
+  size_t off = 0;
+  std::memcpy(&out[off], board_.data(), 100); off += 100;
+  std::memcpy(&out[off], &turn_, 2);          off += 2;
+  out[off++] = static_cast<char>(num_cards_);
+  std::memcpy(&out[off], &max_turns_, 2);     off += 2;
+  out[off++] = static_cast<char>(player_);
+  out[off++] = static_cast<char>(p0_card0_);
+  out[off++] = static_cast<char>(p0_card1_);
+  out[off++] = static_cast<char>(p1_card0_);
+  out[off++] = static_cast<char>(p1_card1_);
+  out[off++] = static_cast<char>(waiting_card_);
+  return out;
+}
+
+[[nodiscard]] OnitamaGS OnitamaGS::from_bytes(const std::string& data) {
+  if (data.size() != kSerializedSize) {
+    throw std::runtime_error("OnitamaGS::from_bytes: wrong byte length");
+  }
+  BoardTensor board{};
+  size_t off = 0;
+  std::memcpy(board.data(), &data[off], 100); off += 100;
+  uint16_t turn = 0;
+  std::memcpy(&turn, &data[off], 2);          off += 2;
+  uint8_t num_cards = static_cast<uint8_t>(data[off++]);
+  uint16_t max_turns = 0;
+  std::memcpy(&max_turns, &data[off], 2);     off += 2;
+  int8_t player = static_cast<int8_t>(data[off++]);
+  int8_t p0c0 = static_cast<int8_t>(data[off++]);
+  int8_t p0c1 = static_cast<int8_t>(data[off++]);
+  int8_t p1c0 = static_cast<int8_t>(data[off++]);
+  int8_t p1c1 = static_cast<int8_t>(data[off++]);
+  int8_t wait = static_cast<int8_t>(data[off++]);
+  return OnitamaGS(board, player, p0c0, p0c1, p1c0, p1c1, wait, turn,
+                   num_cards, max_turns);
 }
 
 [[nodiscard]] std::string OnitamaGS::dump() const noexcept {

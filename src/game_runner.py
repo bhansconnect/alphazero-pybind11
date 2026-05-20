@@ -1145,19 +1145,72 @@ def glob_reservoir_chunks(reservoir_dir):
     return triples
 
 
-def _load_staging_data(staging_dir):
-    """Load all staging files, returning (c, v, pi, iters) concatenated tensors, or None if empty."""
+def _index_staging(staging_dir):
+    """Lightweight listing of staging files.
+
+    Returns a list of (c_path, v_path, pi_path, size, iter_num) — no data
+    loaded. The streaming reservoir code uses this so it never has to hold
+    all of staging in memory at once.
+    """
     staging_triples = glob_file_triples(staging_dir)
-    if not staging_triples:
-        return None
-    cs, vs, pis, iters_list = [], [], [], []
+    out = []
     for c_path, v_path, pi_path, size in staging_triples:
-        cs.append(load_compressed(c_path))
-        vs.append(load_compressed(v_path))
-        pis.append(load_compressed(pi_path))
         iter_num = int(os.path.basename(c_path).split("-")[0])
-        iters_list.append(torch.full((size,), iter_num, dtype=torch.int16))
-    return torch.cat(cs), torch.cat(vs), torch.cat(pis), torch.cat(iters_list)
+        out.append((c_path, v_path, pi_path, size, iter_num))
+    return out
+
+
+def _sample_staging_rows(file_index, n_samples, offset=0):
+    """Random-sample rows from staging[offset:] across the indexed files.
+
+    Loads only the files that contain selected rows; uses ``torch.randperm``
+    on the *remaining* row count so RNG consumption matches the legacy
+    ``staging_x[perm]`` path exactly. Returns (c, v, pi, iters) tensors in
+    perm-order (i.e. the same row order ``staging[perm]`` would produce),
+    or ``None`` if there are no remaining rows.
+    """
+    total = sum(sz for _, _, _, sz, _ in file_index)
+    remaining = total - offset
+    if remaining <= 0:
+        return None
+
+    if n_samples >= remaining:
+        # All-rows path: matches legacy "use staging slice directly" (no RNG).
+        perm = torch.arange(remaining, dtype=torch.long)
+    else:
+        perm = torch.randperm(remaining)[:n_samples]
+
+    abs_perm = perm + offset
+    sorted_abs, sort_back = abs_perm.sort()
+    n_sp = sorted_abs.shape[0]
+
+    cs, vs, pis, iters_list = [], [], [], []
+    cum = 0
+    sp_idx = 0
+    for c_path, v_path, pi_path, sz, iter_num in file_index:
+        end = sp_idx
+        while end < n_sp and int(sorted_abs[end]) < cum + sz:
+            end += 1
+        if end > sp_idx:
+            local = (sorted_abs[sp_idx:end] - cum).long()
+            c = load_compressed(c_path)
+            v = load_compressed(v_path)
+            pi = load_compressed(pi_path)
+            cs.append(c[local].clone())
+            vs.append(v[local].clone())
+            pis.append(pi[local].clone())
+            iters_list.append(torch.full((local.numel(),), iter_num, dtype=torch.int16))
+            del c, v, pi
+        sp_idx = end
+        cum += sz
+
+    c_sorted = torch.cat(cs)
+    v_sorted = torch.cat(vs)
+    pi_sorted = torch.cat(pis)
+    iters_sorted = torch.cat(iters_list)
+
+    inv = sort_back.argsort()
+    return c_sorted[inv], v_sorted[inv], pi_sorted[inv], iters_sorted[inv]
 
 
 def _migrate_legacy_reservoir(config, reservoir_dir):
@@ -1248,8 +1301,11 @@ def _migrate_legacy_reservoir(config, reservoir_dir):
 def update_reservoir(config, paths, iteration, hist_size):
     """Move evicted window data to reservoir staging, then periodically merge into chunks.
 
-    Uses a fixed N-chunk reservoir with recency-weighted merge. Each update cycle
-    touches only K chunks (the stalest), keeping cost bounded and predictable.
+    Streams staging file-by-file so peak memory is bounded by one chunk's
+    worth of samples regardless of how many iterations of staging
+    accumulated. RNG consumption matches the previous concat-then-sample
+    implementation; see test_reservoir_streaming.py for the equivalence
+    proof.
     """
     hist_location = paths["history"]
     reservoir_location = paths["reservoir"]
@@ -1259,7 +1315,6 @@ def update_reservoir(config, paths, iteration, hist_size):
     prev_oldest = max(0, (iteration - 1) - calc_hist_size(config, iteration - 1))
     evicted_iters = list(range(prev_oldest, oldest_in_window))
 
-    # Move evicted files to staging (zero memory, O(1) per file)
     if evicted_iters:
         os.makedirs(staging_dir, exist_ok=True)
         for it in tqdm.tqdm(evicted_iters, desc="Moving Evicted History", leave=False):
@@ -1268,13 +1323,11 @@ def update_reservoir(config, paths, iteration, hist_size):
                     dst = os.path.join(staging_dir, os.path.basename(src))
                     os.rename(src, dst)
 
-    # Only merge every N iterations
     if iteration % config.reservoir_update_interval != 0:
         return
 
     os.makedirs(reservoir_location, exist_ok=True)
 
-    # Migrate legacy per-iteration files if needed
     meta = _load_reservoir_meta(reservoir_location)
     if meta is None:
         legacy_triples = glob_file_triples(reservoir_location)
@@ -1283,15 +1336,11 @@ def update_reservoir(config, paths, iteration, hist_size):
             _migrate_legacy_reservoir(config, reservoir_location)
             meta = _load_reservoir_meta(reservoir_location)
 
-    # Check if there's staging data to process
-    staging_data = _load_staging_data(staging_dir) if os.path.isdir(staging_dir) else None
-    if staging_data is None:
+    file_index = _index_staging(staging_dir) if os.path.isdir(staging_dir) else []
+    total_staging = sum(sz for _, _, _, sz, _ in file_index)
+    if total_staging == 0:
         return
 
-    staging_c, staging_v, staging_pi, staging_iters = staging_data
-    total_staging = staging_c.shape[0]
-
-    # Initialize metadata if needed
     if meta is None:
         meta = {
             "version": 2,
@@ -1306,81 +1355,95 @@ def update_reservoir(config, paths, iteration, hist_size):
     chunk_size = config.reservoir_chunk_size
     chunks_filled = meta["chunks_filled"]
 
-    # Ensure chunk_sizes exists (backward compat with old metadata)
     if "chunk_sizes" not in meta:
         meta["chunk_sizes"] = [chunk_size] * chunks_filled
 
+    # FILLING PHASE — stream files sequentially into chunk-sized batches.
+    # Peak memory: one staging file + one chunk in flight.
+    consumed = 0
     if chunks_filled < n_chunks:
-        # FILLING PHASE: fill next chunks sequentially
-        offset = 0
-        while offset < total_staging and chunks_filled < n_chunks:
-            end = min(offset + chunk_size, total_staging)
-            chunk_c = staging_c[offset:end]
-            chunk_v = staging_v[offset:end]
-            chunk_pi = staging_pi[offset:end]
-            chunk_iters = staging_iters[offset:end]
+        buf_c, buf_v, buf_pi, buf_iters = [], [], [], []
+        buf_n = 0
+        file_iter = iter(file_index)
+        cur = None  # [c, v, pi, iters, pos, sz]
+
+        while chunks_filled < n_chunks and consumed < total_staging:
+            # Refill buf up to chunk_size or until staging is exhausted.
+            while buf_n < chunk_size and consumed < total_staging:
+                if cur is None:
+                    try:
+                        c_path, v_path, pi_path, sz, iter_num = next(file_iter)
+                    except StopIteration:
+                        break
+                    c = load_compressed(c_path)
+                    v = load_compressed(v_path)
+                    pi = load_compressed(pi_path)
+                    iters = torch.full((sz,), iter_num, dtype=torch.int16)
+                    cur = [c, v, pi, iters, 0, sz]
+                c, v, pi, iters, pos, sz = cur
+                take = min(chunk_size - buf_n, sz - pos)
+                buf_c.append(c[pos:pos + take])
+                buf_v.append(v[pos:pos + take])
+                buf_pi.append(pi[pos:pos + take])
+                buf_iters.append(iters[pos:pos + take])
+                buf_n += take
+                consumed += take
+                cur[4] = pos + take
+                if cur[4] >= sz:
+                    cur = None
+
+            if buf_n == 0:
+                break
+
+            out_c = torch.cat(buf_c)
+            out_v = torch.cat(buf_v)
+            out_pi = torch.cat(buf_pi)
+            out_iters = torch.cat(buf_iters)
             _save_chunk(reservoir_location, chunks_filled,
-                        chunk_c, chunk_v, chunk_pi, chunk_iters,
+                        out_c, out_v, out_pi, out_iters,
                         zstd_level=config.zstd_level)
             meta["last_updated"].append(iteration)
-            meta["chunk_sizes"].append(end - offset)
+            meta["chunk_sizes"].append(buf_n)
             chunks_filled += 1
-            offset = end
+            buf_c, buf_v, buf_pi, buf_iters = [], [], [], []
+            buf_n = 0
+            del out_c, out_v, out_pi, out_iters
+
         meta["chunks_filled"] = chunks_filled
+        del buf_c, buf_v, buf_pi, buf_iters, cur
 
-        # Slice staging to remaining unconsumed portion for potential merge
-        if offset < total_staging:
-            staging_c = staging_c[offset:]
-            staging_v = staging_v[offset:]
-            staging_pi = staging_pi[offset:]
-            staging_iters = staging_iters[offset:]
-            total_staging = staging_c.shape[0]
-        else:
-            total_staging = 0
-
-    if chunks_filled >= n_chunks and total_staging > 0:
-        # MERGE PHASE: merge staging into K stalest chunks
+    # MERGE PHASE — sample new_per_chunk rows per chunk via the streaming
+    # sampler, materializing only the rows needed for this chunk.
+    if chunks_filled >= n_chunks and consumed < total_staging:
+        remaining = total_staging - consumed
         K = min(config.reservoir_chunks_per_update, chunks_filled)
-
-        # Select K stalest chunks
         last_updated = meta["last_updated"]
         target_indices = sorted(range(chunks_filled),
                                 key=lambda i: last_updated[i])[:K]
 
-        # Compute per-chunk new data budget from decay
         C = (n_chunks / K) * config.reservoir_update_interval
         decay = config.reservoir_recency_decay
         target_rate = 1 - decay ** C
         w_old_est = decay ** (C / 2)
         new_per_chunk = int(target_rate * chunk_size * w_old_est / (1 - target_rate))
-        new_per_chunk = max(1, min(new_per_chunk, total_staging))
+        new_per_chunk = max(1, min(new_per_chunk, remaining))
 
         for chunk_idx in tqdm.tqdm(target_indices, desc="Merging Reservoir Chunks", leave=False):
-            # Subsample staging data for this chunk (random draw)
-            if total_staging <= new_per_chunk:
-                new_c, new_v, new_pi, new_iters = staging_c, staging_v, staging_pi, staging_iters
-            else:
-                perm = torch.randperm(total_staging)[:new_per_chunk]
-                new_c = staging_c[perm]
-                new_v = staging_v[perm]
-                new_pi = staging_pi[perm]
-                new_iters = staging_iters[perm]
+            sampled = _sample_staging_rows(file_index, new_per_chunk, offset=consumed)
+            if sampled is None:
+                break
+            new_c, new_v, new_pi, new_iters = sampled
+            del sampled
 
-            # Load existing chunk
             old_c, old_v, old_pi, old_iters = _load_chunk(reservoir_location, chunk_idx)
-
-            # Pool = concat(old, new)
             pool_c = torch.cat([old_c, new_c])
             pool_v = torch.cat([old_v, new_v])
             pool_pi = torch.cat([old_pi, new_pi])
             pool_iters = torch.cat([old_iters, new_iters])
-            del old_c, old_v, old_pi, old_iters
+            del old_c, old_v, old_pi, old_iters, new_c, new_v, new_pi, new_iters
 
-            # Compute recency weights
             ages = (iteration - pool_iters.float()).clamp(min=0)
             weights = decay ** ages
-
-            # Select chunk_size samples (or all if pool is smaller)
             select_size = min(chunk_size, pool_c.shape[0])
             if select_size < pool_c.shape[0]:
                 selected = torch.multinomial(weights, select_size, replacement=False)
@@ -1392,18 +1455,17 @@ def update_reservoir(config, paths, iteration, hist_size):
                         pool_pi[selected], pool_iters[selected],
                         zstd_level=config.zstd_level)
             meta["chunk_sizes"][chunk_idx] = select_size
-            del pool_c, pool_v, pool_pi, pool_iters, weights
+            del pool_c, pool_v, pool_pi, pool_iters, weights, selected, ages
             last_updated[chunk_idx] = iteration
+            gc.collect()
 
         meta["last_updated"] = last_updated
 
     _save_reservoir_meta(reservoir_location, meta)
 
-    # Delete staging files
     if os.path.isdir(staging_dir):
         shutil.rmtree(staging_dir)
 
-    del staging_c, staging_v, staging_pi, staging_iters
     gc.collect()
 
 

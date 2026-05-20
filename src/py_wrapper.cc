@@ -394,6 +394,13 @@ PYBIND11_MODULE(alphazero, m) {
       .def("variant_perm_scores", &PlayManager::variant_perm_scores,
            py::return_value_policy::reference_internal)
       .def("variant_perm_games_completed", &PlayManager::variant_perm_games_completed)
+      .def("variant_avg_game_length", &PlayManager::variant_avg_game_length)
+      .def("variant_avg_leaf_depth", &PlayManager::variant_avg_leaf_depth)
+      .def("variant_avg_search_entropy", &PlayManager::variant_avg_search_entropy)
+      .def("variant_fast_avg_leaf_depth", &PlayManager::variant_fast_avg_leaf_depth)
+      .def("variant_fast_avg_search_entropy", &PlayManager::variant_fast_avg_search_entropy)
+      .def("variant_avg_moves_per_turn", &PlayManager::variant_avg_moves_per_turn)
+      .def("variant_avg_valid_moves", &PlayManager::variant_avg_valid_moves)
       .def("set_eager", &PlayManager::set_eager)
       .def("cache_evictions", &PlayManager::cache_evictions)
       .def("cache_reinserts", &PlayManager::cache_reinserts)

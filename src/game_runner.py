@@ -99,6 +99,61 @@ def _make_game_instance(config, probs=None):
     return Game()
 
 
+_VARIANT_METRIC_TRACK_NAMES = {
+    "game_length": ("average_game_length", None),
+    "avg_depth": ("avg_leaf_depth", {"search": "full"}),
+    "avg_entropy": ("search_entropy", {"search": "full"}),
+    "fast_avg_depth": ("avg_leaf_depth", {"search": "fast"}),
+    "fast_avg_entropy": ("search_entropy", {"search": "fast"}),
+    "avg_mpt": ("moves_per_turn", None),
+    "avg_vm": ("avg_valid_moves", None),
+}
+
+
+def _track_variant_play_metrics(run, variant_metrics, *, epoch, step, vs_context):
+    """Track per-variant play metrics on the aim Run with consistent metric names."""
+    if not variant_metrics:
+        return
+    for vid, metrics in variant_metrics.items():
+        vname = UNIFIED_VARIANT_NAMES[vid]
+        for key, value in metrics.items():
+            name_extra = _VARIANT_METRIC_TRACK_NAMES.get(key)
+            if name_extra is None:
+                continue
+            metric_name, extra = name_extra
+            if key.startswith("fast_") and not value:
+                continue
+            ctx = {"vs": vs_context, "variant": vname}
+            if extra:
+                ctx.update(extra)
+            run.track(value, name=metric_name, epoch=epoch, step=step, context=ctx)
+
+
+def _collect_variant_metrics(pm, include_fast=False):
+    """Return {vid: {metric: value}} for variants with completed games.
+
+    Metrics: game_length, avg_depth, avg_entropy, avg_mpt, avg_vm
+    (plus fast_avg_depth/fast_avg_entropy when include_fast=True).
+    Empty dict for non-unified games.
+    """
+    out = {}
+    for vid in range(pm.num_tracked_variants()):
+        if pm.variant_games_completed(vid) == 0:
+            continue
+        m = {
+            "game_length": pm.variant_avg_game_length(vid),
+            "avg_depth": pm.variant_avg_leaf_depth(vid),
+            "avg_entropy": pm.variant_avg_search_entropy(vid),
+            "avg_mpt": pm.variant_avg_moves_per_turn(vid),
+            "avg_vm": pm.variant_avg_valid_moves(vid),
+        }
+        if include_fast:
+            m["fast_avg_depth"] = pm.variant_fast_avg_leaf_depth(vid)
+            m["fast_avg_entropy"] = pm.variant_fast_avg_search_entropy(vid)
+        out[vid] = m
+    return out
+
+
 def _count_variant_samples(paths, iteration):
     """Count samples per variant from an iteration's history files.
 
@@ -292,6 +347,7 @@ SelfPlayResult = namedtuple(
         "theoretical_hr",
         "variant_game_counts",   # dict {vid: count} or {} for non-unified games
         "variant_win_rates",     # dict {vid: [rate_per_player...]} or {} for non-unified
+        "variant_metrics",       # dict {vid: {metric_name: value}} or {} for non-unified
     ],
 )
 
@@ -1682,6 +1738,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
             vscores = pm.variant_scores(vid)
             vn = sum(vscores) or 1.0
             variant_win_rates[vid] = [float(vscores[j]) / vn for j in range(len(vscores))]
+    variant_metrics = _collect_variant_metrics(pm, include_fast=True)
     del gr, pm, nn
     gc.collect()
     return SelfPlayResult(
@@ -1698,6 +1755,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         theoretical_hr=theoretical_hr,
         variant_game_counts=variant_game_counts,
         variant_win_rates=variant_win_rates,
+        variant_metrics=variant_metrics,
     )
 
 
@@ -1840,9 +1898,10 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
         vscores = pm.variant_scores(vid)
         variant_draw_rates[vid] = vscores[num_players] / vgames
 
+    variant_metrics = _collect_variant_metrics(pm)
     del gr, nn, nn_past, pm
     gc.collect()
-    return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm, variant_nn_rates, variant_draw_rates
+    return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm, variant_nn_rates, variant_draw_rates, variant_metrics
 
 
 def get_lr(config, iteration, lr_state):
@@ -3058,7 +3117,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 elif phase == "Calibrate ELO":
                     compare_start = max(0, source_n - config.bootstrap_compare_past)
                     for past_iter in tqdm.tqdm(range(compare_start, source_n), desc="  ELO", leave=False):
-                        nn_rate, draw_rate, _, _, _, _, _, _, _, _ = play_past(
+                        nn_rate, draw_rate, _, _, _, _, _, _, _, _, _ = play_past(
                             config, paths, experiment_name, config.compare_mcts_visits,
                             source_n, past_iter, config.past_compare_batch_size,
                             fallback_checkpoint_dir=source_paths["checkpoint"],
@@ -3167,7 +3226,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             with TracyZone("stage_history"):
                 past_iter = max(0, i - config.compare_past)
                 if past_iter != i and math.isnan(wr[i, past_iter]):
-                    nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy, bench_mpt, bench_vm, variant_nn_rates, variant_draw_rates = play_past(
+                    nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy, bench_mpt, bench_vm, variant_nn_rates, variant_draw_rates, variant_play_metrics = play_past(
                         config, paths, experiment_name,
                         config.compare_mcts_visits, i, past_iter, config.past_compare_batch_size,
                         fallback_checkpoint_dir=fallback_checkpoint_dir,
@@ -3192,6 +3251,9 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     for vid, drate in variant_draw_rates.items():
                         run.track(drate, name="draw_rate", epoch=i, step=total_train_steps,
                                   context={"vs": f"-{config.compare_past}", "variant": UNIFIED_VARIANT_NAMES[vid]})
+                    _track_variant_play_metrics(run, variant_play_metrics, epoch=i,
+                                                step=total_train_steps,
+                                                vs_context=f"-{config.compare_past}")
                     postfix[f"vs -{config.compare_past}"] = _fmt_pct(nn_rate + draw_rate / Game.NUM_PLAYERS())
                     gc.collect()
             stage_times["history"] = time.time() - stage_start
@@ -3291,6 +3353,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         run.track(vrates[-1], name="draw_rate", epoch=i,
                                   step=total_train_steps,
                                   context={"vs": "self", "variant": vname, "from": "all_games"})
+                _track_variant_play_metrics(run, sp.variant_metrics, epoch=i,
+                                            step=total_train_steps, vs_context="self")
             stage_times["selfplay"] = time.time() - stage_start
 
             stage_start = time.time()
@@ -3388,7 +3452,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 for gate_net in tqdm.tqdm(
                     panel, desc=f"Pitting against Panel {panel}", leave=False
                 ):
-                    nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy, gate_mpt, gate_vm, variant_nn_rates, variant_draw_rates = play_past(
+                    nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy, gate_mpt, gate_vm, variant_nn_rates, variant_draw_rates, variant_play_metrics = play_past(
                         config, paths, experiment_name,
                         config.compare_mcts_visits, next_net, gate_net, config.gate_compare_batch_size,
                         fallback_checkpoint_dir=fallback_checkpoint_dir,
@@ -3422,6 +3486,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         for vid, drate in variant_draw_rates.items():
                             run.track(drate, name="draw_rate", epoch=next_net, step=total_train_steps,
                                       context={"vs": "best", "variant": UNIFIED_VARIANT_NAMES[vid]})
+                        _track_variant_play_metrics(run, variant_play_metrics, epoch=next_net,
+                                                    step=total_train_steps, vs_context="best")
                         best_win_rate = nn_rate + draw_rate / Game.NUM_PLAYERS()
                         postfix["vs best"] = _fmt_pct(best_win_rate)
                         pbar.set_postfix(postfix)

@@ -159,6 +159,48 @@ class DLLEXPORT PlayManager {
   uint32_t variant_perm_games_completed(int v, int p) const noexcept {
     return variant_perm_scores_[v][p].games_completed;
   }
+  float variant_avg_game_length(int v) const noexcept {
+    const auto& m = variant_metrics_[v];
+    if (variant_scores_[v].games_completed == 0) return 0;
+    return static_cast<float>(m.game_length) /
+           static_cast<float>(variant_scores_[v].games_completed);
+  }
+  float variant_avg_leaf_depth(int v) const noexcept {
+    const auto& m = variant_metrics_[v];
+    if (m.full_move_count == 0) return 0;
+    return static_cast<float>(m.total_avg_leaf_depth /
+                              static_cast<double>(m.full_move_count));
+  }
+  float variant_avg_search_entropy(int v) const noexcept {
+    const auto& m = variant_metrics_[v];
+    if (m.full_move_count == 0) return 0;
+    return static_cast<float>(m.total_search_entropy /
+                              static_cast<double>(m.full_move_count));
+  }
+  float variant_fast_avg_leaf_depth(int v) const noexcept {
+    const auto& m = variant_metrics_[v];
+    if (m.fast_move_count == 0) return 0;
+    return static_cast<float>(m.fast_total_avg_leaf_depth /
+                              static_cast<double>(m.fast_move_count));
+  }
+  float variant_fast_avg_search_entropy(int v) const noexcept {
+    const auto& m = variant_metrics_[v];
+    if (m.fast_move_count == 0) return 0;
+    return static_cast<float>(m.fast_total_search_entropy /
+                              static_cast<double>(m.fast_move_count));
+  }
+  float variant_avg_moves_per_turn(int v) const noexcept {
+    const auto& m = variant_metrics_[v];
+    if (m.game_length == 0) return 0;
+    return static_cast<float>(m.total_move_count) /
+           static_cast<float>(m.game_length);
+  }
+  float variant_avg_valid_moves(int v) const noexcept {
+    const auto& m = variant_metrics_[v];
+    if (m.total_move_count == 0) return 0;
+    return static_cast<float>(m.total_valid_moves /
+                              static_cast<double>(m.total_move_count));
+  }
 
   // GPU steal: set by GPU thread to signal batcher to hand off partial batches
   void set_eager(bool e) noexcept { eager_.store(e, std::memory_order_relaxed); }
@@ -300,6 +342,19 @@ class DLLEXPORT PlayManager {
   std::vector<PermScores> perm_scores_;
   std::vector<PermScores> variant_scores_;  // indexed by variant_id; empty for single-variant games
   std::vector<std::vector<PermScores>> variant_perm_scores_;  // [variant_id][perm_idx]; empty for single-variant games
+
+  struct VariantMetrics {
+    uint64_t game_length = 0;
+    double total_avg_leaf_depth = 0;       // full searches only
+    double total_search_entropy = 0;       // full searches only
+    double fast_total_avg_leaf_depth = 0;  // fast searches only
+    double fast_total_search_entropy = 0;  // fast searches only
+    double total_valid_moves = 0;
+    uint64_t total_move_count = 0;
+    uint64_t full_move_count = 0;
+    uint64_t fast_move_count = 0;
+  };
+  std::vector<VariantMetrics> variant_metrics_;  // indexed by variant_id; empty for single-variant games
 };
 
 }  // namespace alphazero

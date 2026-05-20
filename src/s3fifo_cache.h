@@ -20,8 +20,15 @@ class S3FIFOCache {
         ghost_size_(ghost_size),
         num_policy_(num_policy),
         num_value_(num_value),
-        policy_data_(static_cast<size_t>(max_size) * num_policy),
-        value_data_(static_cast<size_t>(max_size) * num_value),
+        // Default-init (no zero-fill) so the kernel only allocates physical
+        // pages as slots are actually written. Slots are only read after
+        // insert_locked writes them, so leaving the rest indeterminate is
+        // safe. Zero-filling here was the source of a multi-GB construction
+        // spike that triggered OOM on cache rebuilds between iterations.
+        policy_data_(std::make_unique_for_overwrite<float[]>(
+            static_cast<size_t>(max_size) * num_policy)),
+        value_data_(std::make_unique_for_overwrite<float[]>(
+            static_cast<size_t>(max_size) * num_value)),
         hashes_(max_size),
         freq_(max_size, 0),
         s_ring_(max_size),
@@ -188,8 +195,8 @@ class S3FIFOCache {
   uint32_t num_policy_;
   uint32_t num_value_;
   // Flat storage arrays (indexed by slot).
-  std::vector<float> policy_data_;
-  std::vector<float> value_data_;
+  std::unique_ptr<float[]> policy_data_;
+  std::unique_ptr<float[]> value_data_;
   std::vector<uint64_t> hashes_;
   std::vector<uint8_t> freq_;
 

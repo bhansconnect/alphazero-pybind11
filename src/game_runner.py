@@ -5,7 +5,7 @@ import os
 import signal
 import shutil
 import tempfile
-from collections import namedtuple
+from collections import deque, namedtuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import math
 import random
@@ -1624,19 +1624,23 @@ class StreamingCompressedDataset(IterableDataset):
     DataLoader(batch_size=None, num_workers=0).
     """
 
-    def __init__(self, file_triples, batch_size, passes=1, active_files=8):
+    def __init__(self, file_triples, batch_size, passes=1, active_files=8, seed=None):
         self.file_triples = file_triples  # [(c_path, v_path, pi_path, size), ...]
         self.batch_size = batch_size
         self.passes = passes
         self.active_files = max(1, active_files)
+        self.seed = seed
 
     def __iter__(self):
-        for _ in range(self.passes):
-            yield from self._one_pass()
+        for p in range(self.passes):
+            yield from self._one_pass(p)
 
-    def _one_pass(self):
+    def _one_pass(self, pass_idx=0):
         order = list(range(len(self.file_triples)))
-        random.shuffle(order)
+        if self.seed is None:
+            random.shuffle(order)
+        else:
+            random.Random(self.seed + pass_idx).shuffle(order)
         if not order:
             return
 
@@ -1647,15 +1651,16 @@ class StreamingCompressedDataset(IterableDataset):
             return list(_load_and_shuffle(*self.file_triples[order[i]])) + [0]
             # slot = [c, v, pi, cursor]
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            active = []
-            while next_idx < len(order) and len(active) < target:
-                active.append(_load(next_idx))
+        n_workers = min(4, target)
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            pending = deque()
+            while next_idx < len(order) and len(pending) < target + n_workers:
+                pending.append(executor.submit(_load, next_idx))
                 next_idx += 1
 
-            future = executor.submit(_load, next_idx) if next_idx < len(order) else None
-            if future is not None:
-                next_idx += 1
+            active = []
+            while pending and len(active) < target:
+                active.append(pending.popleft().result())
 
             while active:
                 n = len(active)
@@ -1682,14 +1687,14 @@ class StreamingCompressedDataset(IterableDataset):
                         torch.cat(pis) if len(pis) > 1 else pis[0],
                     )
 
-                # Evict drained slots, refill from prefetch
+                # Evict drained slots, refill from prefetch queue
                 drained = [i for i, s in enumerate(active) if s[3] >= s[0].size(0)]
                 for i in reversed(drained):
                     active.pop(i)
-                while len(active) < target and future is not None:
-                    active.append(future.result())
-                    future = executor.submit(_load, next_idx) if next_idx < len(order) else None
-                    if future is not None:
+                while len(active) < target and pending:
+                    active.append(pending.popleft().result())
+                    if next_idx < len(order):
+                        pending.append(executor.submit(_load, next_idx))
                         next_idx += 1
 
 

@@ -174,9 +174,9 @@ class TrainConfig:
     variant_eval_interval: int = 0
 
     # Frozen eval set (Feature 1, see plan i-want-the-vs-refactored-hippo.md)
-    # 0 = disabled. K = snapshot positions via burst self-play with checkpoint K
-    # and evaluate KL(MCTS||raw) + value error on them every checkpoint.
-    frozen_eval_anchor_iter: int = 0
+    # Empty list = disabled. Multiple anchors give complementary windows
+    # (e.g., [5, 30, 100, 300] for early/mid/late training signal).
+    frozen_eval_anchor_iters: list = field(default_factory=list)
     frozen_eval_positions: int = 1024
     frozen_eval_interval: int = 1
     # Minimum complete games to play during snapshot. Guards against the

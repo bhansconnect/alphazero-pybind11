@@ -3295,19 +3295,17 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         wr_v = None
         elo_v = None
 
-    # Rolling history of (iter, mean_kl) for frozen-eval trajectory analysis.
-    # Built up across iters as data arrives; gaps (interval > 1, missing iters)
-    # are fine — linfit_slope handles non-consecutive x values. Persisted to
-    # disk via frozen_eval.append_kl_history, so resumes / restarts pick up
-    # the prior trajectory instead of needing 3+ fresh iters to print a slope.
+    # Rolling per-anchor history of (iter, mean_kl) for frozen-eval trajectory
+    # analysis. Built up across iters as data arrives. Persisted to disk via
+    # frozen_eval.append_kl_history, so resumes / restarts pick up the prior
+    # trajectory instead of needing 3+ fresh iters to print a slope.
     _FROZEN_KL_HIST_LEN = 30
-    frozen_kl_history = []
-    if config.frozen_eval_anchor_iter > 0 and start > 0:
-        prior = frozen_eval.load_kl_history(
-            paths, config.frozen_eval_anchor_iter, max_iter=start,
-        )
-        if prior:
-            frozen_kl_history = prior[-_FROZEN_KL_HIST_LEN:]
+    frozen_kl_history = {a: [] for a in config.frozen_eval_anchor_iters}
+    if config.frozen_eval_anchor_iters and start > 0:
+        for anchor in config.frozen_eval_anchor_iters:
+            prior = frozen_eval.load_kl_history(paths, anchor, max_iter=start)
+            if prior:
+                frozen_kl_history[anchor] = prior[-_FROZEN_KL_HIST_LEN:]
 
     with tqdm.tqdm(range(start, config.iterations), initial=start, total=config.iterations, desc="Build Amazing Network") as pbar:
         for i in pbar:
@@ -3629,7 +3627,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             # Per-checkpoint diagnostics (Features 1, 3).
             # Load the new checkpoint once and run all enabled diagnostics.
-            wants_frozen = config.frozen_eval_anchor_iter > 0
+            wants_frozen = bool(config.frozen_eval_anchor_iters)
             wants_rank = config.effective_rank_enabled
             if wants_frozen or wants_rank:
                 stage_start = time.time()
@@ -3659,46 +3657,40 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                             tqdm.tqdm.write(f"  Effective rank warning [iter {next_net}]: {exc}")
 
                     if diag_nn is not None and wants_frozen:
-                        snap_ok = frozen_eval.ensure_snapshot(
-                            config, paths, experiment_name,
-                            config.frozen_eval_anchor_iter,
-                            fallback_checkpoint_dir=fallback_checkpoint_dir,
-                        )
-                        if snap_ok and (i % max(1, config.frozen_eval_interval) == 0):
+                        for anchor in config.frozen_eval_anchor_iters:
+                            snap_ok = frozen_eval.ensure_snapshot(
+                                config, paths, experiment_name, anchor,
+                                fallback_checkpoint_dir=fallback_checkpoint_dir,
+                            )
+                            if not (snap_ok and (i % max(1, config.frozen_eval_interval) == 0)):
+                                continue
                             try:
                                 metrics = frozen_eval.evaluate_checkpoint(
-                                    diag_nn, config, paths,
-                                    config.frozen_eval_anchor_iter,
+                                    diag_nn, config, paths, anchor,
                                 )
                                 frozen_eval.log_metrics_to_aim(
-                                    run, metrics,
-                                    anchor_iter=config.frozen_eval_anchor_iter,
-                                    epoch=next_net,
-                                    step=total_train_steps,
+                                    run, metrics, anchor_iter=anchor,
+                                    epoch=next_net, step=total_train_steps,
                                 )
-                                # Trajectory slope: append the variant-averaged
-                                # KL to rolling history, fit a slope, log + print.
                                 kls = [vm["kl_mcts_net"] for vm in metrics.values()
                                        if "kl_mcts_net" in vm]
                                 if kls:
                                     mean_kl = sum(kls) / len(kls)
                                     frozen_eval.append_kl_history(
-                                        paths, config.frozen_eval_anchor_iter,
-                                        next_net, mean_kl,
+                                        paths, anchor, next_net, mean_kl,
                                     )
-                                    frozen_kl_history.append((next_net, mean_kl))
-                                    if len(frozen_kl_history) > _FROZEN_KL_HIST_LEN:
-                                        frozen_kl_history = frozen_kl_history[
-                                            -_FROZEN_KL_HIST_LEN:]
+                                    hist = frozen_kl_history.setdefault(anchor, [])
+                                    hist.append((next_net, mean_kl))
+                                    if len(hist) > _FROZEN_KL_HIST_LEN:
+                                        frozen_kl_history[anchor] = hist[-_FROZEN_KL_HIST_LEN:]
                                     frozen_eval.print_kl_health(
-                                        run, frozen_kl_history,
-                                        epoch=next_net,
-                                        step=total_train_steps,
-                                        anchor_iter=config.frozen_eval_anchor_iter,
+                                        run, frozen_kl_history[anchor],
+                                        epoch=next_net, step=total_train_steps,
+                                        anchor_iter=anchor,
                                     )
                             except Exception as exc:
-                                tqdm.tqdm.write(f"  Frozen eval warning [iter {next_net}]: "
-                                                f"skipped: {exc}")
+                                tqdm.tqdm.write(f"  Frozen eval warning [iter {next_net}, "
+                                                f"anchor {anchor}]: skipped: {exc}")
 
                     if diag_nn is not None:
                         del diag_nn

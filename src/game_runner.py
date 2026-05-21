@@ -427,11 +427,25 @@ class GameRunner:
 
     @tracy_zone
     def run(self):
+        # Two-stage Ctrl+C:
+        #   1st press: ack visibly + call pm.stop() so workers drain gracefully
+        #              (preserves current iteration's data).
+        #   2nd press: restore the default handler and re-raise immediately,
+        #              so an unresponsive drain (long MCTS step, queued
+        #              history saving, etc.) doesn't leave the user stuck
+        #              mashing Ctrl+C with no feedback.
         interrupted = False
         prev_handler = signal.getsignal(signal.SIGINT)
         def _sigint_handler(sig, frame):
             nonlocal interrupted
+            if interrupted:
+                signal.signal(signal.SIGINT, prev_handler)
+                tqdm.tqdm.write("\nSecond Ctrl+C — forcing exit.")
+                raise KeyboardInterrupt
             interrupted = True
+            tqdm.tqdm.write(
+                "\nCtrl+C received — stopping selfplay; press again to force exit."
+            )
             self.pm.stop()
         signal.signal(signal.SIGINT, _sigint_handler)
         try:

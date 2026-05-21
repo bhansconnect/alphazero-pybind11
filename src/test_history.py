@@ -1216,6 +1216,9 @@ def test_bootstrap_lr_drops_with_default_patience(tmp_path):
     # 2000 samples / bs=32 = 63 steps total
     # lookback=10, lr_patience=10*4=40
     # After 10 warmup + 40 plateau = step 50: first LR drop
+    # Threshold pinned (>= old default of 0.005) so random EMA drift on
+    # this tiny dataset doesn't keep qualifying as "real improvement" and
+    # resetting num_bad before patience expires.
     config = TrainConfig(
         game="connect4",
         train_batch_size=32,
@@ -1223,6 +1226,7 @@ def test_bootstrap_lr_drops_with_default_patience(tmp_path):
         bootstrap_lr_patience=4,
         bootstrap_lr_max_drops=3,
         bootstrap_convergence_patience=3,
+        bootstrap_convergence_threshold=0.01,
     )
 
     nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)

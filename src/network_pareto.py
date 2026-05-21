@@ -26,7 +26,12 @@ import numpy as np
 from torch.utils.data import DataLoader
 
 from config import load_config, find_latest_checkpoint
-from game_runner import glob_file_triples, calc_hist_size, StreamingCompressedDataset
+from game_runner import (
+    glob_file_triples,
+    calc_hist_size,
+    StreamingCompressedDataset,
+    _load_and_select,
+)
 from lr_scheduler import PlateauLRScheduler, ema_update
 from neural_net import NNArgs, NNWrapper, NNArch, get_device
 
@@ -513,24 +518,16 @@ def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
     }
 
 
-def eval_loss_streaming(nn_wrapper, file_triples, batch_size, device):
-    """Full eval-mode pass over all data by streaming from file triples.
+def _accumulate_eval_metrics(nn_wrapper, batch_iter, device):
+    """Run forward + 8 metric accumulators over a (c, v, pi) batch iterator.
 
-    Same metrics as eval_loss() but streams one file at a time to avoid
-    loading the full dataset into memory.
-
-    Returns dict: {v_loss, pi_loss, total_loss, top1_agree, top3_agree, kl_div,
-                    target_entropy, kl_gap}.
+    Returns the same dict as eval_loss_streaming / eval_loss_sampled.
     """
     nn_wrapper.enable_inference_optimizations()
     nn_wrapper.nnet.eval()
     non_blocking = device.type == 'cuda'
     use_amp = device.type in ('cuda', 'mps')
 
-    dataset = StreamingCompressedDataset(file_triples, batch_size, passes=1)
-    dl = DataLoader(dataset, batch_size=None, num_workers=0)
-
-    # Running accumulators (GPU tensors)
     v_total = torch.zeros(1, device=device)
     pi_total = torch.zeros(1, device=device)
     top1_matches = torch.zeros(1, device=device, dtype=torch.long)
@@ -542,7 +539,7 @@ def eval_loss_streaming(nn_wrapper, file_triples, batch_size, device):
     eps = 1e-10
 
     with torch.no_grad():
-        for c, v, pi in dl:
+        for c, v, pi in batch_iter:
             c = c.float().to(device, non_blocking=non_blocking)
             v = v.float().to(device, non_blocking=non_blocking)
             pi = pi.float().to(device, non_blocking=non_blocking)
@@ -594,6 +591,71 @@ def eval_loss_streaming(nn_wrapper, file_triples, batch_size, device):
         "target_entropy": target_entropy,
         "kl_gap": pi_loss - target_entropy,
     }
+
+
+def eval_loss_streaming(nn_wrapper, file_triples, batch_size, device):
+    """Full eval-mode pass over all data by streaming from file triples.
+
+    Same metrics as eval_loss() but streams one file at a time to avoid
+    loading the full dataset into memory.
+
+    Returns dict: {v_loss, pi_loss, total_loss, top1_agree, top3_agree, kl_div,
+                    target_entropy, kl_gap}.
+    """
+    dataset = StreamingCompressedDataset(file_triples, batch_size, passes=1)
+    dl = DataLoader(dataset, batch_size=None, num_workers=0)
+    return _accumulate_eval_metrics(nn_wrapper, dl, device)
+
+
+def eval_loss_sampled(nn_wrapper, file_triples, batch_size, device, n_eval):
+    """Eval over a uniform-random subsample of n_eval positions.
+
+    Each position in the global pool of size sum(size_i) has equal
+    probability n_eval/total of being selected, regardless of which file
+    (iteration) it lives in or that file's size.
+    """
+    sizes = np.array([s for _, _, _, s in file_triples], dtype=np.int64)
+    total = int(sizes.sum())
+    n_eval = min(int(n_eval), total)
+
+    rng = np.random.default_rng()
+    selected = rng.choice(total, size=n_eval, replace=False)
+
+    offsets = np.concatenate([[0], np.cumsum(sizes)])
+    file_idx = np.searchsorted(offsets, selected, side='right') - 1
+    local_idx = selected - offsets[file_idx]
+
+    order = np.argsort(file_idx, kind='stable')
+    file_idx = file_idx[order]
+    local_idx = local_idx[order]
+    boundaries = np.flatnonzero(np.diff(file_idx)) + 1
+    groups = np.split(np.stack([file_idx, local_idx], axis=1), boundaries)
+
+    c_parts, v_parts, pi_parts = [], [], []
+    for g in groups:
+        fi = int(g[0, 0])
+        idxs = g[:, 1].tolist()
+        c_path, v_path, pi_path, _ = file_triples[fi]
+        c_sel, v_sel, pi_sel = _load_and_select((c_path, v_path, pi_path, idxs))
+        c_parts.append(c_sel)
+        v_parts.append(v_sel)
+        pi_parts.append(pi_sel)
+
+    c_all = torch.cat(c_parts)
+    v_all = torch.cat(v_parts)
+    pi_all = torch.cat(pi_parts)
+
+    perm = torch.randperm(c_all.shape[0])
+    c_all = c_all[perm]
+    v_all = v_all[perm]
+    pi_all = pi_all[perm]
+
+    def batch_iter():
+        for start in range(0, c_all.shape[0], batch_size):
+            end = start + batch_size
+            yield c_all[start:end], v_all[start:end], pi_all[start:end]
+
+    return _accumulate_eval_metrics(nn_wrapper, batch_iter(), device)
 
 
 def is_pareto_optimal(points):
@@ -1059,6 +1121,9 @@ def main():
                         help="Cross-file shuffle pool size for StreamingCompressedDataset (default: 8)")
     parser.add_argument("--no-charts", action="store_true", help="Disable chart generation")
     parser.add_argument("--no-early-stop", action="store_true", help="Disable early stopping on plateau")
+    parser.add_argument("--eval-samples", type=int, default=None,
+                        help="Final eval on a uniform random subsample of N positions "
+                             "from the window (unbiased per-position). Default: full pass.")
     args = parser.parse_args()
 
     if not os.path.isdir(args.source_dir):
@@ -1136,8 +1201,14 @@ def main():
             time_min = elapsed / 60
             print(f"  Time: {time_min:.1f}m  Peak memory: {mem_mb:.0f} MB")
 
-            print("  Final eval + metrics...")
-            metrics = eval_loss_streaming(nn_train, file_triples, args.batch_size, device)
+            if args.eval_samples is not None:
+                eval_n = min(args.eval_samples, n_samples)
+                print(f"  Final eval + metrics... (sampled {eval_n:,} of {n_samples:,})")
+                metrics = eval_loss_sampled(
+                    nn_train, file_triples, args.batch_size, device, eval_n)
+            else:
+                print("  Final eval + metrics...")
+                metrics = eval_loss_streaming(nn_train, file_triples, args.batch_size, device)
             if nn_args.cv != 1.0:
                 v_str = f"V Loss: {metrics['v_loss_raw']:.4f} (cv{nn_args.cv:g}: {metrics['v_loss']:.4f})"
             else:

@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import time
+from collections import defaultdict
 
 _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SRC_DIR not in sys.path:
@@ -93,6 +94,178 @@ def _elo_delta(win_rate: float) -> float:
     """Two-player Elo gap from win rate (with draws weighted 0.5)."""
     wr = max(0.001, min(0.999, win_rate))
     return 400.0 * math.log10(wr / (1.0 - wr))
+
+
+def _linfit_slope(pts):
+    """Least-squares slope of y vs x for (x, y) pairs. Returns nan if <2 pts."""
+    if len(pts) < 2:
+        return float("nan")
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    mx = sum(xs) / len(xs)
+    my = sum(ys) / len(ys)
+    den = sum((x - mx) ** 2 for x in xs)
+    if den == 0:
+        return float("nan")
+    num = sum((x - mx) * (y - my) for x, y in pts)
+    return num / den
+
+
+def _iter_summary(rows_for_iter, training_k: int) -> dict:
+    """Derive per-iter diagnostic metrics from the aggregate (no-variant) sweep.
+
+    Returns: {
+      elo_at_train_k:            Elo @ training visits (or nearest k)
+      delta_search_at_train_k:   Elo(train_k) - Elo(k=0)  — gap raw vs trained-MCTS
+      delta_search_full:         Elo(k_high) - Elo(k_low) — full-range gap
+      slope_at_train_k:          Elo per doubling of visits, fitted near training_k
+      slope_at_high_k:           Elo per doubling near k_high — saturation indicator
+    }
+    """
+    agg = {k: elo for v, k, _wr, elo in rows_for_iter if v is None}
+    if not agg:
+        return {}
+    ks = sorted(agg.keys())
+
+    # Elo at training_k: exact match or nearest by log2 distance
+    if training_k in agg:
+        elo_train = agg[training_k]
+    else:
+        nearest = min(ks, key=lambda k: abs(math.log2(max(k, 1)) - math.log2(max(training_k, 1))))
+        elo_train = agg[nearest]
+
+    raw_elo = agg.get(0, agg[ks[0]])
+    delta_search_train = elo_train - raw_elo
+    delta_search_full = agg[ks[-1]] - raw_elo
+
+    # Slope around training_k: log2(k) vs Elo, restricted to k values within
+    # log2-distance 1.5 of training_k (i.e., from training_k/2.8 to training_k*2.8)
+    log_train = math.log2(max(training_k, 1))
+    near_pts = [(math.log2(k), agg[k]) for k in ks
+                if k > 0 and abs(math.log2(k) - log_train) <= 1.5]
+    slope_train = _linfit_slope(near_pts)
+
+    # Slope at high k (saturation indicator): top 3 k values
+    high_pts = [(math.log2(k), agg[k]) for k in ks[-3:] if k > 0]
+    slope_high = _linfit_slope(high_pts)
+
+    return {
+        "elo_at_train_k": elo_train,
+        "delta_search_at_train_k": delta_search_train,
+        "delta_search_full": delta_search_full,
+        "slope_at_train_k": slope_train,
+        "slope_at_high_k": slope_high,
+    }
+
+
+_ELO_CLAMP_THRESHOLD = 1100  # the formula clamps near ±1200; treat as saturated above this
+
+
+def _is_clamped(elo) -> bool:
+    """Elo at ±1200 indicates win-rate of essentially 1.0 or 0.0 — the
+    underlying signal is saturated against the anchor, not measurable."""
+    return abs(elo) > _ELO_CLAMP_THRESHOLD
+
+
+def _print_summary(summaries: list, training_k: int) -> None:
+    """Print per-iter summary table + trajectory analysis."""
+    if not summaries:
+        return
+
+    print()
+    print("=" * 86)
+    print(f"  Sweep Summary  (training_k = {training_k})")
+    print("=" * 86)
+    print(f"  {'iter':>5}  {'Elo@'+str(training_k):>9}  {'Δsearch':>8}  {'slope@'+str(training_k):>13}  {'slope@high':>11}  {'':3}")
+    print(f"  {'':5}  {'(strength)':>9}  {'(raw→k)':>8}  {'(near train_k)':>13}  {'(saturation)':>11}  {'':3}")
+    print("  " + "-" * 82)
+    for ti, s in summaries:
+        st = s.get("slope_at_train_k", float("nan"))
+        sh = s.get("slope_at_high_k", float("nan"))
+        st_str = f"{st:+.0f}/dbl" if not math.isnan(st) else "  n/a"
+        sh_str = f"{sh:+.0f}/dbl" if not math.isnan(sh) else "  n/a"
+        marker = " *" if _is_clamped(s["elo_at_train_k"]) else ""
+        print(f"  {ti:>5d}  {s['elo_at_train_k']:>+8.0f}  "
+              f"{s['delta_search_at_train_k']:>+7.0f}  "
+              f"{st_str:>13s}  {sh_str:>11s}  {marker}")
+
+    if len(summaries) < 2:
+        return
+
+    # Trajectory fit on UNCLAMPED iters only — clamp artifacts pollute the slope.
+    unclamped = [(ti, s) for ti, s in summaries
+                 if not _is_clamped(s["elo_at_train_k"])]
+    if len(unclamped) < 2:
+        print()
+        print("  (Not enough unclamped iters for trajectory analysis — all at Elo ceiling/floor.)")
+        return
+    if len(unclamped) < len(summaries):
+        skipped = len(summaries) - len(unclamped)
+        print(f"\n  (* = Elo saturated at ±1200; {skipped} clamped iter(s) excluded from trajectory.)")
+
+    iters = [ti for ti, _ in unclamped]
+    elos = [s["elo_at_train_k"] for _, s in unclamped]
+    ds = [s["delta_search_at_train_k"] for _, s in unclamped]
+    slope_at_train_vals = [s["slope_at_train_k"] for _, s in unclamped
+                           if not math.isnan(s["slope_at_train_k"])]
+
+    elo_slope = _linfit_slope(list(zip(iters, elos)))
+    ds_slope = _linfit_slope(list(zip(iters, ds)))
+    iter_span = iters[-1] - iters[0]
+
+    print()
+    print(f"  Trajectory across unclamped iters {iters[0]}–{iters[-1]} ({iter_span} iters):")
+    print(f"    Elo@train_k:  {elo_slope:+.2f} Elo/iter  "
+          f"(total: {elo_slope * iter_span:+.0f} Elo over {iter_span} iters)")
+    print(f"    Δ_search:     {ds_slope:+.2f} Elo/iter  "
+          f"(total: {ds_slope * iter_span:+.0f} Elo over {iter_span} iters)")
+    avg_slope = float("nan")
+    if slope_at_train_vals:
+        avg_slope = sum(slope_at_train_vals) / len(slope_at_train_vals)
+        print(f"    slope@train_k mean: {avg_slope:+.0f} Elo per visit doubling "
+              f"(Jones frontier ≈ +150)")
+
+    # Late-trajectory: more recent iters often more diagnostic than full range.
+    if len(unclamped) >= 4:
+        half = len(unclamped) // 2
+        late_iters = [ti for ti, _ in unclamped[half:]]
+        late_ds = [s["delta_search_at_train_k"] for _, s in unclamped[half:]]
+        late_elos = [s["elo_at_train_k"] for _, s in unclamped[half:]]
+        late_ds_slope = _linfit_slope(list(zip(late_iters, late_ds)))
+        late_elo_slope = _linfit_slope(list(zip(late_iters, late_elos)))
+        late_span = late_iters[-1] - late_iters[0]
+        print(f"\n  Late-trajectory (last {len(late_iters)} iters, span {late_span}):")
+        print(f"    Elo@train_k:  {late_elo_slope:+.2f} Elo/iter  "
+              f"(total: {late_elo_slope * late_span:+.0f} Elo)")
+        print(f"    Δ_search:     {late_ds_slope:+.2f} Elo/iter  "
+              f"(total: {late_ds_slope * late_span:+.0f} Elo)")
+    else:
+        late_ds_slope = ds_slope
+        late_elo_slope = elo_slope
+
+    # Diagnostic classification on LATE trajectory (most actionable)
+    print()
+    print("  Diagnosis (based on late-trajectory):")
+    if iter_span < 5:
+        print("    (too few iters to classify; collect 5+ test iters)")
+        return
+
+    if late_ds_slope > 1.0:
+        print("    ⚠ Δ_search RISING — network actively losing ground vs its own MCTS.")
+        print("      Possible regression. Check training loss / LR schedule.")
+    elif abs(late_ds_slope) < 1.5 and late_elo_slope < 3.0:
+        print("    ⚠ STUCK NETWORK: Δ_search flat, Elo barely rising.")
+        print("      Network is not absorbing what search teaches.")
+        print("      More visits won't fix this — push capacity (wider/deeper net)")
+        print("      or fix training (LR, regularization, exploration).")
+    elif late_ds_slope < -3.0:
+        print("    ✓ Healthy absorption — Δ_search clearly falling in late trajectory.")
+        if not math.isnan(avg_slope) and avg_slope > 100:
+            print(f"      slope@train_k still high ({avg_slope:+.0f}/dbl) — more visits could pay off.")
+    elif late_elo_slope > 5.0:
+        print(f"    ✓ Elo rising at {late_elo_slope:+.1f}/iter; trajectory healthy.")
+    else:
+        print("    Mixed: trajectory unclear. Collect more iters.")
 
 
 def _resume_aim_run(experiment_dir: str):
@@ -167,7 +340,7 @@ def _run_sweep_one_iter(config, Game, paths, experiment_name,
         test_wr = win_rates[0]
         elo = _elo_delta(test_wr)
         rows.append((None, k, test_wr, elo))
-        print(f"    k={k:>5d}: test_win_rate={test_wr:.3f}  elo_delta={elo:+.1f}")
+        tqdm.tqdm.write(f"    k={k:>5d}: test_win_rate={test_wr:.3f}  elo_delta={elo:+.1f}")
 
         # Per-variant traces.
         for vid in sorted(per_variant.keys()):
@@ -176,7 +349,7 @@ def _run_sweep_one_iter(config, Game, paths, experiment_name,
             v_wr = per_variant[vid][0]
             v_elo = _elo_delta(v_wr)
             rows.append((vname, k, v_wr, v_elo))
-            print(f"      {vname:>10s}: test_win_rate={v_wr:.3f}  elo_delta={v_elo:+.1f}")
+            tqdm.tqdm.write(f"      {vname:>10s}: test_win_rate={v_wr:.3f}  elo_delta={v_elo:+.1f}")
 
     del test_nn, anchor_nn, test_cache, anchor_cache, caches
     import gc
@@ -264,9 +437,11 @@ def main():
         return
 
     csv_path = os.path.join(experiment_dir, "visit_sweep", f"anchor_{anchor_iter:04d}.csv")
+    training_k = int(getattr(config, "selfplay_mcts_visits", 100))
+    iter_summaries = []   # list of (test_iter, summary_dict) for end-of-run analysis
     t0 = time.time()
     for test_iter in tqdm.tqdm(test_iters, desc="Test iters"):
-        print(f"\nTest iter {test_iter} vs anchor {anchor_iter}:")
+        tqdm.tqdm.write(f"\nTest iter {test_iter} vs anchor {anchor_iter}:")
         try:
             rows = _run_sweep_one_iter(
                 config, Game, paths, experiment_name,
@@ -274,10 +449,15 @@ def main():
                 anchor_visits, cache_size,
             )
         except Exception as exc:
-            print(f"  Skipping iter {test_iter}: {exc}")
+            tqdm.tqdm.write(f"  Skipping iter {test_iter}: {exc}")
             continue
 
         _write_csv(csv_path, anchor_iter, anchor_visits, test_iter, rows)
+
+        # Compute derived per-iter diagnostic metrics from this iter's aggregate.
+        summary = _iter_summary(rows, training_k)
+        if summary:
+            iter_summaries.append((test_iter, summary))
 
         if run is not None:
             base_ctx = {
@@ -315,7 +495,22 @@ def main():
                             ctx["variant"] = vname
                         run.track(d, name="visit_sweep/delta_search",
                                   epoch=test_iter, step=int(test_iter), context=ctx)
+            # Derived per-iter metrics (the diagnostic signals).
+            if summary:
+                derived_ctx = {
+                    "anchor": f"{anchor_iter:04d}",
+                    "anchor_visits": str(anchor_visits),
+                    "training_k": str(training_k),
+                }
+                for metric_name, value in summary.items():
+                    if math.isnan(value):
+                        continue
+                    run.track(value, name=f"visit_sweep/{metric_name}",
+                              epoch=test_iter, step=int(test_iter),
+                              context=derived_ctx)
+
     print(f"\nDone in {time.time() - t0:.1f}s. CSV at {csv_path}")
+    _print_summary(iter_summaries, training_k)
 
 
 if __name__ == "__main__":

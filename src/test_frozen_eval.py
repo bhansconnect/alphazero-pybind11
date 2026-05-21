@@ -231,3 +231,91 @@ def test_log_metrics_single_variant_still_emits_mean():
     assert len(run.tracks) == 2  # per-variant + mean
     mean = next(t for t in run.tracks if "variant" not in t["context"])
     assert mean["value"] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Trajectory helpers: linfit_slope (gap-tolerant) and bootstrap fallback.
+# ---------------------------------------------------------------------------
+
+def test_linfit_slope_basic():
+    """Slope of y=2x+3 should be 2."""
+    pts = [(0, 3), (1, 5), (2, 7), (3, 9)]
+    assert frozen_eval.linfit_slope(pts) == pytest.approx(2.0)
+
+
+def test_linfit_slope_handles_gaps():
+    """Non-consecutive x values (gaps due to interval > 1 / partial backfill)
+    should still produce the right slope — it's a regression, not a finite
+    difference."""
+    # y = -0.5 * x + 10. Skip x=2 and x=4 to simulate iter gaps.
+    pts = [(0, 10), (1, 9.5), (3, 8.5), (5, 7.5), (7, 6.5)]
+    assert frozen_eval.linfit_slope(pts) == pytest.approx(-0.5, abs=1e-6)
+
+
+def test_linfit_slope_too_few_points():
+    """<2 points returns nan; can't fit a line."""
+    import math
+    assert math.isnan(frozen_eval.linfit_slope([]))
+    assert math.isnan(frozen_eval.linfit_slope([(0, 1.0)]))
+
+
+def test_linfit_slope_constant_x_returns_nan():
+    """All-equal x → division by zero in regression denominator."""
+    import math
+    assert math.isnan(frozen_eval.linfit_slope([(5, 1), (5, 2), (5, 3)]))
+
+
+def test_find_checkpoint_primary_only(tmp_path):
+    """Finds checkpoint in primary dir; no fallback needed."""
+    prim = tmp_path / "primary"
+    prim.mkdir()
+    (prim / "0050-exp.pt").write_bytes(b"x")
+    result = frozen_eval.find_checkpoint(str(prim), "exp", 50)
+    assert result == str(prim / "0050-exp.pt")
+
+
+def test_find_checkpoint_falls_back_when_missing(tmp_path):
+    """Primary missing, fallback has same-name → returns fallback path."""
+    prim = tmp_path / "primary"
+    fb = tmp_path / "fallback"
+    prim.mkdir()
+    fb.mkdir()
+    (fb / "0050-exp.pt").write_bytes(b"x")
+    result = frozen_eval.find_checkpoint(str(prim), "exp", 50, fallback_dir=str(fb))
+    assert result == str(fb / "0050-exp.pt")
+
+
+def test_find_checkpoint_falls_back_with_different_exp_name(tmp_path):
+    """Bootstrap source may use a different experiment name — glob match."""
+    prim = tmp_path / "primary"
+    fb = tmp_path / "fallback"
+    prim.mkdir()
+    fb.mkdir()
+    (fb / "0050-source-exp.pt").write_bytes(b"x")  # different name
+    result = frozen_eval.find_checkpoint(str(prim), "new-exp", 50, fallback_dir=str(fb))
+    assert result == str(fb / "0050-source-exp.pt")
+
+
+def test_find_checkpoint_returns_none_when_unfindable(tmp_path):
+    assert frozen_eval.find_checkpoint(str(tmp_path), "exp", 50) is None
+    assert frozen_eval.find_checkpoint(
+        str(tmp_path), "exp", 50, fallback_dir=str(tmp_path)
+    ) is None
+
+
+def test_read_bootstrap_fallback_present(tmp_path):
+    """Returns the source_checkpoint_dir from bootstrap_meta.json."""
+    import json
+    meta = {"source_checkpoint_dir": "/some/source/checkpoint"}
+    (tmp_path / "bootstrap_meta.json").write_text(json.dumps(meta))
+    assert frozen_eval.read_bootstrap_fallback(str(tmp_path)) == "/some/source/checkpoint"
+
+
+def test_read_bootstrap_fallback_absent_returns_none(tmp_path):
+    assert frozen_eval.read_bootstrap_fallback(str(tmp_path)) is None
+
+
+def test_read_bootstrap_fallback_malformed_returns_none(tmp_path):
+    """Bad JSON shouldn't crash — just return None gracefully."""
+    (tmp_path / "bootstrap_meta.json").write_text("{not valid json")
+    assert frozen_eval.read_bootstrap_fallback(str(tmp_path)) is None

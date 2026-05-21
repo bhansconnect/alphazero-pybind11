@@ -424,7 +424,7 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
                     offset += 1
 
                 if current - offset < 0:
-                    print("Falling back to shorter distance games")
+                    tqdm.tqdm.write("Falling back to shorter distance games")
                     offset = 1
                     while current - offset >= 0 and (
                         played[rankings[current - offset]]
@@ -436,7 +436,7 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
                     ):
                         offset += 1
                     if current - offset < 0:
-                        print("No one to play? Relaxing constraints")
+                        tqdm.tqdm.write("No one to play? Relaxing constraints")
                         offset = 1
                         while not math.isnan(
                             win_matrix[

@@ -281,12 +281,17 @@ def _load_triple_float(triple):
     return (load_compressed(c_path).float(), load_compressed(v_path).float(), load_compressed(pi_path).float())
 
 
-def _load_and_shuffle(c_path, v_path, pi_path, size):
+def _load_and_shuffle(c_path, v_path, pi_path, size, seed=None):
     """Load a file triple and randomly permute samples. Used for streaming dataset prefetch."""
     c = _load_hist_tensor(c_path)
     v = _load_hist_tensor(v_path)
     pi = _load_hist_tensor(pi_path)
-    perm = torch.randperm(size)
+    if seed is None:
+        perm = torch.randperm(size)
+    else:
+        g = torch.Generator()
+        g.manual_seed(int(seed))
+        perm = torch.randperm(size, generator=g)
     return c[perm], v[perm], pi[perm]
 
 
@@ -1646,9 +1651,14 @@ class StreamingCompressedDataset(IterableDataset):
 
         target = min(self.active_files, len(order))
         next_idx = 0
+        F = len(self.file_triples)
 
         def _load(i):
-            return list(_load_and_shuffle(*self.file_triples[order[i]])) + [0]
+            file_idx = order[i]
+            sub_seed = None
+            if self.seed is not None:
+                sub_seed = (self.seed + pass_idx * F + file_idx) & ((1 << 63) - 1)
+            return list(_load_and_shuffle(*self.file_triples[file_idx], seed=sub_seed)) + [0]
             # slot = [c, v, pi, cursor]
 
         n_workers = min(4, target)

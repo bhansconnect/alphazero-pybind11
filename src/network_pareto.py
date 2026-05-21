@@ -27,6 +27,7 @@ from torch.utils.data import DataLoader
 
 from config import load_config, find_latest_checkpoint
 from game_runner import glob_file_triples, calc_hist_size, StreamingCompressedDataset
+from lr_scheduler import PlateauLRScheduler, ema_update
 from neural_net import NNArgs, NNWrapper, NNArch, get_device
 
 
@@ -328,17 +329,17 @@ def benchmark_inference(nn_wrapper, game, batch_size):
 
 
 def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
-                 lr, log_interval, device, label, early_stop=True):
+                 lr, log_interval, device, label, early_stop=True, active_files=8):
     """Train a single config by streaming through file triples.
 
-    Uses bootstrap-style LR schedule: constant LR with patience-based drops,
-    then early stop after final drop plateaus.
+    Uses PyTorch ReduceLROnPlateau-style LR schedule via PlateauLRScheduler.
 
     Returns (losses_log, elapsed, actual_steps).
     """
     target_steps = int(epochs * n_samples / batch_size)
     passes = max(1, math.ceil(epochs))
-    dataset = StreamingCompressedDataset(file_triples, batch_size, passes=passes)
+    dataset = StreamingCompressedDataset(file_triples, batch_size, passes=passes,
+                                         active_files=active_files)
     dl = DataLoader(dataset, batch_size=None, num_workers=0)
 
     nn_wrapper.nnet.train()
@@ -351,20 +352,25 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
     v_sum = 0.0
     pi_sum = 0.0
 
-    # Bootstrap-style LR schedule: compare EMA now vs lookback_steps ago
-    lr_drop_factor = 0.3
-    lr_max_drops = 3
-    convergence_threshold = 0.005
-    lookback_steps = log_interval  # compare current EMA to EMA this many steps ago
-    lr_patience = lookback_steps * 4  # steps of plateau before LR drop
-    convergence_patience = lookback_steps * 5  # steps of plateau after final drop
-    ema_beta = 0.99
-    ema_loss = None
-    ema_history = []  # ring buffer of (step, ema) for lookback
-    plateau_steps = 0  # consecutive steps with < threshold improvement
-    lr_drops = 0
-    final_lr_dropped = False
     current_lr = lr
+
+    def _set_lr(new_lr):
+        nonlocal current_lr
+        current_lr = new_lr
+        for pg in optimizer.param_groups:
+            pg['lr'] = new_lr
+
+    scheduler = PlateauLRScheduler(
+        set_lr=_set_lr,
+        initial_lr=lr,
+        drop_factor=0.3,
+        max_drops=3,
+        patience=log_interval * 3,
+        conv_patience=log_interval * 3,
+        cooldown=log_interval,
+        threshold=0.002,
+    ) if early_stop else None
+    ema_loss = None
 
     actual_steps = target_steps
     pbar = tqdm_module.tqdm(total=target_steps, desc=f"  {label}", leave=False)
@@ -390,7 +396,7 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
         v_sum += v_val
         pi_sum += pi_val
         step_loss = v_val + pi_val
-        ema_loss = step_loss if ema_loss is None else ema_beta * ema_loss + (1 - ema_beta) * step_loss
+        ema_loss = ema_update(ema_loss, step_loss)
 
         step_num = step_i + 1
         pbar.update()
@@ -402,34 +408,12 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
         if step_num % log_interval == 0 or step_num == target_steps:
             losses_log.append((step_num, v_sum / step_num, pi_sum / step_num, (v_sum + pi_sum) / step_num))
 
-        # Continuous plateau detection: compare EMA now vs lookback_steps ago
-        ema_history.append(ema_loss)
-        if not early_stop or len(ema_history) <= lookback_steps:
-            continue
-
-        past_ema = ema_history[-lookback_steps - 1]
-        rel_improvement = (past_ema - ema_loss) / (past_ema + 1e-8)
-        if rel_improvement < convergence_threshold:
-            plateau_steps += 1
-        else:
-            plateau_steps = 0
-
-        patience = convergence_patience if final_lr_dropped else lr_patience
-
-        if plateau_steps >= patience:
-            if not final_lr_dropped and lr_drops < lr_max_drops:
-                # LR drop
-                current_lr *= lr_drop_factor
-                lr_drops += 1
-                for pg in optimizer.param_groups:
-                    pg['lr'] = current_lr
-                plateau_steps = 0
-                pbar.write(f"  LR drop #{lr_drops} at step {step_num}: lr={current_lr:.6f} "
-                           f"(ema={ema_loss:.4f})")
-                if lr_drops >= lr_max_drops:
-                    final_lr_dropped = True
-            else:
-                # Early stop
+        if scheduler is not None:
+            event, _ = scheduler.step(ema_loss)
+            if event == "drop":
+                pbar.write(f"  LR drop #{scheduler.drops} at step {step_num}: "
+                           f"lr={current_lr:.6f} (best={scheduler.best:.4f}, cur={ema_loss:.4f})")
+            elif event == "stop":
                 pbar.write(f"  Early stop at step {step_num}/{target_steps} "
                            f"(ema={ema_loss:.4f}, lr={current_lr:.6f})")
                 actual_steps = step_num
@@ -1071,6 +1055,8 @@ def main():
     parser.add_argument("--epochs", type=float, default=1.0, help="Training epochs over the window (default: 1.0)")
     parser.add_argument("--lr", type=float, default=0.01, help="Initial learning rate (default: 0.01)")
     parser.add_argument("--log-interval", type=int, default=100, help="Log loss every N steps (default: 100)")
+    parser.add_argument("--active-files", type=int, default=8,
+                        help="Cross-file shuffle pool size for StreamingCompressedDataset (default: 8)")
     parser.add_argument("--no-charts", action="store_true", help="Disable chart generation")
     parser.add_argument("--no-early-stop", action="store_true", help="Disable early stopping on plateau")
     args = parser.parse_args()
@@ -1142,7 +1128,7 @@ def main():
             losses_log, elapsed, actual_steps = train_config(
                 nn_train, file_triples, n_samples, args.epochs, args.batch_size,
                 args.lr, args.log_interval, device, label,
-                early_stop=not args.no_early_stop,
+                early_stop=not args.no_early_stop, active_files=args.active_files,
             )
             mem_mb = 0
             if device.type == 'cuda':

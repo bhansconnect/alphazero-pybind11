@@ -1615,39 +1615,82 @@ def load_available_window(paths, start, end, num_workers=1):
 
 
 class StreamingCompressedDataset(IterableDataset):
-    """Memory-bounded streaming dataset that loads one file at a time.
+    """Memory-bounded streaming dataset with cross-file batch mixing.
 
-    Yields pre-formed batches of (canonical, v, pi) tuples. Compatible with
-    nn.train() which iterates `for batch in batches` and unpacks the tuple.
-    Use with DataLoader(batch_size=None, num_workers=0).
+    Holds up to ``active_files`` loaded triples at once and builds each batch
+    by round-robin slicing across them, so samples in a single batch come from
+    multiple iters' history. When a slot drains, the prefetched next file
+    takes its place. Yields (canonical, v, pi) batches; use with
+    DataLoader(batch_size=None, num_workers=0).
     """
 
-    def __init__(self, file_triples, batch_size, passes=1):
+    def __init__(self, file_triples, batch_size, passes=1, active_files=8):
         self.file_triples = file_triples  # [(c_path, v_path, pi_path, size), ...]
         self.batch_size = batch_size
         self.passes = passes
+        self.active_files = max(1, active_files)
 
     def __iter__(self):
         for _ in range(self.passes):
-            file_order = list(range(len(self.file_triples)))
-            random.shuffle(file_order)
-            if not file_order:
-                return
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                # Submit first file load immediately
-                ft = self.file_triples[file_order[0]]
-                future = executor.submit(_load_and_shuffle, *ft)
-                for i, fi in enumerate(file_order):
-                    c, v, pi = future.result()
-                    # Prefetch next file while we yield batches from current
-                    if i + 1 < len(file_order):
-                        ft = self.file_triples[file_order[i + 1]]
-                        future = executor.submit(_load_and_shuffle, *ft)
-                    size = self.file_triples[fi][3]
-                    for start in range(0, size, self.batch_size):
-                        end = min(start + self.batch_size, size)
-                        yield c[start:end], v[start:end], pi[start:end]
-                    del c, v, pi
+            yield from self._one_pass()
+
+    def _one_pass(self):
+        order = list(range(len(self.file_triples)))
+        random.shuffle(order)
+        if not order:
+            return
+
+        target = min(self.active_files, len(order))
+        next_idx = 0
+
+        def _load(i):
+            return list(_load_and_shuffle(*self.file_triples[order[i]])) + [0]
+            # slot = [c, v, pi, cursor]
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            active = []
+            while next_idx < len(order) and len(active) < target:
+                active.append(_load(next_idx))
+                next_idx += 1
+
+            future = executor.submit(_load, next_idx) if next_idx < len(order) else None
+            if future is not None:
+                next_idx += 1
+
+            while active:
+                n = len(active)
+                per = self.batch_size // n
+                rem = self.batch_size - per * n
+
+                cs, vs, pis = [], [], []
+                for fi in range(n):
+                    slot = active[fi]
+                    want = per + (1 if fi < rem else 0)
+                    avail = slot[0].size(0) - slot[3]
+                    take = min(want, avail)
+                    if take > 0:
+                        end = slot[3] + take
+                        cs.append(slot[0][slot[3]:end])
+                        vs.append(slot[1][slot[3]:end])
+                        pis.append(slot[2][slot[3]:end])
+                        slot[3] = end
+
+                if cs:
+                    yield (
+                        torch.cat(cs) if len(cs) > 1 else cs[0],
+                        torch.cat(vs) if len(vs) > 1 else vs[0],
+                        torch.cat(pis) if len(pis) > 1 else pis[0],
+                    )
+
+                # Evict drained slots, refill from prefetch
+                drained = [i for i, s in enumerate(active) if s[3] >= s[0].size(0)]
+                for i in reversed(drained):
+                    active.pop(i)
+                while len(active) < target and future is not None:
+                    active.append(future.result())
+                    future = executor.submit(_load, next_idx) if next_idx < len(order) else None
+                    if future is not None:
+                        next_idx += 1
 
 
 @tracy_zone
@@ -1984,29 +2027,32 @@ def _default_lr_state(config):
 
 
 def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, phase_name):
-    """Run one epoch of bootstrap training with continuous LR patience and early stopping.
-
-    Compares EMA now vs lookback_steps ago every step. After sustained plateau,
-    drops LR (up to max_drops times), then early stops after final drop plateaus.
+    """Run one epoch of bootstrap training with PyTorch-style ReduceLROnPlateau.
 
     Returns (steps_trained, early_stopped).
     """
+    from lr_scheduler import PlateauLRScheduler, ema_update
+
     bbs = config.train_batch_size
-    total_steps = sum(int(math.ceil(s / bbs)) for _, _, _, s in files)
-    lookback_steps = min(config.bootstrap_eval_interval, max(total_steps, 1))
+    epochs = max(1, config.bootstrap_epochs)
+    total_steps = sum(int(math.ceil(s / bbs)) for _, _, _, s in files) * epochs
+    eval_interval = min(config.bootstrap_eval_interval, max(total_steps, 1))
 
-    lr = config.bootstrap_lr
-    nn.set_lr(lr)
-    lr_drops = 0
-    final_lr_dropped = False
-    ema_beta = 0.99
+    scheduler = PlateauLRScheduler(
+        set_lr=nn.set_lr,
+        initial_lr=config.bootstrap_lr,
+        drop_factor=config.bootstrap_lr_drop_factor,
+        max_drops=config.bootstrap_lr_max_drops,
+        patience=eval_interval * config.bootstrap_lr_patience,
+        conv_patience=eval_interval * config.bootstrap_convergence_patience,
+        cooldown=eval_interval * config.bootstrap_lr_cooldown,
+        threshold=config.bootstrap_convergence_threshold,
+    )
     ema_loss = None
-    ema_history = []
-    plateau_steps = 0
-    lr_patience = lookback_steps * config.bootstrap_lr_patience
-    convergence_patience = lookback_steps * config.bootstrap_convergence_patience
 
-    streaming_ds = StreamingCompressedDataset(files, bbs, passes=1)
+    streaming_ds = StreamingCompressedDataset(
+        files, bbs, passes=epochs, active_files=config.streaming_active_files,
+    )
     dl = DataLoader(streaming_ds, batch_size=None, num_workers=0)
 
     current_step = 0
@@ -2033,7 +2079,7 @@ def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, 
         pi_val = l_pi.item()
         current_step += 1
         step_loss = v_val + pi_val
-        ema_loss = step_loss if ema_loss is None else ema_beta * ema_loss + (1 - ema_beta) * step_loss
+        ema_loss = ema_update(ema_loss, step_loss)
 
         run.track(v_val, name="loss", epoch=source_n,
                   step=total_train_steps + current_step, context={"type": "value"})
@@ -2042,43 +2088,24 @@ def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, 
         run.track(step_loss, name="loss", epoch=source_n,
                   step=total_train_steps + current_step, context={"type": "total"})
 
+        event, lr = scheduler.step(ema_loss)
+
         pbar.update()
         pbar.set_postfix(
             ema=f"{ema_loss:.4f}",
-            plat=f"{plateau_steps}",
+            best=f"{scheduler.best:.4f}",
+            bad=f"{scheduler.num_bad}",
             lr=f"{lr:.6f}",
         )
 
-        # Continuous plateau detection: compare EMA now vs lookback_steps ago
-        ema_history.append(ema_loss)
-        if len(ema_history) <= lookback_steps:
-            continue
-
-        past_ema = ema_history[-lookback_steps - 1]
-        rel_improvement = (past_ema - ema_loss) / (past_ema + 1e-8)
-        if rel_improvement < config.bootstrap_convergence_threshold:
-            plateau_steps += 1
-        else:
-            plateau_steps = 0
-
-        patience = convergence_patience if final_lr_dropped else lr_patience
-
-        if plateau_steps >= patience:
-            if not final_lr_dropped and lr_drops < config.bootstrap_lr_max_drops:
-                # LR drop
-                lr *= config.bootstrap_lr_drop_factor
-                lr_drops += 1
-                nn.set_lr(lr)
-                plateau_steps = 0
-                pbar.write(f"  LR drop #{lr_drops} at step {current_step}: lr={lr:.6f} (ema={ema_loss:.4f})")
-                if lr_drops >= config.bootstrap_lr_max_drops:
-                    final_lr_dropped = True
-            else:
-                # Early stop
-                pbar.write(f"  {phase_name} converged at step {current_step}/{total_steps} "
-                           f"(ema={ema_loss:.4f}, lr={lr:.6f})")
-                early_stopped = True
-                break
+        if event == "drop":
+            pbar.write(f"  LR drop #{scheduler.drops} at step {current_step}: "
+                       f"lr={lr:.6f} (best={scheduler.best:.4f}, cur={ema_loss:.4f})")
+        elif event == "stop":
+            pbar.write(f"  {phase_name} converged at step {current_step}/{total_steps} "
+                       f"(ema={ema_loss:.4f}, best={scheduler.best:.4f}, lr={lr:.6f})")
+            early_stopped = True
+            break
 
     pbar.close()
     if not early_stopped:

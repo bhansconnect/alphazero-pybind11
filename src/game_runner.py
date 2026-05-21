@@ -1300,7 +1300,7 @@ def _migrate_legacy_reservoir(config, reservoir_dir):
     if not legacy_triples:
         return
 
-    print(f"Migrating {len(legacy_triples)} legacy reservoir files to chunked format...")
+    tqdm.tqdm.write(f"Migrating {len(legacy_triples)} legacy reservoir files to chunked format...")
     chunk_size = config.reservoir_chunk_size
     chunks_filled = 0
     chunk_sizes_list = []
@@ -1375,7 +1375,7 @@ def _migrate_legacy_reservoir(config, reservoir_dir):
             if os.path.exists(p):
                 os.remove(p)
 
-    print(f"Migration complete: {chunks_filled} chunks created")
+    tqdm.tqdm.write(f"Migration complete: {chunks_filled} chunks created")
 
 
 def update_reservoir(config, paths, iteration, hist_size):
@@ -2068,7 +2068,7 @@ def _bootstrap_train_phase(nn, files, config, run, source_n, total_train_steps, 
 
     pbar.close()
     if not early_stopped:
-        print(f"  {phase_name} completed {current_step} steps")
+        tqdm.tqdm.write(f"  {phase_name} completed {current_step} steps")
 
     return current_step, early_stopped
 
@@ -3165,9 +3165,9 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             if os.path.exists(source_elo_path):
                 best_source_iter = int(np.argmax(source_elo[:source_n + 1]))
                 if elo[source_n] < elo[best_source_iter]:
-                    print(f"Warning: bootstrapped network (ELO {elo[source_n]:.0f}) is weaker than "
-                          f"source best at iter {best_source_iter} (ELO {elo[best_source_iter]:.0f}). "
-                          f"Training will continue and should improve.")
+                    tqdm.tqdm.write(f"Warning: bootstrapped network (ELO {elo[source_n]:.0f}) is weaker than "
+                                    f"source best at iter {best_source_iter} (ELO {elo[best_source_iter]:.0f}). "
+                                    f"Training will continue and should improve.")
 
         np.savetxt(os.path.join(experiment_dir, "elo.csv"), elo, delimiter=",")
         np.savetxt(os.path.join(experiment_dir, "win_rate.csv"), wr, delimiter=",")
@@ -3253,6 +3253,13 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
     if not _is_unified_game(config):
         wr_v = None
         elo_v = None
+
+    # Rolling history of (iter, mean_kl) for frozen-eval trajectory analysis.
+    # Built up across iters as data arrives; gaps (interval > 1, missing iters)
+    # are fine — linfit_slope handles non-consecutive x values. Resets on
+    # training restart; rebuilds in 3+ iters before slope is reported.
+    _FROZEN_KL_HIST_LEN = 30
+    frozen_kl_history = []
 
     with tqdm.tqdm(range(start, config.iterations), initial=start, total=config.iterations, desc="Build Amazing Network") as pbar:
         for i in pbar:
@@ -3587,8 +3594,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                             f"{next_net:04d}-{experiment_name}.pt",
                         )
                     except Exception as exc:
-                        print(f"  Diagnostics warning: failed to load checkpoint "
-                              f"{next_net}: {exc}")
+                        tqdm.tqdm.write(f"  Diagnostics warning: failed to load checkpoint "
+                                        f"{next_net}: {exc}")
 
                     if diag_nn is not None and wants_rank:
                         try:
@@ -3601,12 +3608,13 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                                           epoch=next_net, step=total_train_steps,
                                           context={})
                         except Exception as exc:
-                            print(f"  Effective rank warning: {exc}")
+                            tqdm.tqdm.write(f"  Effective rank warning: {exc}")
 
                     if diag_nn is not None and wants_frozen:
                         snap_ok = frozen_eval.ensure_snapshot(
                             config, paths, experiment_name,
                             config.frozen_eval_anchor_iter,
+                            fallback_checkpoint_dir=fallback_checkpoint_dir,
                         )
                         if snap_ok and (i % max(1, config.frozen_eval_interval) == 0):
                             try:
@@ -3620,9 +3628,25 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                                     epoch=next_net,
                                     step=total_train_steps,
                                 )
+                                # Trajectory slope: append the variant-averaged
+                                # KL to rolling history, fit a slope, log + print.
+                                kls = [vm["kl_mcts_net"] for vm in metrics.values()
+                                       if "kl_mcts_net" in vm]
+                                if kls:
+                                    mean_kl = sum(kls) / len(kls)
+                                    frozen_kl_history.append((next_net, mean_kl))
+                                    if len(frozen_kl_history) > _FROZEN_KL_HIST_LEN:
+                                        frozen_kl_history = frozen_kl_history[
+                                            -_FROZEN_KL_HIST_LEN:]
+                                    frozen_eval.print_kl_health(
+                                        run, frozen_kl_history,
+                                        epoch=next_net,
+                                        step=total_train_steps,
+                                        anchor_iter=config.frozen_eval_anchor_iter,
+                                    )
                             except Exception as exc:
-                                print(f"  Frozen eval warning: skipped iter "
-                                      f"{next_net}: {exc}")
+                                tqdm.tqdm.write(f"  Frozen eval warning: skipped iter "
+                                                f"{next_net}: {exc}")
 
                     if diag_nn is not None:
                         del diag_nn

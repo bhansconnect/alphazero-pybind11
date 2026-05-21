@@ -13,9 +13,11 @@ import argparse
 import itertools
 import math
 import os
+import queue
 import re
 import readline
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -30,7 +32,7 @@ from game_runner import (
     glob_file_triples,
     calc_hist_size,
     StreamingCompressedDataset,
-    _load_and_select,
+    _parallel_load_triples,
 )
 from lr_scheduler import PlateauLRScheduler, ema_update
 from neural_net import NNArgs, NNWrapper, NNArch, get_device
@@ -334,7 +336,10 @@ def benchmark_inference(nn_wrapper, game, batch_size):
 
 
 def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
-                 lr, log_interval, device, label, early_stop=True, active_files=8):
+                 lr, log_interval, device, label, early_stop=True, active_files=8,
+                 lr_patience=3, lr_conv_patience=3, lr_cooldown=1,
+                 lr_drop_factor=0.3, lr_max_drops=3, lr_threshold=0.002,
+                 shuffle_seed=None):
     """Train a single config by streaming through file triples.
 
     Uses PyTorch ReduceLROnPlateau-style LR schedule via PlateauLRScheduler.
@@ -344,7 +349,7 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
     target_steps = int(epochs * n_samples / batch_size)
     passes = max(1, math.ceil(epochs))
     dataset = StreamingCompressedDataset(file_triples, batch_size, passes=passes,
-                                         active_files=active_files)
+                                         active_files=active_files, seed=shuffle_seed)
     dl = DataLoader(dataset, batch_size=None, num_workers=0)
 
     nn_wrapper.nnet.train()
@@ -368,25 +373,25 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
     scheduler = PlateauLRScheduler(
         set_lr=_set_lr,
         initial_lr=lr,
-        drop_factor=0.3,
-        max_drops=3,
-        patience=log_interval * 3,
-        conv_patience=log_interval * 3,
-        cooldown=log_interval,
-        threshold=0.002,
+        drop_factor=lr_drop_factor,
+        max_drops=lr_max_drops,
+        patience=log_interval * lr_patience,
+        conv_patience=log_interval * lr_conv_patience,
+        cooldown=log_interval * lr_cooldown,
+        threshold=lr_threshold,
     ) if early_stop else None
     ema_loss = None
 
     actual_steps = target_steps
     pbar = tqdm_module.tqdm(total=target_steps, desc=f"  {label}", leave=False)
     t0 = time.perf_counter()
-    for step_i, (c_batch, v_batch, pi_batch) in enumerate(dl):
+    for step_i, (c_batch, v_batch, pi_batch) in enumerate(_maybe_prefetch(dl, device)):
         if step_i >= target_steps:
             break
 
-        c_batch = c_batch.float().to(device, non_blocking=non_blocking)
-        v_batch = v_batch.float().to(device, non_blocking=non_blocking)
-        pi_batch = pi_batch.float().to(device, non_blocking=non_blocking)
+        c_batch = c_batch.to(device, non_blocking=non_blocking)
+        v_batch = v_batch.to(device, non_blocking=non_blocking)
+        pi_batch = pi_batch.to(device, non_blocking=non_blocking)
 
         optimizer.zero_grad()
         out_v, out_pi = nn_wrapper.nnet(c_batch)
@@ -518,6 +523,62 @@ def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
     }
 
 
+class _PinPrefetch:
+    """Background prefetch: pulls (c, v, pi) batches from source, casts to
+    fp32 + pins on a worker thread, queues them. Lets pin cost overlap
+    with GPU compute on the previous batch.
+    """
+    _SENTINEL = object()
+
+    def __init__(self, source_iter, queue_depth=2):
+        self._q = queue.Queue(maxsize=queue_depth)
+        self._stop = threading.Event()
+        self._exc = None
+        self._thread = threading.Thread(
+            target=self._worker, args=(source_iter,), daemon=True)
+        self._thread.start()
+
+    def _worker(self, source_iter):
+        try:
+            for batch in source_iter:
+                if self._stop.is_set():
+                    break
+                pinned = tuple(t.float().pin_memory() for t in batch)
+                while not self._stop.is_set():
+                    try:
+                        self._q.put(pinned, timeout=0.1)
+                        break
+                    except queue.Full:
+                        continue
+        except BaseException as e:
+            self._exc = e
+        finally:
+            try:
+                self._q.put(self._SENTINEL, timeout=0.1)
+            except queue.Full:
+                pass
+
+    def __iter__(self):
+        try:
+            while True:
+                item = self._q.get()
+                if item is self._SENTINEL:
+                    if self._exc is not None:
+                        raise self._exc
+                    return
+                yield item
+        finally:
+            self._stop.set()
+
+
+def _maybe_prefetch(batch_iter, device):
+    """On CUDA, wrap iter in a background pin+float prefetch. Elsewhere,
+    just float-cast lazily on the main thread."""
+    if device.type == 'cuda':
+        return _PinPrefetch(batch_iter)
+    return ((c.float(), v.float(), pi.float()) for c, v, pi in batch_iter)
+
+
 def _accumulate_eval_metrics(nn_wrapper, batch_iter, device):
     """Run forward + 8 metric accumulators over a (c, v, pi) batch iterator.
 
@@ -539,10 +600,10 @@ def _accumulate_eval_metrics(nn_wrapper, batch_iter, device):
     eps = 1e-10
 
     with torch.no_grad():
-        for c, v, pi in batch_iter:
-            c = c.float().to(device, non_blocking=non_blocking)
-            v = v.float().to(device, non_blocking=non_blocking)
-            pi = pi.float().to(device, non_blocking=non_blocking)
+        for c, v, pi in _maybe_prefetch(batch_iter, device):
+            c = c.to(device, non_blocking=non_blocking)
+            v = v.to(device, non_blocking=non_blocking)
+            pi = pi.to(device, non_blocking=non_blocking)
             bs = c.shape[0]
 
             if use_amp:
@@ -607,43 +668,43 @@ def eval_loss_streaming(nn_wrapper, file_triples, batch_size, device):
     return _accumulate_eval_metrics(nn_wrapper, dl, device)
 
 
-def eval_loss_sampled(nn_wrapper, file_triples, batch_size, device, n_eval):
-    """Eval over a uniform-random subsample of n_eval positions.
+def eval_loss_sampled(nn_wrapper, file_triples, batch_size, device, n_eval,
+                      num_workers=8, seed=None):
+    """Eval over a uniform-random subsample of ~n_eval positions.
 
-    Each position in the global pool of size sum(size_i) has equal
-    probability n_eval/total of being selected, regardless of which file
-    (iteration) it lives in or that file's size.
+    Systematic (stratified) file-level sampling: pick k = round(q * F)
+    files spread evenly across the F-file iteration range with a single
+    random offset. Each file (and thus each position) has probability
+    k/F ≈ q of being included — same per-position uniformity as plain
+    Bernoulli, but guaranteed even coverage of the iteration range (no
+    gaps wider than F/k).
+
+    `seed` controls the offset RNG: passing the same seed across configs
+    in one pareto run picks the same files for every config, so
+    config-to-config metric comparisons have zero sampling noise.
+
+    Selected files are loaded in parallel (with a tqdm progress bar) on
+    the main thread — no generator-inside-a-thread, ctrl-C works, and
+    failures surface immediately.
     """
     sizes = np.array([s for _, _, _, s in file_triples], dtype=np.int64)
     total = int(sizes.sum())
     n_eval = min(int(n_eval), total)
+    q = n_eval / total
+    F = len(file_triples)
 
-    rng = np.random.default_rng()
-    selected = rng.choice(total, size=n_eval, replace=False)
+    rng = np.random.default_rng(seed)
+    k = max(1, min(F, int(round(q * F))))
+    stride = F / k
+    offset = rng.random() * stride
+    indices = sorted({min(F - 1, int(offset + i * stride)) for i in range(k)})
+    selected = [file_triples[i] for i in indices]
 
-    offsets = np.concatenate([[0], np.cumsum(sizes)])
-    file_idx = np.searchsorted(offsets, selected, side='right') - 1
-    local_idx = selected - offsets[file_idx]
-
-    order = np.argsort(file_idx, kind='stable')
-    file_idx = file_idx[order]
-    local_idx = local_idx[order]
-    boundaries = np.flatnonzero(np.diff(file_idx)) + 1
-    groups = np.split(np.stack([file_idx, local_idx], axis=1), boundaries)
-
-    c_parts, v_parts, pi_parts = [], [], []
-    for g in groups:
-        fi = int(g[0, 0])
-        idxs = g[:, 1].tolist()
-        c_path, v_path, pi_path, _ = file_triples[fi]
-        c_sel, v_sel, pi_sel = _load_and_select((c_path, v_path, pi_path, idxs))
-        c_parts.append(c_sel)
-        v_parts.append(v_sel)
-        pi_parts.append(pi_sel)
-
-    c_all = torch.cat(c_parts)
-    v_all = torch.cat(v_parts)
-    pi_all = torch.cat(pi_parts)
+    parts = _parallel_load_triples(selected, num_workers, desc="  load sample")
+    c_all = torch.cat([p[0] for p in parts])
+    v_all = torch.cat([p[1] for p in parts])
+    pi_all = torch.cat([p[2] for p in parts])
+    del parts
 
     perm = torch.randperm(c_all.shape[0])
     c_all = c_all[perm]
@@ -651,7 +712,8 @@ def eval_loss_sampled(nn_wrapper, file_triples, batch_size, device, n_eval):
     pi_all = pi_all[perm]
 
     def batch_iter():
-        for start in range(0, c_all.shape[0], batch_size):
+        n = c_all.shape[0]
+        for start in range(0, n, batch_size):
             end = start + batch_size
             yield c_all[start:end], v_all[start:end], pi_all[start:end]
 
@@ -1038,7 +1100,7 @@ def _parse_selection_input(text, n):
     return sorted(i for i in indices if 0 <= i < n)
 
 
-def select_configs_for_training(configs, infer_results, steps):
+def select_configs_for_training(configs, infer_results, steps, auto_accept=False):
     """Show time estimates and let user select which configs to train.
 
     Returns filtered (configs, infer_results).
@@ -1055,6 +1117,12 @@ def select_configs_for_training(configs, infer_results, steps):
 
     total_all = sum(e[3] for e in estimates)
     print(f"\nEstimated total training time: {total_all:.1f}m")
+
+    if auto_accept:
+        for label, params, infer_ms, total_min in estimates:
+            print(f"  {label:<22} ({params:>10,} params, {infer_ms:.1f}ms, ~{total_min:.1f}m)")
+        print(f"Auto-accepted all {len(configs)} configs.")
+        return configs, infer_results
 
     # Try simple-term-menu for interactive selection
     try:
@@ -1121,9 +1189,23 @@ def main():
                         help="Cross-file shuffle pool size for StreamingCompressedDataset (default: 8)")
     parser.add_argument("--no-charts", action="store_true", help="Disable chart generation")
     parser.add_argument("--no-early-stop", action="store_true", help="Disable early stopping on plateau")
+    parser.add_argument("--lr-patience", type=int, default=3,
+                        help="LR-drop patience in units of log-interval (default: 3)")
+    parser.add_argument("--lr-conv-patience", type=int, default=3,
+                        help="Post-final-drop convergence patience in units of log-interval (default: 3)")
+    parser.add_argument("--lr-cooldown", type=int, default=1,
+                        help="Post-drop cooldown in units of log-interval (default: 1)")
+    parser.add_argument("--lr-drop-factor", type=float, default=0.3,
+                        help="Multiplicative LR drop factor (default: 0.3)")
+    parser.add_argument("--lr-max-drops", type=int, default=3,
+                        help="Max number of LR drops before final convergence phase (default: 3)")
+    parser.add_argument("--lr-threshold", type=float, default=0.002,
+                        help="Relative improvement threshold to count as a new best (default: 0.002)")
     parser.add_argument("--eval-samples", type=int, default=None,
                         help="Final eval on a uniform random subsample of N positions "
                              "from the window (unbiased per-position). Default: full pass.")
+    parser.add_argument("--yes", "-y", action="store_true",
+                        help="Auto-accept all networks; skip the interactive subselect prompt.")
     args = parser.parse_args()
 
     if not os.path.isdir(args.source_dir):
@@ -1171,12 +1253,18 @@ def main():
 
     # 3c. Interactive selection with time estimates
     configs, infer_results = select_configs_for_training(
-        configs, infer_results, target_steps)
+        configs, infer_results, target_steps, auto_accept=args.yes)
     if not configs:
         print("No configs selected. Exiting.")
         sys.exit(0)
 
     # 4. Train + eval each config (with OOM recovery)
+    train_seed = int(np.random.SeedSequence().entropy & 0xFFFFFFFF)
+    print(f"Train shuffle seed: {train_seed} (shared across configs this run)")
+    eval_seed = None
+    if args.eval_samples is not None:
+        eval_seed = np.random.SeedSequence().entropy
+        print(f"Eval sample seed: {eval_seed} (shared across configs this run)")
     results: List[BenchResult] = []
 
     for label, nn_args in configs:
@@ -1194,6 +1282,13 @@ def main():
                 nn_train, file_triples, n_samples, args.epochs, args.batch_size,
                 args.lr, args.log_interval, device, label,
                 early_stop=not args.no_early_stop, active_files=args.active_files,
+                lr_patience=args.lr_patience,
+                lr_conv_patience=args.lr_conv_patience,
+                lr_cooldown=args.lr_cooldown,
+                lr_drop_factor=args.lr_drop_factor,
+                lr_max_drops=args.lr_max_drops,
+                lr_threshold=args.lr_threshold,
+                shuffle_seed=train_seed,
             )
             mem_mb = 0
             if device.type == 'cuda':
@@ -1203,9 +1298,12 @@ def main():
 
             if args.eval_samples is not None:
                 eval_n = min(args.eval_samples, n_samples)
-                print(f"  Final eval + metrics... (sampled {eval_n:,} of {n_samples:,})")
+                frac = eval_n / max(n_samples, 1)
+                print(f"  Final eval + metrics... (~{eval_n:,} of {n_samples:,}; "
+                      f"~{frac * len(file_triples):.0f}/{len(file_triples)} files)")
                 metrics = eval_loss_sampled(
-                    nn_train, file_triples, args.batch_size, device, eval_n)
+                    nn_train, file_triples, args.batch_size, device, eval_n,
+                    seed=eval_seed)
             else:
                 print("  Final eval + metrics...")
                 metrics = eval_loss_streaming(nn_train, file_triples, args.batch_size, device)

@@ -108,6 +108,9 @@ class TrainConfig:
     result_workers: int = 2
     data_workers: int = -1  # -1 = os.cpu_count() - 1
 
+    # Training I/O
+    streaming_active_files: int = 8
+
     # Resignation
     resign_percent: float = 0.02
     resign_playthrough_percent: float = 0.20
@@ -130,13 +133,15 @@ class TrainConfig:
     # Bootstrap
     bootstrap_window_only: bool = False
     bootstrap_compare_past: int = 5
-    bootstrap_eval_interval: int = 200
+    bootstrap_epochs: int = 1
+    bootstrap_eval_interval: int = 500
     bootstrap_lr: float = 0.01
     bootstrap_lr_drop_factor: float = 0.3
-    bootstrap_lr_patience: int = 4
+    bootstrap_lr_patience: int = 3
+    bootstrap_lr_cooldown: int = 1
     bootstrap_lr_max_drops: int = 3
-    bootstrap_convergence_threshold: float = 0.005
-    bootstrap_convergence_patience: int = 5
+    bootstrap_convergence_threshold: float = 0.002
+    bootstrap_convergence_patience: int = 3
 
     # Inference optimization (AMP autocast + compile on GPU, skipped on CPU)
     amp_inference: bool = True

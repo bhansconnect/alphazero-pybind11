@@ -3601,8 +3601,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                             f"{next_net:04d}-{experiment_name}.pt",
                         )
                     except Exception as exc:
-                        tqdm.tqdm.write(f"  Diagnostics warning: failed to load checkpoint "
-                                        f"{next_net}: {exc}")
+                        tqdm.tqdm.write(f"  Diagnostics warning [iter {next_net}]: failed to "
+                                        f"load checkpoint: {exc}")
 
                     if diag_nn is not None and wants_rank:
                         try:
@@ -3615,7 +3615,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                                           epoch=next_net, step=total_train_steps,
                                           context={})
                         except Exception as exc:
-                            tqdm.tqdm.write(f"  Effective rank warning: {exc}")
+                            tqdm.tqdm.write(f"  Effective rank warning [iter {next_net}]: {exc}")
 
                     if diag_nn is not None and wants_frozen:
                         snap_ok = frozen_eval.ensure_snapshot(
@@ -3656,8 +3656,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                                         anchor_iter=config.frozen_eval_anchor_iter,
                                     )
                             except Exception as exc:
-                                tqdm.tqdm.write(f"  Frozen eval warning: skipped iter "
-                                                f"{next_net}: {exc}")
+                                tqdm.tqdm.write(f"  Frozen eval warning [iter {next_net}]: "
+                                                f"skipped: {exc}")
 
                     if diag_nn is not None:
                         del diag_nn

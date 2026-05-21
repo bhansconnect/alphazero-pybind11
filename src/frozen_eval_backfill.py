@@ -135,8 +135,17 @@ def main():
     interval = prompt_int("Interval (every N iters)", default=1, lo=1)
     print()
 
-    # Resume the aim run; first time around, this also confirms write access.
-    run = _resume_aim_run(experiment_dir)
+    # Resume the aim run (or no-op out via Dummy if user opts out). The
+    # on-disk kl_history is written regardless, so the next training resume
+    # still picks up the trajectory points produced here.
+    upload_to_aim = prompt_yes_no("Upload metrics to aim?", default=True)
+    if upload_to_aim:
+        run = _resume_aim_run(experiment_dir)
+    else:
+        class _Dummy:
+            def track(self, *a, **kw):
+                pass
+        run = _Dummy()
 
     # Ensure the snapshot. This may take 30-60s if not already created.
     if not frozen_eval.ensure_snapshot(
@@ -160,9 +169,15 @@ def main():
 
     # Rolling history for trajectory slope, mirrors game_runner's live behavior.
     # Backfill iterates in iter-ascending order, so the history grows naturally
-    # — same slope semantics as during training.
+    # — same slope semantics as during training. Load any prior on-disk points
+    # for iters earlier than our start so partial backfills (e.g. start=20)
+    # still have the context needed to fit a slope from the first iter.
     _FROZEN_KL_HIST_LEN = 30
-    kl_history = []
+    prior_history = frozen_eval.load_kl_history(paths, anchor, max_iter=start)
+    kl_history = prior_history[-_FROZEN_KL_HIST_LEN:] if prior_history else []
+    if prior_history:
+        print(f"Loaded {len(prior_history)} prior kl_history point(s) from disk "
+              f"(iters < {start}).")
 
     pbar = tqdm.tqdm(iters_to_run, desc="Backfilling", unit="iter")
     for it in pbar:
@@ -191,6 +206,7 @@ def main():
                    if "kl_mcts_net" in vm]
             if kls:
                 mean_kl = sum(kls) / len(kls)
+                frozen_eval.append_kl_history(paths, anchor, it, mean_kl)
                 kl_history.append((it, mean_kl))
                 if len(kl_history) > _FROZEN_KL_HIST_LEN:
                     kl_history = kl_history[-_FROZEN_KL_HIST_LEN:]

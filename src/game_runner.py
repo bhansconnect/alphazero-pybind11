@@ -3256,10 +3256,17 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
     # Rolling history of (iter, mean_kl) for frozen-eval trajectory analysis.
     # Built up across iters as data arrives; gaps (interval > 1, missing iters)
-    # are fine — linfit_slope handles non-consecutive x values. Resets on
-    # training restart; rebuilds in 3+ iters before slope is reported.
+    # are fine — linfit_slope handles non-consecutive x values. Persisted to
+    # disk via frozen_eval.append_kl_history, so resumes / restarts pick up
+    # the prior trajectory instead of needing 3+ fresh iters to print a slope.
     _FROZEN_KL_HIST_LEN = 30
     frozen_kl_history = []
+    if config.frozen_eval_anchor_iter > 0 and start > 0:
+        prior = frozen_eval.load_kl_history(
+            paths, config.frozen_eval_anchor_iter, max_iter=start,
+        )
+        if prior:
+            frozen_kl_history = prior[-_FROZEN_KL_HIST_LEN:]
 
     with tqdm.tqdm(range(start, config.iterations), initial=start, total=config.iterations, desc="Build Amazing Network") as pbar:
         for i in pbar:
@@ -3634,6 +3641,10 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                                        if "kl_mcts_net" in vm]
                                 if kls:
                                     mean_kl = sum(kls) / len(kls)
+                                    frozen_eval.append_kl_history(
+                                        paths, config.frozen_eval_anchor_iter,
+                                        next_net, mean_kl,
+                                    )
                                     frozen_kl_history.append((next_net, mean_kl))
                                     if len(frozen_kl_history) > _FROZEN_KL_HIST_LEN:
                                         frozen_kl_history = frozen_kl_history[

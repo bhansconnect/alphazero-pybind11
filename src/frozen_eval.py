@@ -47,6 +47,62 @@ def _states_path(paths: dict, anchor_iter: int) -> str:
     return os.path.join(frozen_set_dir(paths, anchor_iter), "states.pkl")
 
 
+def _kl_history_path(paths: dict, anchor_iter: int) -> str:
+    return os.path.join(frozen_set_dir(paths, anchor_iter), "kl_history.json")
+
+
+def load_kl_history(paths: dict, anchor_iter: int,
+                    max_iter: Optional[int] = None) -> list:
+    """Load persisted (iter, mean_kl) points for this anchor, sorted by iter.
+
+    `max_iter`, if given, filters to entries with iter < max_iter — useful so
+    that on training resume (or a partial backfill that starts at iter N) the
+    trajectory slope has the prior points it needs without double-logging the
+    current iter.
+    """
+    import json
+    p = _kl_history_path(paths, anchor_iter)
+    if not os.path.isfile(p):
+        return []
+    try:
+        with open(p) as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    entries = [(int(k), float(v)) for k, v in data.items()]
+    if max_iter is not None:
+        entries = [(i, v) for i, v in entries if i < max_iter]
+    entries.sort(key=lambda x: x[0])
+    return entries
+
+
+def append_kl_history(paths: dict, anchor_iter: int,
+                      iter_num: int, mean_kl: float) -> None:
+    """Persist a single (iter, mean_kl) point. Overwrites prior entry for the
+    same iter, so re-running backfill is idempotent."""
+    import json
+    p = _kl_history_path(paths, anchor_iter)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    data = {}
+    if os.path.isfile(p):
+        try:
+            with open(p) as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    data[str(int(iter_num))] = float(mean_kl)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), suffix=".json.tmp")
+    os.close(fd)
+    try:
+        with open(tmp, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, p)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
 def snapshot_exists(paths: dict, anchor_iter: int) -> bool:
     """True iff the snapshot file exists AND is non-empty. Rejects truncated
     files left over from a previous failed write."""
@@ -185,10 +241,7 @@ def print_kl_health(run, history, *, epoch, step, anchor_iter) -> None:
             run.track(
                 slope, name="frozen_eval/kl_slope_recent",
                 epoch=epoch, step=step,
-                context={
-                    "anchor_iter": f"{anchor_iter:04d}",
-                    "window_points": str(n),
-                },
+                context={"anchor_iter": f"{anchor_iter:04d}"},
             )
         except Exception:
             pass

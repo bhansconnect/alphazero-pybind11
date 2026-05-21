@@ -1638,7 +1638,7 @@ class StreamingCompressedDataset(IterableDataset):
 
 @tracy_zone
 def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth,
-              variant_probs=None):
+              variant_probs=None, fallback_checkpoint_dir=None):
     import neural_net
 
     Game = config.Game
@@ -1666,9 +1666,8 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         nn = RandPlayer()
         params.max_cache_size = 0
     else:
-        nn = neural_net.NNWrapper.load_checkpoint(
-            Game, paths["checkpoint"], f"{best:04d}-{experiment_name}.pt"
-        )
+        nn = _resolve_checkpoint(Game, paths["checkpoint"], experiment_name,
+                                 best, fallback_checkpoint_dir)
         prepare_inference_model(nn, config)
 
     players = [nn] * Game.NUM_PLAYERS()
@@ -3206,7 +3205,6 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     sz = min(len(tmp), total_agents)
                     ev[:sz] = tmp[:sz]
                 elo_v.append(ev)
-        current_best = np.argmax(elo[: start + 1])
         total_train_steps = int(
             np.genfromtxt(os.path.join(experiment_dir, "total_train_steps.txt"))
         )
@@ -3221,6 +3219,25 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         if os.path.exists(bootstrap_meta_path):
             with open(bootstrap_meta_path) as f:
                 fallback_checkpoint_dir = json.load(f).get("source_checkpoint_dir")
+
+        # Use the gating-derived best (matches what was tracked to aim during
+        # the prior run). argmax(elo) can point at a slot whose checkpoint
+        # never existed locally — e.g. after bootstrap, the source's elo array
+        # is copied verbatim but the source's best checkpoint is renamed into
+        # slot `source_n` in the new dir.
+        current_best = int(lr_state.get('last_best_iter', 0))
+        if current_best > start or not (
+            os.path.exists(os.path.join(paths["checkpoint"], f"{current_best:04d}-{experiment_name}.pt"))
+            or (fallback_checkpoint_dir and glob.glob(
+                os.path.join(fallback_checkpoint_dir, f"{current_best:04d}-*.pt")))
+        ):
+            # Legacy run with no lr_state, or stale value — fall back to
+            # argmax restricted to slots whose checkpoint actually exists.
+            candidates = [
+                i for i in range(start + 1)
+                if os.path.exists(os.path.join(paths["checkpoint"], f"{i:04d}-{experiment_name}.pt"))
+            ]
+            current_best = max(candidates, key=lambda i: elo[i]) if candidates else 0
 
     postfix = {"best": current_best}
     panel = [current_best]
@@ -3329,6 +3346,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     config.selfplay_mcts_visits,
                     config.fast_mcts_visits,
                     variant_probs=unified_probs,
+                    fallback_checkpoint_dir=fallback_checkpoint_dir,
                 )
                 for j in range(len(sp.win_rates) - 1):
                     run.track(sp.win_rates[j], name="win_rate", epoch=i, step=total_train_steps, context={"vs": "self", "player": j + 1, "from": "all_games"})

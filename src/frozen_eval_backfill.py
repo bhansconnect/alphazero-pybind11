@@ -1,8 +1,8 @@
 """Interactive backfill for frozen eval metrics.
 
-Use when you've set `frozen_eval_anchor_iter` mid-training and want the
+Use when you've set `frozen_eval_anchor_iters` mid-training and want the
 metric trace populated from iter 0 (or some earlier point) to current.
-Also works for re-running evals against a different anchor.
+Also works for re-running evals against a different set of anchors.
 
 UX mirrors src/mcts_analysis.py — fully interactive, no CLI flags required.
 """
@@ -129,15 +129,30 @@ def main():
           f"({len(iters)} checkpoints{src_note})")
     print()
 
-    anchor = prompt_int("Anchor iteration", default=latest, lo=earliest, hi=latest)
+    default_anchors_csv = ",".join(str(a) for a in config.frozen_eval_anchor_iters) \
+        if config.frozen_eval_anchor_iters else str(latest)
+    while True:
+        raw = input(f"Anchor iterations (comma-separated) [{default_anchors_csv}]: ").strip()
+        if not raw:
+            raw = default_anchors_csv
+        try:
+            anchors = sorted({int(x.strip()) for x in raw.split(",") if x.strip()})
+        except ValueError:
+            print("  Could not parse; expected comma-separated integers.")
+            continue
+        bad = [a for a in anchors if a < earliest or a > latest]
+        if bad:
+            print(f"  Out of range: {bad}. Valid range: {earliest}..{latest}.")
+            continue
+        if not anchors:
+            print("  Provide at least one anchor.")
+            continue
+        break
     start = prompt_int("Start iter (inclusive)", default=earliest, lo=earliest, hi=latest)
     end = prompt_int("End iter (inclusive)", default=latest, lo=start, hi=latest)
     interval = prompt_int("Interval (every N iters)", default=1, lo=1)
     print()
 
-    # Resume the aim run (or no-op out via Dummy if user opts out). The
-    # on-disk kl_history is written regardless, so the next training resume
-    # still picks up the trajectory points produced here.
     upload_to_aim = prompt_yes_no("Upload metrics to aim?", default=True)
     if upload_to_aim:
         run = _resume_aim_run(experiment_dir)
@@ -147,37 +162,40 @@ def main():
                 pass
         run = _Dummy()
 
-    # Ensure the snapshot. This may take 30-60s if not already created.
-    if not frozen_eval.ensure_snapshot(
-        config, paths, experiment_name, anchor,
-        fallback_checkpoint_dir=fallback_dir,
-    ):
-        msg = (f"\nError: anchor checkpoint {anchor:04d}-{experiment_name}.pt "
-               f"not found in {paths['checkpoint']}")
-        if fallback_dir:
-            msg += f" or fallback {fallback_dir}"
-        print(msg + ". Pick a different anchor.")
+    valid_anchors = []
+    for anchor in anchors:
+        if frozen_eval.ensure_snapshot(
+            config, paths, experiment_name, anchor,
+            fallback_checkpoint_dir=fallback_dir,
+        ):
+            valid_anchors.append(anchor)
+        else:
+            msg = (f"  Warning: anchor checkpoint {anchor:04d}-{experiment_name}.pt "
+                   f"not found in {paths['checkpoint']}")
+            if fallback_dir:
+                msg += f" or fallback {fallback_dir}"
+            print(msg + " — skipping this anchor.")
+    if not valid_anchors:
+        print("No valid anchors. Pick different anchor iters.")
         return
 
     iters_to_run = [it for it in iters if start <= it <= end and (it - start) % interval == 0]
+    anchors_str = ", ".join(f"{a:04d}" for a in valid_anchors)
     print(f"\nWill run frozen eval for {len(iters_to_run)} checkpoints against "
-          f"anchor {anchor:04d}.")
+          f"{len(valid_anchors)} anchor(s): {anchors_str}.")
     if not prompt_yes_no("Proceed?", default=True):
         return
 
     import neural_net  # deferred to avoid import cost when user bails out
 
-    # Rolling history for trajectory slope, mirrors game_runner's live behavior.
-    # Backfill iterates in iter-ascending order, so the history grows naturally
-    # — same slope semantics as during training. Load any prior on-disk points
-    # for iters earlier than our start so partial backfills (e.g. start=20)
-    # still have the context needed to fit a slope from the first iter.
     _FROZEN_KL_HIST_LEN = 30
-    prior_history = frozen_eval.load_kl_history(paths, anchor, max_iter=start)
-    kl_history = prior_history[-_FROZEN_KL_HIST_LEN:] if prior_history else []
-    if prior_history:
-        print(f"Loaded {len(prior_history)} prior kl_history point(s) from disk "
-              f"(iters < {start}).")
+    kl_history_by_anchor = {}
+    for anchor in valid_anchors:
+        prior = frozen_eval.load_kl_history(paths, anchor, max_iter=start)
+        kl_history_by_anchor[anchor] = prior[-_FROZEN_KL_HIST_LEN:] if prior else []
+        if prior:
+            print(f"  anchor {anchor:04d}: loaded {len(prior)} prior kl_history "
+                  f"point(s) from disk (iters < {start}).")
 
     pbar = tqdm.tqdm(iters_to_run, desc="Backfilling", unit="iter")
     for it in pbar:
@@ -196,24 +214,25 @@ def main():
         except Exception as exc:
             tqdm.tqdm.write(f"  Skipping iter {it}: {exc}")
             continue
-        metrics = frozen_eval.evaluate_checkpoint(nn, config, paths, anchor)
-        frozen_eval.log_metrics_to_aim(
-            run, metrics, anchor_iter=anchor, epoch=it, step=int(it),
-        )
-        # Trajectory: append variant-averaged KL, fit slope, log + print.
-        if metrics:
-            kls = [vm["kl_mcts_net"] for vm in metrics.values()
-                   if "kl_mcts_net" in vm]
-            if kls:
-                mean_kl = sum(kls) / len(kls)
-                frozen_eval.append_kl_history(paths, anchor, it, mean_kl)
-                kl_history.append((it, mean_kl))
-                if len(kl_history) > _FROZEN_KL_HIST_LEN:
-                    kl_history = kl_history[-_FROZEN_KL_HIST_LEN:]
-                frozen_eval.print_kl_health(
-                    run, kl_history,
-                    epoch=it, step=int(it), anchor_iter=anchor,
-                )
+        for anchor in valid_anchors:
+            metrics = frozen_eval.evaluate_checkpoint(nn, config, paths, anchor)
+            frozen_eval.log_metrics_to_aim(
+                run, metrics, anchor_iter=anchor, epoch=it, step=int(it),
+            )
+            if metrics:
+                kls = [vm["kl_mcts_net"] for vm in metrics.values()
+                       if "kl_mcts_net" in vm]
+                if kls:
+                    mean_kl = sum(kls) / len(kls)
+                    frozen_eval.append_kl_history(paths, anchor, it, mean_kl)
+                    hist = kl_history_by_anchor[anchor]
+                    hist.append((it, mean_kl))
+                    if len(hist) > _FROZEN_KL_HIST_LEN:
+                        kl_history_by_anchor[anchor] = hist[-_FROZEN_KL_HIST_LEN:]
+                    frozen_eval.print_kl_health(
+                        run, kl_history_by_anchor[anchor],
+                        epoch=it, step=int(it), anchor_iter=anchor,
+                    )
         del nn
         import gc
         gc.collect()

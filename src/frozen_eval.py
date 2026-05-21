@@ -218,12 +218,13 @@ def print_kl_health(run, history, *, epoch, step, anchor_iter) -> None:
     if len(history) < 3:
         if history:
             it_now, kl_now = history[-1]
-            tqdm.write(f"  frozen_eval health: KL={kl_now:.3f}  "
+            tqdm.write(f"  frozen_eval health [iter {it_now}]: KL={kl_now:.3f}  "
                        f"(slope needs 3+ points; have {len(history)})")
         return
 
+    current_iter = history[-1][0]
     current_kl = history[-1][1]
-    span = history[-1][0] - history[0][0]
+    span = current_iter - history[0][0]
     slope = linfit_slope(history)
     n = len(history)
 
@@ -248,7 +249,7 @@ def print_kl_health(run, history, *, epoch, step, anchor_iter) -> None:
 
     sign = "+" if slope >= 0 else ""
     tqdm.write(
-        f"  frozen_eval health: KL={current_kl:.3f}  "
+        f"  frozen_eval health [iter {current_iter}]: KL={current_kl:.3f}  "
         f"slope={sign}{slope:.4f}/iter "
         f"over {n} pts (span {span} iters)  [{status}]"
     )

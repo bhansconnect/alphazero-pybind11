@@ -300,6 +300,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("start_temp", &PlayParams::start_temp)
       .def_readwrite("final_temp", &PlayParams::final_temp)
       .def_readwrite("temp_decay_half_life", &PlayParams::temp_decay_half_life)
+      .def_readwrite("temp_decay_half_life_by_variant",
+                     &PlayParams::temp_decay_half_life_by_variant)
       .def_readwrite("history_enabled", &PlayParams::history_enabled)
       .def_readwrite("tree_reuse", &PlayParams::tree_reuse)
       .def_readwrite("self_play", &PlayParams::self_play)

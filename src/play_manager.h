@@ -64,6 +64,10 @@ struct PlayParams {
   float start_temp = 1.0;
   float final_temp = 1.0;
   float temp_decay_half_life = 0;
+  // Optional per-variant half-life, indexed by gs->get_variant_id().
+  // When non-empty, overrides temp_decay_half_life for games with a valid
+  // variant id; falls back to the scalar otherwise.
+  std::vector<float> temp_decay_half_life_by_variant{};
   bool history_enabled = false;
   bool self_play = false;
   bool tree_reuse = true;

@@ -3545,6 +3545,18 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                                       epoch=i, step=total_train_steps, context={"variant": vname})
                         except Exception:
                             pass
+                    if variant_stats:
+                        try:
+                            import aim as _aim
+                            for key, dist_name in (("pi_loss", "pi_loss_dist"),
+                                                   ("v_loss", "v_loss_dist"),
+                                                   ("entropy", "entropy_dist"),
+                                                   ("top1", "pi_top1_dist")):
+                                agg = np.concatenate([s[key] for s in variant_stats.values()])
+                                run.track(_aim.Distribution(agg), name=dist_name,
+                                          epoch=i, step=total_train_steps)
+                        except Exception:
+                            pass
             stage_times["variant_analysis"] = time.time() - stage_start
 
             stage_start = time.time()

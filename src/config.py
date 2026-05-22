@@ -51,6 +51,18 @@ class TrainConfig:
     pi_head_convs: int = 0
     v_fc_layers: int = 1
     pi_fc_layers: int = 0
+    # "batch" (default, current behavior) or "layer" (GroupNorm(1,C) — per-sample
+    # LayerNorm across (C,H,W); avoids the batch-statistic propagation that
+    # contributes to feature collapse in bootstrapped RL targets).
+    trunk_norm: str = "batch"
+    weight_decay: float = 1e-3
+    # "relu" (default) or "crelu" (Concatenated ReLU, preserves negative-direction
+    # features and mitigates dying-ReLU plasticity loss; doubles intermediate
+    # channel count in blocks).
+    trunk_act: str = "relu"
+    # Orthogonal regularization strength on trunk Conv2d weights. 0 disables.
+    # Penalizes filter correlation directly; promotes high effective rank.
+    orth_reg_lambda: float = 0.0
 
     # MCTS
     cpuct: float = 1.25
@@ -98,9 +110,27 @@ class TrainConfig:
 
     # History
     hist_size: int = 30_000
+    # Window-growth formula: Nwindow = scalar * (1 + beta * (ratio^alpha - 1) / alpha)
+    # window_size_unit determines what "scalar" means:
+    #   "iterations" (legacy default): scalar in iters; ratio = (iter+1)/scalar
+    #   "games":      scalar in games; ratio = total_games/scalar_games.
+    #                 total_games is computed exactly from the self-play
+    #                 product self_play_batch_size * NUM_PLAYERS *
+    #                 self_play_concurrent_batch_mult * self_play_chunks
+    #                 (constant per iter, so no history walking).
+    # KataGo calibration: their reported numbers are 4.2M games -> 241M
+    # samples (~57 samples/game after playout-cap-randomization keeps only
+    # ~25% of moves). Their sample-space c=250_000 -> ~4400 games. Their
+    # alpha=0.75, beta=0.4. To roughly match KataGo's growth shape on a
+    # games basis, set scalar_games=4400, alpha=0.75, beta=0.4.
+    # Games-based is preferable when different variants/games have very
+    # different lengths, since each game counts equally regardless of how
+    # many positions it contributes.
+    window_size_unit: str = "iterations"
     window_size_alpha: float = 0.5
     window_size_beta: float = 0.7
     window_size_scalar: float = 6.0
+    window_size_scalar_games: int = 4400
 
     # Cache
     max_cache_size: int = 200_000

@@ -56,6 +56,11 @@ class BenchResult:
     kl_div: Optional[float] = None
     target_entropy: Optional[float] = None
     kl_gap: Optional[float] = None
+    eff_rank: Optional[float] = None
+    # List of (step, eff_rank) — trunk effective rank measured on a fixed
+    # probe batch every log_interval during training. Lets us see whether
+    # rank collapses, stays flat, or improves under a given config.
+    eff_rank_log: list = field(default_factory=list)
 
 
 def parse_config_string(s):
@@ -127,6 +132,39 @@ def parse_config_string(s):
         if cvm:
             kwargs['cv'] = float(cvm.group(1))
             rest = rest[cvm.end():]
+            continue
+
+        # -wd{F}: weight decay (e.g. -wd1e-4, -wd0.0001, -wd0)
+        # Regex matches a non-negative float with optional exponent, but NOT
+        # a trailing dash (which would be the next modifier's separator).
+        _NUM = r'\d+(?:\.\d*)?(?:[eE][+-]?\d+)?'
+        wdm = re.match(rf'wd({_NUM})', rest)
+        if wdm:
+            kwargs['weight_decay'] = float(wdm.group(1))
+            rest = rest[wdm.end():]
+            continue
+
+        # -orth{F}: orthogonal regularization lambda (e.g. -orth0.01, -orth1e-2)
+        orthm = re.match(rf'orth({_NUM})', rest)
+        if orthm:
+            kwargs['orth_reg_lambda'] = float(orthm.group(1))
+            rest = rest[orthm.end():]
+            continue
+
+        # -ln / -bn: trunk normalization choice
+        if rest.startswith('ln'):
+            kwargs['trunk_norm'] = 'layer'
+            rest = rest[2:]
+            continue
+        if rest.startswith('bn'):
+            kwargs['trunk_norm'] = 'batch'
+            rest = rest[2:]
+            continue
+
+        # -crelu: Concatenated ReLU trunk activation
+        if rest.startswith('crelu'):
+            kwargs['trunk_act'] = 'crelu'
+            rest = rest[5:]
             continue
 
         if rest.startswith('resnet'):
@@ -339,12 +377,16 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
                  lr, log_interval, device, label, early_stop=True, active_files=8,
                  lr_patience=3, lr_conv_patience=3, lr_cooldown=1,
                  lr_drop_factor=0.3, lr_max_drops=3, lr_threshold=0.002,
-                 shuffle_seed=None):
+                 shuffle_seed=None, eff_rank_probe=None):
     """Train a single config by streaming through file triples.
 
     Uses PyTorch ReduceLROnPlateau-style LR schedule via PlateauLRScheduler.
 
-    Returns (losses_log, elapsed, actual_steps).
+    If `eff_rank_probe` (a tensor of canonical inputs) is provided, effective
+    rank of the trunk is computed on that probe every `log_interval` steps
+    and accumulated in eff_rank_log.
+
+    Returns (losses_log, elapsed, actual_steps, eff_rank_log).
     """
     target_steps = int(epochs * n_samples / batch_size)
     passes = max(1, math.ceil(epochs))
@@ -353,8 +395,15 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
     dl = DataLoader(dataset, batch_size=None, num_workers=0)
 
     nn_wrapper.nnet.train()
+    # Use the wrapper's weight_decay (threaded from NNArgs) so -wd modifier
+    # actually affects training. Fall back to 1e-3 if not present (legacy).
+    wd = getattr(nn_wrapper, "weight_decay", None)
+    if wd is None:
+        # Older NNWrapper instances may store wd only on the optimizer; check
+        # the existing optimizer in case the wrapper was already constructed.
+        wd = next(iter(nn_wrapper.optimizer.param_groups))["weight_decay"]
     optimizer = torch.optim.SGD(
-        nn_wrapper.nnet.parameters(), lr=lr, momentum=0.9, weight_decay=1e-3
+        nn_wrapper.nnet.parameters(), lr=lr, momentum=0.9, weight_decay=wd
     )
 
     non_blocking = device.type == 'cuda'
@@ -383,6 +432,7 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
     ema_loss = None
 
     actual_steps = target_steps
+    eff_rank_log = []  # [(step, eff_rank), ...]
     pbar = tqdm_module.tqdm(total=target_steps, desc=f"  {label}", leave=False)
     t0 = time.perf_counter()
     for step_i, (c_batch, v_batch, pi_batch) in enumerate(_maybe_prefetch(dl, device)):
@@ -398,6 +448,11 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
         l_v = nn_wrapper.loss_v(v_batch, out_v)
         l_pi = nn_wrapper.loss_pi(pi_batch, out_pi)
         loss = l_v + l_pi
+        # Orthogonal regularization on trunk conv weights, if enabled.
+        # No-op (returns int 0) when orth_reg_lambda == 0.
+        orth = nn_wrapper.trunk_orth_reg()
+        if torch.is_tensor(orth):
+            loss = loss + nn_wrapper.orth_reg_lambda * orth
         loss.backward()
         optimizer.step()
 
@@ -417,6 +472,15 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
 
         if step_num % log_interval == 0 or step_num == target_steps:
             losses_log.append((step_num, v_sum / step_num, pi_sum / step_num, (v_sum + pi_sum) / step_num))
+            if eff_rank_probe is not None:
+                # effective_rank() handles eval()/no_grad/hook internally and
+                # restores eval mode. Switch back to train() after.
+                try:
+                    er = nn_wrapper.effective_rank(eff_rank_probe)
+                    eff_rank_log.append((step_num, float(er)))
+                except Exception as e:
+                    pbar.write(f"  effective_rank failed at step {step_num}: {e}")
+                nn_wrapper.nnet.train()
 
         if scheduler is not None:
             event, _ = scheduler.step(ema_loss)
@@ -431,7 +495,7 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
 
     pbar.close()
     elapsed = time.perf_counter() - t0
-    return losses_log, elapsed, actual_steps
+    return losses_log, elapsed, actual_steps, eff_rank_log
 
 
 def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
@@ -581,10 +645,11 @@ def _maybe_prefetch(batch_iter, device):
     return ((c.float(), v.float(), pi.float()) for c, v, pi in batch_iter)
 
 
-def _accumulate_eval_metrics(nn_wrapper, batch_iter, device):
+def _accumulate_eval_metrics(nn_wrapper, batch_iter, device, eff_rank_probe=None):
     """Run forward + 8 metric accumulators over a (c, v, pi) batch iterator.
 
-    Returns the same dict as eval_loss_streaming / eval_loss_sampled.
+    Returns the same dict as eval_loss_streaming / eval_loss_sampled, with
+    an "eff_rank" key if `eff_rank_probe` is supplied.
     """
     nn_wrapper.enable_inference_optimizations()
     nn_wrapper.nnet.eval()
@@ -643,7 +708,7 @@ def _accumulate_eval_metrics(nn_wrapper, batch_iter, device):
     kl = kl_sum.item() / n_total
     target_entropy = entropy_sum.item() / n_total
 
-    return {
+    out = {
         "v_loss": v_loss,
         "v_loss_raw": v_loss_raw,
         "pi_loss": pi_loss,
@@ -654,24 +719,35 @@ def _accumulate_eval_metrics(nn_wrapper, batch_iter, device):
         "target_entropy": target_entropy,
         "kl_gap": pi_loss - target_entropy,
     }
+    if eff_rank_probe is not None:
+        # IMPORTANT: enable_inference_optimizations() may have JIT-traced
+        # self.nnet (Pascal path). The forward hook in effective_rank()
+        # silently no-ops on the traced module. We surface the failure
+        # rather than swallow it.
+        try:
+            out["eff_rank"] = float(nn_wrapper.effective_rank(eff_rank_probe))
+        except Exception as e:
+            print(f"  WARNING: effective_rank failed in eval: {e}")
+            out["eff_rank"] = None
+    return out
 
 
-def eval_loss_streaming(nn_wrapper, file_triples, batch_size, device):
+def eval_loss_streaming(nn_wrapper, file_triples, batch_size, device, eff_rank_probe=None):
     """Full eval-mode pass over all data by streaming from file triples.
 
     Same metrics as eval_loss() but streams one file at a time to avoid
     loading the full dataset into memory.
 
     Returns dict: {v_loss, pi_loss, total_loss, top1_agree, top3_agree, kl_div,
-                    target_entropy, kl_gap}.
+                    target_entropy, kl_gap[, eff_rank]}.
     """
     dataset = StreamingCompressedDataset(file_triples, batch_size, passes=1)
     dl = DataLoader(dataset, batch_size=None, num_workers=0)
-    return _accumulate_eval_metrics(nn_wrapper, dl, device)
+    return _accumulate_eval_metrics(nn_wrapper, dl, device, eff_rank_probe=eff_rank_probe)
 
 
 def eval_loss_sampled(nn_wrapper, file_triples, batch_size, device, n_eval,
-                      num_workers=8, seed=None):
+                      num_workers=8, seed=None, eff_rank_probe=None):
     """Eval over a uniform-random subsample of ~n_eval positions.
 
     Systematic (stratified) file-level sampling: pick k = round(q * F)
@@ -719,7 +795,8 @@ def eval_loss_sampled(nn_wrapper, file_triples, batch_size, device, n_eval,
             end = start + batch_size
             yield c_all[start:end], v_all[start:end], pi_all[start:end]
 
-    return _accumulate_eval_metrics(nn_wrapper, batch_iter(), device)
+    return _accumulate_eval_metrics(nn_wrapper, batch_iter(), device,
+                                    eff_rank_probe=eff_rank_probe)
 
 
 def is_pareto_optimal(points):
@@ -767,7 +844,7 @@ def collect_configs(config, args):
 
     _setup_readline()
 
-    print("Config format: {depth}d{channels}c[-k{N}][-hc{N}][-vconv{N}][-pconv{N}][-vfc{N}][-pfc{N}][-cv{F}][-resnet]")
+    print("Config format: {depth}d{channels}c[-k{N}][-hc{N}][-vconv{N}][-pconv{N}][-vfc{N}][-pfc{N}][-cv{F}][-wd{F}][-orth{F}][-ln|-bn][-crelu][-resnet]")
     print("  Comma-separated configs:       6d32c-vconv1,4d64c-resnet-vconv1")
     print("  Comma-separated cross-product: 4,6d16,24c -> 4 configs")
     print("    4,6,8d16,24,32c     -> 9 configs")
@@ -783,8 +860,12 @@ def collect_configs(config, args):
     print("    -vfc{N}    value FC hidden layers (default: 1)")
     print("    -pfc{N}    policy FC hidden layers (default: 0)")
     print("    -cv{F}     value loss coefficient (default: from config)")
+    print("    -wd{F}     weight decay (default: 1e-3; e.g. -wd1e-4, -wd0)")
+    print("    -orth{F}   orthogonal weight reg lambda (default: 0; e.g. -orth1e-2)")
+    print("    -ln / -bn  trunk normalization: LayerNorm (GroupNorm(1,C)) or BatchNorm (default)")
+    print("    -crelu     Concatenated ReLU trunk activation (preserves negative-direction features)")
     print("    -resnet    use ResNet instead of DenseNet")
-    print("  Examples: 6d24c  4d32c-k5  6d24c-vconv2-vfc2  4d16c-cv2.0")
+    print("  Examples: 6d24c  4d32c-k5  6d24c-vconv2-vfc2  4d16c-cv2.0  4d64c-resnet-ln-wd1e-4  4d16c-orth1e-2-crelu")
     print()
     print("Add configs (empty or 'go' to start):")
 
@@ -856,7 +937,7 @@ def print_results_table(results):
     header = (f"{'Config':<22} {'Params':>10} {'Mem MB':>8} {'Infer ms':>9} "
               f"{'V Raw':>8} {'Pi Loss':>9} {'Total':>8} "
               f"{'Top1%':>7} {'Top3%':>7} {'KL':>8} "
-              f"{'TgtEnt':>8} {'KLGap':>8} "
+              f"{'TgtEnt':>8} {'KLGap':>8} {'EffRank':>8} "
               f"{'Steps':>6} {'Time':>6}")
     print(header)
     print("-" * len(header))
@@ -867,7 +948,7 @@ def print_results_table(results):
             line = (f"{r.label:<22} {r.params:>10,} {'OOM':>8s} {r.infer_ms:>9.1f} "
                     f"{'OOM':>8s} {'OOM':>9s} {'OOM':>8s} "
                     f"{'':>7s} {'':>7s} {'':>8s} "
-                    f"{'':>8s} {'':>8s} "
+                    f"{'':>8s} {'':>8s} {'':>8s} "
                     f"{'-':>6s} {'-':>6s}")
             print(line)
         else:
@@ -877,10 +958,11 @@ def print_results_table(results):
             kl = f"{r.kl_div:>8.4f}" if r.kl_div is not None else f"{'N/A':>8s}"
             te = f"{r.target_entropy:>8.4f}" if r.target_entropy is not None else f"{'N/A':>8s}"
             kg = f"{r.kl_gap:>8.4f}" if r.kl_gap is not None else f"{'N/A':>8s}"
+            er = f"{r.eff_rank:>8.2f}" if r.eff_rank is not None else f"{'N/A':>8s}"
             line = (f"{r.label:<22} {r.params:>10,} {r.mem_mb:>8.1f} {r.infer_ms:>9.1f} "
                     f"{r.v_loss_raw:>8.4f} {r.pi_loss:>9.4f} {r.total_loss:>8.4f} "
                     f"{top1} {top3} {kl} "
-                    f"{te} {kg} "
+                    f"{te} {kg} {er} "
                     f"{r.steps:>6} {r.time_min:>5.1f}m{star}")
             print(line)
             vi += 1
@@ -1076,9 +1158,19 @@ def save_results_npz(results, save_dir):
     data["steps"] = np.array([r.steps for r in results])
     data["time_min"] = np.array([r.time_min for r in results])
 
-    for key in ["top1_agree", "top3_agree", "kl_div"]:
+    for key in ["top1_agree", "top3_agree", "kl_div",
+                "target_entropy", "kl_gap", "eff_rank"]:
         data[key] = np.array([getattr(r, key) if getattr(r, key) is not None else np.nan
                               for r in results])
+
+    # eff_rank trajectory per config — keep as a dict-of-arrays since lengths
+    # may differ across configs (early stopping etc.).
+    er_traj = {}
+    for r in results:
+        if getattr(r, "eff_rank_log", None):
+            arr = np.array(r.eff_rank_log, dtype=np.float64)  # [(step, rank), ...]
+            er_traj[f"eff_rank_log__{r.label}"] = arr
+    data.update(er_traj)
 
     path = os.path.join(save_dir, "pareto_results.npz")
     np.savez(path, **data)
@@ -1206,6 +1298,9 @@ def main():
     parser.add_argument("--eval-samples", type=int, default=None,
                         help="Final eval on a uniform random subsample of N positions "
                              "from the window (unbiased per-position). Default: full pass.")
+    parser.add_argument("--eff-rank-batch", type=int, default=1024,
+                        help="Probe batch size for trunk effective_rank logging. "
+                             "Set to 0 to disable. Default: 1024.")
     parser.add_argument("--yes", "-y", action="store_true",
                         help="Auto-accept all networks; skip the interactive subselect prompt.")
     args = parser.parse_args()
@@ -1267,6 +1362,28 @@ def main():
     if args.eval_samples is not None:
         eval_seed = np.random.SeedSequence().entropy
         print(f"Eval sample seed: {eval_seed} (shared across configs this run)")
+
+    # Pre-load a fixed probe batch once, reused across every config to give
+    # apples-to-apples effective_rank measurements. Use a small batch since
+    # effective_rank is just a per-feature SVD on the trunk output.
+    eff_rank_probe = None
+    if args.eff_rank_batch > 0:
+        try:
+            from neural_net import to_half_safe, get_storage_dtype
+            probe_ds = StreamingCompressedDataset(
+                file_triples, args.eff_rank_batch, passes=1, active_files=1,
+                seed=12345)
+            probe_dl = DataLoader(probe_ds, batch_size=None, num_workers=0)
+            for c, _, _ in probe_dl:
+                eff_rank_probe = c.float().contiguous()
+                break
+            if eff_rank_probe is not None:
+                print(f"effective_rank probe: {eff_rank_probe.shape[0]} positions "
+                      f"(shared across configs)")
+        except Exception as e:
+            print(f"Warning: failed to load effective_rank probe ({e}); skipping rank logging.")
+            eff_rank_probe = None
+
     results: List[BenchResult] = []
 
     for label, nn_args in configs:
@@ -1280,7 +1397,7 @@ def main():
             if device.type == 'cuda':
                 torch.cuda.reset_peak_memory_stats()
             nn_train = NNWrapper(Game, nn_args)
-            losses_log, elapsed, actual_steps = train_config(
+            losses_log, elapsed, actual_steps, eff_rank_log = train_config(
                 nn_train, file_triples, n_samples, args.epochs, args.batch_size,
                 args.lr, args.log_interval, device, label,
                 early_stop=not args.no_early_stop, active_files=args.active_files,
@@ -1291,6 +1408,7 @@ def main():
                 lr_max_drops=args.lr_max_drops,
                 lr_threshold=args.lr_threshold,
                 shuffle_seed=train_seed,
+                eff_rank_probe=eff_rank_probe,
             )
             mem_mb = 0
             if device.type == 'cuda':
@@ -1305,18 +1423,22 @@ def main():
                       f"~{frac * len(file_triples):.0f}/{len(file_triples)} files)")
                 metrics = eval_loss_sampled(
                     nn_train, file_triples, args.batch_size, device, eval_n,
-                    seed=eval_seed)
+                    seed=eval_seed, eff_rank_probe=eff_rank_probe)
             else:
                 print("  Final eval + metrics...")
-                metrics = eval_loss_streaming(nn_train, file_triples, args.batch_size, device)
+                metrics = eval_loss_streaming(nn_train, file_triples, args.batch_size, device,
+                                              eff_rank_probe=eff_rank_probe)
             if nn_args.cv != 1.0:
                 v_str = f"V Loss: {metrics['v_loss_raw']:.4f} (cv{nn_args.cv:g}: {metrics['v_loss']:.4f})"
             else:
                 v_str = f"V Loss: {metrics['v_loss']:.4f}"
+            er_str = ""
+            if metrics.get("eff_rank") is not None:
+                er_str = f"  EffRank: {metrics['eff_rank']:.2f}"
             print(f"  {v_str}  Pi Loss: {metrics['pi_loss']:.4f}  "
                   f"Total: {metrics['total_loss']:.4f}  "
                   f"Top1: {metrics['top1_agree']*100:.1f}%  KL: {metrics['kl_div']:.4f}  "
-                  f"TE: {metrics['target_entropy']:.4f}  KL gap: {metrics['kl_gap']:.4f}")
+                  f"TE: {metrics['target_entropy']:.4f}  KL gap: {metrics['kl_gap']:.4f}{er_str}")
 
             br = BenchResult(
                 label=label, params=params, mem_mb=mem_mb, infer_ms=infer_ms,
@@ -1327,6 +1449,8 @@ def main():
                 top1_agree=metrics['top1_agree'], top3_agree=metrics['top3_agree'],
                 kl_div=metrics['kl_div'],
                 target_entropy=metrics['target_entropy'], kl_gap=metrics['kl_gap'],
+                eff_rank=metrics.get("eff_rank"),
+                eff_rank_log=eff_rank_log,
             )
             results.append(br)
         except RuntimeError as e:

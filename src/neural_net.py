@@ -54,6 +54,22 @@ class NNArgs:
     pi_head_convs: int = 0   # extra conv layers in policy head (0 = current behavior)
     v_fc_layers: int = 1     # hidden FC layers in value head (1 = current behavior)
     pi_fc_layers: int = 0    # hidden FC layers in policy head (0 = current single-projection)
+    # "batch" (current default, nn.BatchNorm2d) or "layer" (GroupNorm(1, C) ==
+    # LayerNorm across (C, H, W) per sample). LayerNorm avoids batch-statistic
+    # propagation through bootstrap targets, a documented driver of feature
+    # collapse / plasticity loss in deep RL (Liu et al. 2024).
+    trunk_norm: str = "batch"
+    weight_decay: float = 1e-3
+    # Trunk activation. "relu" = nn.ReLU (default). "crelu" = Concatenated ReLU,
+    # which preserves negative-direction features (doubles conv in-channels in
+    # blocks). Abbas et al. 2023 found this the single most effective plasticity
+    # intervention in continual RL benchmarks.
+    trunk_act: str = "relu"
+    # Orthogonal weight regularization on trunk conv weights. Loss term:
+    #   orth_reg_lambda * sum_layers ||W_l^T W_l - I||_F^2  (per-out-channel-normalized).
+    # 0 disables. Direct mechanism to keep effective rank high by penalizing
+    # filter correlation. See Bjorck et al. 2021.
+    orth_reg_lambda: float = 0.0
 
     def __post_init__(self):
         if self.v_fc_hidden == -1:
@@ -78,6 +94,10 @@ def nnargs_from_config(config):
         pi_head_convs=config.pi_head_convs,
         v_fc_layers=config.v_fc_layers,
         pi_fc_layers=config.pi_fc_layers,
+        trunk_norm=config.trunk_norm,
+        weight_decay=config.weight_decay,
+        trunk_act=config.trunk_act,
+        orth_reg_lambda=config.orth_reg_lambda,
     )
 
 
@@ -110,15 +130,61 @@ def conv3x3(in_channels, out_channels, stride=1):
     return conv(in_channels, out_channels, stride, 3)
 
 
+def _make_norm(channels, norm_type):
+    """Norm layer factory for conv feature maps.
+
+    "batch" -> nn.BatchNorm2d (default, propagates batch stats; can drive
+                feature collapse in bootstrapped RL).
+    "layer" -> nn.GroupNorm(1, C). This is per-sample LayerNorm across
+                (C, H, W) — what "LayerNorm for conv nets" conventionally
+                means. Does NOT propagate batch statistics, so robust to the
+                non-stationary target distribution in bootstrapped training.
+    """
+    if norm_type == "batch":
+        return nn.BatchNorm2d(channels)
+    if norm_type == "layer":
+        return nn.GroupNorm(1, channels)
+    raise ValueError(f"Unknown trunk_norm: {norm_type!r} (expected 'batch' or 'layer')")
+
+
+class CReLU(nn.Module):
+    """Concatenated ReLU: out = [ReLU(x), ReLU(-x)] along channel dim.
+
+    Doubles channel count. From Shang et al. 2016; explicitly recommended
+    by Abbas et al. 2023 ("Loss of Plasticity in Continual Deep RL") as the
+    single most effective plasticity-preserving intervention they tested.
+    Preserves negative-direction information that vanilla ReLU discards,
+    eliminating the "dying ReLU" failure mode that drives effective-rank
+    collapse in bootstrapped RL.
+    """
+    def forward(self, x):
+        return torch.cat([torch.relu(x), torch.relu(-x)], dim=1)
+
+
+def _make_act(channels, act_type):
+    """Activation factory. Returns (activation_module, out_channels_after_act).
+
+    "relu"  -> nn.ReLU, no channel change.
+    "crelu" -> CReLU, channels doubled. Caller must adjust downstream layer
+               in-channels by 2x.
+    """
+    if act_type == "relu":
+        return nn.ReLU(inplace=True), channels
+    if act_type == "crelu":
+        return CReLU(), 2 * channels
+    raise ValueError(f"Unknown act_type: {act_type!r} (expected 'relu' or 'crelu')")
+
+
 class DenseBlock(nn.Module):
-    def __init__(self, in_channels, growth_rate, bn_size=4, kernel_size=3):
+    def __init__(self, in_channels, growth_rate, bn_size=4, kernel_size=3,
+                 norm_type="batch", act_type="relu"):
         super(DenseBlock, self).__init__()
-        self.bn1 = nn.BatchNorm2d(in_channels)
-        self.relu1 = nn.ReLU(inplace=True)
-        self.conv1 = conv1x1(in_channels, growth_rate * bn_size, 1)
-        self.bn2 = nn.BatchNorm2d(growth_rate * bn_size)
-        self.relu2 = nn.ReLU(inplace=True)
-        self.conv2 = conv(growth_rate * bn_size, growth_rate, kernel_size=kernel_size)
+        self.bn1 = _make_norm(in_channels, norm_type)
+        self.relu1, post1_c = _make_act(in_channels, act_type)
+        self.conv1 = conv1x1(post1_c, growth_rate * bn_size, 1)
+        self.bn2 = _make_norm(growth_rate * bn_size, norm_type)
+        self.relu2, post2_c = _make_act(growth_rate * bn_size, act_type)
+        self.conv2 = conv(post2_c, growth_rate, kernel_size=kernel_size)
 
     def forward(self, x):
         out = self.bn1(x)
@@ -132,20 +198,21 @@ class DenseBlock(nn.Module):
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, downsample=False, kernel_size=3):
+    def __init__(self, in_channels, out_channels, downsample=False, kernel_size=3,
+                 norm_type="batch", act_type="relu"):
         super(ResidualBlock, self).__init__()
         stride = 1
         if downsample:
             stride = 2
             self.conv_ds = conv1x1(in_channels, out_channels, stride)
-            self.bn_ds = nn.BatchNorm2d(out_channels)
+            self.bn_ds = _make_norm(out_channels, norm_type)
         self.downsample = downsample
-        self.bn1 = nn.BatchNorm2d(in_channels)
-        self.relu1 = nn.ReLU(inplace=True)
-        self.conv1 = conv(in_channels, out_channels, stride, kernel_size=kernel_size)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        self.relu2 = nn.ReLU(inplace=True)
-        self.conv2 = conv(out_channels, out_channels, kernel_size=kernel_size)
+        self.bn1 = _make_norm(in_channels, norm_type)
+        self.relu1, post1_c = _make_act(in_channels, act_type)
+        self.conv1 = conv(post1_c, out_channels, stride, kernel_size=kernel_size)
+        self.bn2 = _make_norm(out_channels, norm_type)
+        self.relu2, post2_c = _make_act(out_channels, act_type)
+        self.conv2 = conv(post2_c, out_channels, kernel_size=kernel_size)
 
     def forward(self, x):
         residual = x
@@ -177,11 +244,14 @@ class NNArch(nn.Module):
         if args.pi_fc_layers > 0 and args.star_gambit_spatial:
             raise ValueError("pi_fc_layers not supported with star_gambit_spatial policy head")
 
+        norm_type = getattr(args, "trunk_norm", "batch")
+        act_type = getattr(args, "trunk_act", "relu")
+
         if not self.dense_net:
             self.conv1 = conv(
                 in_channels, args.num_channels, kernel_size=args.kernel_size
             )
-            self.bn1 = nn.BatchNorm2d(args.num_channels)
+            self.bn1 = _make_norm(args.num_channels, norm_type)
 
         self.layers = []
         for i in range(args.depth):
@@ -191,6 +261,8 @@ class NNArch(nn.Module):
                         in_channels + args.num_channels * i,
                         args.num_channels,
                         kernel_size=args.kernel_size,
+                        norm_type=norm_type,
+                        act_type=act_type,
                     )
                 )
             else:
@@ -199,6 +271,8 @@ class NNArch(nn.Module):
                         args.num_channels,
                         args.num_channels,
                         kernel_size=args.kernel_size,
+                        norm_type=norm_type,
+                        act_type=act_type,
                     )
                 )
         self.conv_layers = nn.Sequential(*self.layers)
@@ -428,8 +502,11 @@ class NNWrapper:
         self.game = game
         self.args = args
         self.nnet = NNArch(game, args)
+        self.weight_decay = getattr(args, "weight_decay", 1e-3)
+        self.orth_reg_lambda = getattr(args, "orth_reg_lambda", 0.0)
         self.optimizer = optim.SGD(
-            self.nnet.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-3
+            self.nnet.parameters(), lr=args.lr, momentum=0.9,
+            weight_decay=self.weight_decay,
         )
         self.device = get_device()
         self.cv = args.cv
@@ -733,6 +810,28 @@ class NNWrapper:
     def loss_v(self, targets, outputs):
         # return torch.sum((targets - outputs) ** 2) / targets.size()[0]
         return -self.cv * torch.sum(targets * outputs) / targets.size()[0]
+
+    def trunk_orth_reg(self):
+        """Orthogonal regularization on trunk conv weights.
+
+        Returns sum_layers ||W^T W - I||_F^2 / out_channels  over the trunk's
+        Conv2d modules. The /out_channels normalization makes lambda
+        roughly architecture-independent across different channel counts.
+
+        Returns 0 (as a Python int) if orth_reg_lambda is 0, so the caller can
+        skip the loss-term addition without zero-tensor graph overhead.
+        """
+        if self.orth_reg_lambda <= 0:
+            return 0
+        device = self.device
+        total = torch.zeros(1, device=device)
+        for m in self.nnet.conv_layers.modules():
+            if isinstance(m, nn.Conv2d):
+                W = m.weight.reshape(m.out_channels, -1)  # [out_c, in_c * kh * kw]
+                gram = W @ W.transpose(0, 1)  # [out_c, out_c]
+                I = torch.eye(m.out_channels, device=W.device, dtype=W.dtype)
+                total = total + (gram - I).pow(2).sum() / max(m.out_channels, 1)
+        return total
 
     @tracy_zone
     def save_checkpoint(

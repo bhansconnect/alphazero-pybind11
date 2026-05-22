@@ -474,26 +474,34 @@ class GameRunner:
                 if model is not None:
                     model.warmup_graphs(self.args.max_batch_size)
 
+        # Block SIGINT in workers so it always lands on the main thread —
+        # Python handlers only run on main, which parks in Thread.join's
+        # sem_wait(-1) and only sees EINTR if the signal targets it.
+        prev_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+        try:
             batcher_threads = []
-            for g in self._nn_groups:
-                t = threading.Thread(target=self.batcher, args=(g,))
-                t.start()
-                batcher_threads.append(t)
-            gpu_thread = threading.Thread(target=self.gpu_loop)
-            gpu_thread.start()
-            result_thread = threading.Thread(target=self.result_worker)
-            result_thread.start()
+            if has_nn:
+                for g in self._nn_groups:
+                    t = threading.Thread(target=self.batcher, args=(g,))
+                    t.start()
+                    batcher_threads.append(t)
+                gpu_thread = threading.Thread(target=self.gpu_loop)
+                gpu_thread.start()
+                result_thread = threading.Thread(target=self.result_worker)
+                result_thread.start()
 
-        mcts_workers = []
-        for i in range(self.args.mcts_workers):
-            mcts_workers.append(threading.Thread(target=self.pm.play))
-            mcts_workers[i].start()
+            mcts_workers = []
+            for i in range(self.args.mcts_workers):
+                mcts_workers.append(threading.Thread(target=self.pm.play))
+                mcts_workers[i].start()
 
-        monitor = threading.Thread(target=self.monitor)
-        monitor.start()
-        if self.pm.params().history_enabled:
-            hist_saver = threading.Thread(target=self.hist_saver)
-            hist_saver.start()
+            monitor = threading.Thread(target=self.monitor)
+            monitor.start()
+            if self.pm.params().history_enabled:
+                hist_saver = threading.Thread(target=self.hist_saver)
+                hist_saver.start()
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, prev_mask)
 
         for mw in mcts_workers:
             mw.join()

@@ -553,10 +553,12 @@ class _PinPrefetch:
         except BaseException as e:
             self._exc = e
         finally:
-            try:
-                self._q.put(self._SENTINEL, timeout=0.1)
-            except queue.Full:
-                pass
+            # Blocking put: the consumer WILL drain eventually unless it died.
+            # A previous version used timeout=0.1, which silently dropped the
+            # sentinel whenever the consumer was mid-batch >100ms — leading to
+            # the main thread blocking forever on q.get() after the last real
+            # batch. See test_pinprefetch_sentinel.py reproducer.
+            self._q.put(self._SENTINEL)
 
     def __iter__(self):
         try:

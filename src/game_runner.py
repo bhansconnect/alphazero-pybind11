@@ -801,16 +801,68 @@ def get_elo(past_elo, win_rates, new_agent):
     return past_elo
 
 
-def calc_hist_size(config, i):
-    return int(
-        config.window_size_scalar
-        * (
-            1
-            + config.window_size_beta
-            * (((i + 1) / config.window_size_scalar) ** config.window_size_alpha - 1)
-            / config.window_size_alpha
-        )
+def _katago_window_curve(c, alpha, beta, ratio):
+    """Shared window-growth curve: c * (1 + beta * (ratio^alpha - 1) / alpha).
+
+    Used in both iterations and games units; caller picks `c` and `ratio` to
+    match the unit. Returns a float; caller casts to the right type.
+    """
+    return c * (1 + beta * (ratio ** alpha - 1) / alpha)
+
+
+def games_per_iter(config):
+    """Total games produced per training iteration.
+
+    Constant given the self-play config — equals self_play_batch_size *
+    NUM_PLAYERS * self_play_concurrent_batch_mult * self_play_chunks (see
+    self_play() in this module). NUM_PLAYERS is sourced from config.Game.
+    """
+    return (
+        config.self_play_batch_size
+        * config.Game.NUM_PLAYERS()
+        * config.self_play_concurrent_batch_mult
+        * config.self_play_chunks
     )
+
+
+def calc_hist_window_games(config, total_games):
+    """Games-based window size (KataGo Nwindow formula, expressed in games).
+
+    Until total_games <= c, returns total_games (use everything generated so
+    far) — matches KataGo's "growing buffer" early phase.
+    """
+    c = config.window_size_scalar_games
+    if total_games <= c:
+        return int(total_games)
+    return int(_katago_window_curve(
+        c, config.window_size_alpha, config.window_size_beta, total_games / c))
+
+
+def calc_hist_size(config, i, paths=None):
+    """Training window size in iterations.
+
+    config.window_size_unit selects the formula:
+      "iterations" (default): ratio = (i+1) / window_size_scalar (legacy).
+      "games":     target Nwindow in games via KataGo curve, divided by the
+                   per-iter game count (constant) to convert back to iters.
+
+    `paths` is currently unused but kept for forward compatibility with
+    formulas that might want to inspect on-disk history.
+    """
+    unit = getattr(config, "window_size_unit", "iterations")
+    if unit == "games":
+        per_iter = max(1, games_per_iter(config))
+        total_games = (i + 1) * per_iter
+        target_games = calc_hist_window_games(config, total_games)
+        # Round up so we always cover the target.
+        return max(1, int(math.ceil(target_games / per_iter)))
+
+    return int(_katago_window_curve(
+        config.window_size_scalar,
+        config.window_size_alpha,
+        config.window_size_beta,
+        (i + 1) / config.window_size_scalar,
+    ))
 
 
 def maybe_save(
@@ -3123,6 +3175,21 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 wr[:copy_size, :copy_size] = source_wr[:copy_size, :copy_size]
                 elo[:copy_size] = source_elo[:copy_size]
 
+            # Copy per-variant elo/wr from source so variant elo stays anchored
+            # across bootstrap (otherwise elo_v starts at 0 for all source slots
+            # and the post-bootstrap variant elo collapses ~hundreds of points
+            # below regular elo).
+            if _is_unified_game(config):
+                for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+                    src_velo = os.path.join(source_dir, f"elo_{vname}.csv")
+                    src_vwr = os.path.join(source_dir, f"win_rate_{vname}.csv")
+                    if os.path.exists(src_velo) and os.path.exists(src_vwr):
+                        s_velo = np.genfromtxt(src_velo, delimiter=",")
+                        s_vwr = np.genfromtxt(src_vwr, delimiter=",")
+                        copy_size = min(len(s_velo), total_agents)
+                        wr_v[vid][:copy_size, :copy_size] = s_vwr[:copy_size, :copy_size]
+                        elo_v[vid][:copy_size] = s_velo[:copy_size]
+
             # Detect architecture match before phase loop
             same_arch = True
             if os.path.exists(source_config_path):
@@ -3210,16 +3277,25 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 elif phase == "Calibrate ELO":
                     compare_start = max(0, source_n - config.bootstrap_compare_past)
                     for past_iter in tqdm.tqdm(range(compare_start, source_n), desc="  ELO", leave=False):
-                        nn_rate, draw_rate, _, _, _, _, _, _, _, _, _ = play_past(
+                        nn_rate, draw_rate, _, _, _, _, _, _, variant_nn_rates, variant_draw_rates, _ = play_past(
                             config, paths, experiment_name, config.compare_mcts_visits,
                             source_n, past_iter, config.past_compare_batch_size,
                             fallback_checkpoint_dir=source_paths["checkpoint"],
                         )
                         wr[source_n, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
                         wr[past_iter, source_n] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
+                        if _is_unified_game(config):
+                            for vid, vrate in variant_nn_rates.items():
+                                vadj = vrate + variant_draw_rates.get(vid, 0.0) / Game.NUM_PLAYERS()
+                                wr_v[vid][source_n, past_iter] = vadj
+                                wr_v[vid][past_iter, source_n] = 1.0 - vadj
                         gc.collect()
 
                     elo = get_elo(elo, wr, source_n)
+                    if _is_unified_game(config):
+                        for vid in range(len(UNIFIED_VARIANT_NAMES)):
+                            if not np.all(np.isnan(wr_v[vid][source_n])):
+                                elo_v[vid] = get_elo(elo_v[vid], wr_v[vid], source_n)
 
             phase_bar.close()
 
@@ -3241,6 +3317,10 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
         np.savetxt(os.path.join(experiment_dir, "elo.csv"), elo, delimiter=",")
         np.savetxt(os.path.join(experiment_dir, "win_rate.csv"), wr, delimiter=",")
+        if _is_unified_game(config):
+            for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+                np.savetxt(os.path.join(experiment_dir, f"elo_{vname}.csv"), elo_v[vid], delimiter=",")
+                np.savetxt(os.path.join(experiment_dir, f"win_rate_{vname}.csv"), wr_v[vid], delimiter=",")
         np.savetxt(
             os.path.join(experiment_dir, "total_train_steps.txt"),
             [total_train_steps],

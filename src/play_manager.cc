@@ -188,10 +188,18 @@ void PlayManager::play() {
       if (mcts.depth() >= goal_depth) {
         // Actually play a move.
         auto temp = params_.start_temp;
-        if (params_.temp_decay_half_life != 0) {
+        float half_life = params_.temp_decay_half_life;
+        if (!params_.temp_decay_half_life_by_variant.empty()) {
+          const int vid = game.gs->get_variant_id();
+          if (vid >= 0 &&
+              vid < static_cast<int>(params_.temp_decay_half_life_by_variant.size())) {
+            half_life = params_.temp_decay_half_life_by_variant[vid];
+          }
+        }
+        if (half_life != 0) {
           const auto t = game.gs->current_turn();
           constexpr float ln2 = 0.693;
-          const auto lambda = ln2 / params_.temp_decay_half_life;
+          const auto lambda = ln2 / half_life;
           temp -= params_.final_temp;
           temp *= std::exp(-lambda * t);
           temp += params_.final_temp;

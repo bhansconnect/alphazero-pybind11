@@ -749,7 +749,13 @@ def base_params(config, start_temp, bs, cb):
     params.max_cache_size = config.max_cache_size
     params.cpuct = config.cpuct
     params.start_temp = start_temp
-    params.temp_decay_half_life = config.temp_decay_half_life
+    if isinstance(config.temp_decay_half_life, dict):
+        params.temp_decay_half_life = 0.0
+        params.temp_decay_half_life_by_variant = [
+            float(config.temp_decay_half_life[v]) for v in UNIFIED_VARIANT_NAMES
+        ]
+    else:
+        params.temp_decay_half_life = float(config.temp_decay_half_life)
     params.final_temp = config.final_temp
     params.max_batch_size = bs
     params.concurrent_games = bs * cb

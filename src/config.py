@@ -67,7 +67,9 @@ class TrainConfig:
     self_play_temp: float = 1.0
     eval_temp: float = 0.5
     final_temp: float = 0.2
-    temp_decay_half_life: int = 10
+    # int = uniform half-life. dict = per-variant; must list every variant
+    # named in UNIFIED_VARIANT_NAMES (skirmish, showdown, clash, battle).
+    temp_decay_half_life: object = 10
 
     # Self-play
     self_play_batch_size: int = 1024
@@ -220,6 +222,25 @@ class TrainConfig:
             unknown = set(self.gating_variant_weights) - valid_variants
             if unknown:
                 raise ValueError(f"Unknown variant names in gating_variant_weights: {unknown}")
+        if isinstance(self.temp_decay_half_life, dict):
+            unknown = set(self.temp_decay_half_life) - valid_variants
+            if unknown:
+                raise ValueError(f"Unknown variant names in temp_decay_half_life: {unknown}")
+            missing = valid_variants - set(self.temp_decay_half_life)
+            if missing:
+                raise ValueError(
+                    f"temp_decay_half_life dict must list every variant "
+                    f"({sorted(valid_variants)}); missing: {sorted(missing)}"
+                )
+            bad = {k: v for k, v in self.temp_decay_half_life.items()
+                   if not isinstance(v, (int, float)) or v < 0}
+            if bad:
+                raise ValueError(f"temp_decay_half_life values must be non-negative numbers: {bad}")
+        elif not isinstance(self.temp_decay_half_life, (int, float)):
+            raise ValueError(
+                f"temp_decay_half_life must be a number or a dict keyed by variant, "
+                f"got {type(self.temp_decay_half_life).__name__}"
+            )
 
     @property
     def network_name(self) -> str:

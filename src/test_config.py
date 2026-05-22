@@ -512,6 +512,89 @@ def test_validate_unknown_game(tmp_path):
         load_config(yaml_path, {})
 
 
+def test_temp_decay_half_life_int(tmp_path):
+    """Scalar int half-life loads and validates."""
+    yaml_path = str(tmp_path / "tdhl_int.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\ntemp_decay_half_life: 8\n")
+    cfg = load_config(yaml_path, {})
+    assert cfg.temp_decay_half_life == 8
+
+
+def test_temp_decay_half_life_dict_full(tmp_path):
+    """Per-variant dict with all four variants loads."""
+    yaml_path = str(tmp_path / "tdhl_dict.yaml")
+    with open(yaml_path, "w") as f:
+        f.write(
+            "game: star_gambit_unified\n"
+            "temp_decay_half_life:\n"
+            "  skirmish: 3\n"
+            "  showdown: 4\n"
+            "  clash: 6\n"
+            "  battle: 12\n"
+        )
+    cfg = load_config(yaml_path, {})
+    assert cfg.temp_decay_half_life == {
+        "skirmish": 3, "showdown": 4, "clash": 6, "battle": 12,
+    }
+
+
+def test_temp_decay_half_life_dict_partial_errors(tmp_path):
+    """Partial dict (missing a variant) raises ValueError."""
+    yaml_path = str(tmp_path / "tdhl_partial.yaml")
+    with open(yaml_path, "w") as f:
+        f.write(
+            "game: star_gambit_unified\n"
+            "temp_decay_half_life:\n"
+            "  skirmish: 3\n"
+            "  battle: 12\n"
+        )
+    with pytest.raises(ValueError, match="missing"):
+        load_config(yaml_path, {})
+
+
+def test_temp_decay_half_life_dict_unknown_variant(tmp_path):
+    """Dict with an unknown variant name raises ValueError."""
+    yaml_path = str(tmp_path / "tdhl_unknown.yaml")
+    with open(yaml_path, "w") as f:
+        f.write(
+            "game: star_gambit_unified\n"
+            "temp_decay_half_life:\n"
+            "  skirmish: 3\n"
+            "  showdown: 4\n"
+            "  clash: 6\n"
+            "  battle: 12\n"
+            "  bogus: 1\n"
+        )
+    with pytest.raises(ValueError, match="Unknown variant"):
+        load_config(yaml_path, {})
+
+
+def test_temp_decay_half_life_dict_negative_errors(tmp_path):
+    """Negative half-life value raises ValueError."""
+    yaml_path = str(tmp_path / "tdhl_neg.yaml")
+    with open(yaml_path, "w") as f:
+        f.write(
+            "game: star_gambit_unified\n"
+            "temp_decay_half_life:\n"
+            "  skirmish: 3\n"
+            "  showdown: 4\n"
+            "  clash: 6\n"
+            "  battle: -1\n"
+        )
+    with pytest.raises(ValueError, match="non-negative"):
+        load_config(yaml_path, {})
+
+
+def test_temp_decay_half_life_invalid_type(tmp_path):
+    """String value raises ValueError."""
+    yaml_path = str(tmp_path / "tdhl_str.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\ntemp_decay_half_life: not_a_number\n")
+    with pytest.raises(ValueError, match="must be a number or a dict"):
+        load_config(yaml_path, {})
+
+
 def test_list_cli_override_warns(tmp_path, capsys):
     """CLI override of list field prints warning."""
     yaml_path = str(tmp_path / "config.yaml")

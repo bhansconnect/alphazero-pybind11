@@ -784,6 +784,21 @@ def elo_prob(r1, r2):
         return z / (1.0 + z)
 
 
+def _wr_from_counts(wins_ij, wins_ji, draws_ij):
+    """Compute the symmetric win-rate pair (wr[i,j], wr[j,i]) from raw
+    integer game counts using the half-draw convention.
+
+    Returns (NaN, NaN) if there are zero games between the two agents.
+    Correctly handles multi-player games (the comparison is always 2-sided
+    -- a draw counts as 0.5 to each side regardless of NUM_PLAYERS).
+    """
+    n = float(wins_ij) + float(wins_ji) + float(draws_ij)
+    if n <= 0:
+        return float("nan"), float("nan")
+    rate_ij = (float(wins_ij) + 0.5 * float(draws_ij)) / n
+    return rate_ij, 1.0 - rate_ij
+
+
 @tracy_zone
 def get_elo(past_elo, win_rates, new_agent):
     if new_agent != 0:
@@ -799,6 +814,88 @@ def get_elo(past_elo, win_rates, new_agent):
                          np.exp(x_safe) / (1.0 + np.exp(x_safe)))
         past_elo[new_agent] += np.sum(rates - probs) * 32
     return past_elo
+
+
+def whr_refit(wins, draws=None, max_sweeps=200, tol=0.1, anchor=0):
+    """Whole-history Bradley-Terry MLE on integer game-count matrices.
+
+    Each agent (row/col index) is treated as a fully independent player.
+    No temporal Wiener prior, no smoothing across iters — every agent's
+    rating is fixed once we have the game record. This is the natural
+    formulation for our setting where each "iter" is a frozen network
+    snapshot, not a time-evolving player.
+
+    The likelihood for a pair (i, j) with `wins[i,j]` i-wins, `wins[j,i]`
+    j-wins, and `draws[i,j]` draws is the Bradley-Terry product over all
+    those games. Draws contribute as half-wins on each side (the standard
+    elo/BT convention).
+
+    Args:
+        wins: (n, n) int/float matrix. wins[i, j] = games where i beat j.
+            Asymmetric in general (one side wins per game).
+        draws: optional (n, n) matrix of drawn games between i and j.
+            Should be symmetric. Pass None for no draws.
+        max_sweeps: maximum Gauss-Seidel passes over agents.
+        tol: convergence threshold on max rating change across a pass.
+        anchor: index pinned at rating 0 (sets the gauge). Auto-falls back
+            to the first agent with games if `anchor` has none.
+
+    Returns:
+        np.ndarray of shape (n,) with elo ratings. Agents with no games
+        stay at the anchor's value (typically 0). Saturated rows (all
+        wins or all losses) get a large but finite rating from clipping
+        the empirical rate to [0.001, 0.999].
+    """
+    wins = np.asarray(wins, dtype=np.float64)
+    if draws is None:
+        draws = np.zeros_like(wins)
+    else:
+        draws = np.asarray(draws, dtype=np.float64)
+    if wins.shape != draws.shape or wins.ndim != 2 or wins.shape[0] != wins.shape[1]:
+        raise ValueError("wins and draws must be square matrices of matching shape")
+
+    n = wins.shape[0]
+    elo = np.zeros(n)
+
+    # n_games[i, j] = total games between i and j.
+    # eff_wins[i, j] = i's effective wins vs j (draws count as half-wins).
+    n_games = wins + wins.T + draws
+    eff_wins = wins + 0.5 * draws
+
+    valid = (n_games.sum(axis=1) > 0)
+    if not valid.any():
+        return elo
+    if not valid[anchor]:
+        anchor = int(np.argmax(valid))
+
+    for _ in range(max_sweeps):
+        max_delta = 0.0
+        for i in range(n):
+            if i == anchor or not valid[i]:
+                continue
+            mask = n_games[i] > 0
+            if not mask.any():
+                continue
+            ng = n_games[i, mask]                       # game counts per opponent
+            ew = eff_wins[i, mask]                      # effective i-wins per opponent
+            rate = np.clip(ew / ng, 0.001, 0.999)       # empirical rate (clipped)
+            x = np.clip(_ELO_ALPHA * (elo[i] - elo[mask]), -500, 500)
+            # Numerically stable sigmoid (matches get_elo's pattern).
+            p = np.where(x >= 0, 1.0 / (1.0 + np.exp(-x)),
+                         np.exp(x) / (1.0 + np.exp(x)))
+            # grad_i  = α * Σ_j n_ij * (rate_ij - p_ij)
+            # hess_ii = -α² * Σ_j n_ij * p_ij * (1 - p_ij)
+            grad = _ELO_ALPHA * float(np.sum(ng * (rate - p)))
+            hess = -(_ELO_ALPHA ** 2) * float(np.sum(ng * p * (1 - p)))
+            if hess >= -1e-12:
+                continue  # degenerate; skip
+            delta = float(np.clip(-grad / hess, -200.0, 200.0))
+            elo[i] += delta
+            if abs(delta) > max_delta:
+                max_delta = abs(delta)
+        if max_delta < tol:
+            break
+    return elo
 
 
 def _katago_window_curve(c, alpha, beta, ratio):
@@ -1260,6 +1357,140 @@ def _save_reservoir_meta(reservoir_dir, meta):
     with open(tmp_path, "w") as f:
         json.dump(meta, f)
     os.replace(tmp_path, meta_path)
+
+
+def _load_compare_past_state(experiment_dir):
+    """Return the set of anchor iters that have been retired due to win-rate
+    saturation. Empty set if no state file exists."""
+    path = os.path.join(experiment_dir, "compare_past_state.json")
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return set(int(x) for x in data.get("saturated_anchors", []))
+    except Exception:
+        return set()
+
+
+def _save_compare_past_state(experiment_dir, saturated_set):
+    """Persist the set of retired anchors atomically."""
+    path = os.path.join(experiment_dir, "compare_past_state.json")
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump({"saturated_anchors": sorted(int(x) for x in saturated_set)}, f)
+    os.replace(tmp_path, path)
+
+
+def _load_train_steps_per_iter(experiment_dir, total_agents):
+    """Load per-iter train step counts (the `step=X` originally used when
+    logging that iter's `elo` metric to aim). Used for WHR overwrite-logging
+    to keep step alignment with the original elo curve.
+
+    Returns an int array of length `total_agents`. Missing entries (or a
+    missing file on resume) are filled with linear interpolation based on
+    the latest `total_train_steps.txt`.
+    """
+    path = os.path.join(experiment_dir, "train_steps_per_iter.csv")
+    if os.path.isfile(path):
+        try:
+            arr = np.loadtxt(path, delimiter=",").astype(np.int64)
+            if arr.ndim == 0:
+                arr = arr.reshape(1)
+            out = np.zeros(total_agents, dtype=np.int64)
+            n = min(len(arr), total_agents)
+            out[:n] = arr[:n]
+            return out
+        except Exception:
+            pass
+    # Fallback: linear-interpolate from the single saved total_train_steps.
+    tts_path = os.path.join(experiment_dir, "total_train_steps.txt")
+    out = np.zeros(total_agents, dtype=np.int64)
+    if os.path.isfile(tts_path):
+        try:
+            tts = int(float(np.loadtxt(tts_path)))
+            # Find which iter we're at by counting checkpoints.
+            ckpt_dir = os.path.join(experiment_dir, "checkpoint")
+            if os.path.isdir(ckpt_dir):
+                ckpts = [f for f in os.listdir(ckpt_dir) if f.endswith(".pt")]
+                latest = max((int(f.split("-", 1)[0]) for f in ckpts), default=0)
+                if latest > 0:
+                    # Linear interpolation across iters [0..latest].
+                    for j in range(min(latest + 1, total_agents)):
+                        out[j] = int(round(tts * (j + 1) / (latest + 1)))
+        except Exception:
+            pass
+    return out
+
+
+def _save_train_steps_per_iter(experiment_dir, arr):
+    """Persist train_steps_per_iter (int array) to CSV atomically."""
+    path = os.path.join(experiment_dir, "train_steps_per_iter.csv")
+    tmp_path = path + ".tmp"
+    np.savetxt(tmp_path, arr.astype(np.int64), delimiter=",", fmt="%d")
+    os.replace(tmp_path, path)
+
+
+def _load_counts(experiment_dir, variant_name, total_agents, wr_matrix,
+                 assumed_batch=64):
+    """Load wins[i,j] and draws[i,j] count matrices from disk.
+
+    `variant_name` is "" for the overall matrices, or one of the variant
+    names ("skirmish", etc.) for per-variant matrices.
+
+    If the count files don't exist (legacy run), fall back to deriving
+    approximate counts from the existing win-rate matrix and an assumed
+    per-comparison batch size. This is imperfect (it loses the W/L/D
+    decomposition for legacy entries, treating them as fully decisive)
+    but keeps WHR functional for resumed legacy runs.
+
+    Returns (wins, draws) as (n, n) int64 matrices.
+    """
+    suffix = f"_{variant_name}" if variant_name else ""
+    wins_path = os.path.join(experiment_dir, f"wins{suffix}.csv")
+    draws_path = os.path.join(experiment_dir, f"draws{suffix}.csv")
+
+    wins = np.zeros((total_agents, total_agents), dtype=np.int64)
+    draws = np.zeros((total_agents, total_agents), dtype=np.int64)
+
+    if os.path.exists(wins_path) and os.path.exists(draws_path):
+        try:
+            tmp_w = np.loadtxt(wins_path, delimiter=",").astype(np.int64)
+            tmp_d = np.loadtxt(draws_path, delimiter=",").astype(np.int64)
+            sz = min(tmp_w.shape[0], total_agents)
+            wins[:sz, :sz] = tmp_w[:sz, :sz]
+            draws[:sz, :sz] = tmp_d[:sz, :sz]
+            return wins, draws
+        except Exception:
+            pass
+
+    # Fallback: derive counts from existing wr matrix using assumed batch size.
+    # We treat each non-NaN wr[i,j] as `assumed_batch` decisive games with the
+    # given win fraction (rounded). Draws are zero in this fallback because we
+    # can't recover them from the half-draw-collapsed rate.
+    if wr_matrix is not None:
+        n = min(wr_matrix.shape[0], total_agents)
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                r = wr_matrix[i, j]
+                if not np.isfinite(r):
+                    continue
+                wins[i, j] = int(round(r * assumed_batch))
+                # The symmetric j-row entry will be set when we visit (j, i).
+    return wins, draws
+
+
+def _save_counts(experiment_dir, variant_name, wins, draws):
+    """Persist wins and draws integer matrices atomically."""
+    suffix = f"_{variant_name}" if variant_name else ""
+    wins_path = os.path.join(experiment_dir, f"wins{suffix}.csv")
+    draws_path = os.path.join(experiment_dir, f"draws{suffix}.csv")
+    for path, arr in [(wins_path, wins), (draws_path, draws)]:
+        tmp_path = path + ".tmp"
+        np.savetxt(tmp_path, arr.astype(np.int64), delimiter=",", fmt="%d")
+        os.replace(tmp_path, path)
 
 
 def _load_chunk(reservoir_dir, chunk_idx):
@@ -2020,49 +2251,72 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
     if total > 0:
         hr = hits / total
 
+    # Raw integer counts: total games, games won by nn-side (any nn-seat won),
+    # games won by past-side (any past-seat won), and drawn games. These are
+    # the canonical "evidence" used by WHR. Sum unchanged-by-perm because
+    # perm_scores stores integer win counts per seat.
+    n_games = 0
+    nn_wins = 0
+    past_wins = 0
+    n_draws = 0
     for perm_idx in range(pm.num_seat_perms()):
         perm_scores = pm.perm_scores(perm_idx)
         perm_games = pm.perm_games_completed(perm_idx)
         if perm_games == 0:
             continue
         perm = seat_perms[perm_idx]
-        # Find which seats have nn (group 0) and accumulate their wins
+        n_games += int(perm_games)
+        # Accumulate per-side wins (nn-side: perm[seat]==0, past-side: perm[seat]==1).
         for seat in range(num_players):
-            if perm[seat] == 0:  # nn is in this seat
+            if perm[seat] == 0:
                 nn_rate += perm_scores[seat] / perm_games
-        draw_rate += perm_scores[num_players] / perm_games  # draw slot
+                nn_wins += int(perm_scores[seat])
+            else:
+                past_wins += int(perm_scores[seat])
+        draw_rate += perm_scores[num_players] / perm_games
+        n_draws += int(perm_scores[num_players])
 
     nn_rate /= n_perms
     draw_rate /= n_perms
 
-    # Per-variant win/draw rates (only populated for unified games with num_variants > 0).
+    # Per-variant rates and counts.
     variant_nn_rates = {}
     variant_draw_rates = {}
+    variant_counts = {}  # vid -> (n_games, nn_wins, past_wins, n_draws)
     for vid in range(pm.num_tracked_variants()):
         vgames = pm.variant_games_completed(vid)
         if vgames == 0:
             continue
         vnn = 0.0
-        # Mirror the perm-aggregation logic used for nn_rate: use per-perm variant
-        # scores so nn-seat wins and nn_past-seat wins don't cancel each other out.
+        v_n_games = 0
+        v_nn_wins = 0
+        v_past_wins = 0
+        v_draws = 0
         for perm_idx in range(pm.num_seat_perms()):
             vperm_scores = pm.variant_perm_scores(vid, perm_idx)
             vperm_games = pm.variant_perm_games_completed(vid, perm_idx)
             if vperm_games == 0:
                 continue
             perm = seat_perms[perm_idx]
+            v_n_games += int(vperm_games)
             for seat in range(num_players):
-                if perm[seat] == 0:  # nn is in this seat
+                if perm[seat] == 0:
                     vnn += vperm_scores[seat] / vperm_games
+                    v_nn_wins += int(vperm_scores[seat])
+                else:
+                    v_past_wins += int(vperm_scores[seat])
+            v_draws += int(vperm_scores[num_players])
         variant_nn_rates[vid] = vnn / n_perms
-        # Draw rate doesn't depend on seat assignment, use global aggregate.
         vscores = pm.variant_scores(vid)
         variant_draw_rates[vid] = vscores[num_players] / vgames
+        variant_counts[vid] = (v_n_games, v_nn_wins, v_past_wins, v_draws)
 
     variant_metrics = _collect_variant_metrics(pm)
     del gr, nn, nn_past, pm
     gc.collect()
-    return nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm, variant_nn_rates, variant_draw_rates, variant_metrics
+    return (nn_rate, draw_rate, hr, agl, avg_depth, avg_entropy, avg_mpt, avg_vm,
+            variant_nn_rates, variant_draw_rates, variant_metrics,
+            n_games, nn_wins, past_wins, n_draws, variant_counts)
 
 
 def get_lr(config, iteration, lr_state):
@@ -3149,10 +3403,26 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         total_agents = max(config.iterations, source_n) + 1
         wr = np.empty((total_agents, total_agents))
         wr[:] = np.nan
+        # Raw W/L/D count matrices (the canonical evidence for WHR).
+        # wins[i,j] is asymmetric (games where i beat j); draws[i,j] is symmetric.
+        wins = np.zeros((total_agents, total_agents), dtype=np.int64)
+        draws = np.zeros((total_agents, total_agents), dtype=np.int64)
         elo = np.zeros(total_agents)
+        whr = np.zeros(total_agents)
         if _is_unified_game(config):
             wr_v = [np.full((total_agents, total_agents), np.nan) for _ in range(4)]
+            wins_v = [np.zeros((total_agents, total_agents), dtype=np.int64) for _ in range(4)]
+            draws_v = [np.zeros((total_agents, total_agents), dtype=np.int64) for _ in range(4)]
             elo_v = [np.zeros(total_agents) for _ in range(4)]
+            whr_v = [np.zeros(total_agents) for _ in range(4)]
+        else:
+            wins_v = None
+            draws_v = None
+            whr_v = None
+        # Per-iter train-step count (parallel to elo) for WHR overwrite-logging.
+        train_steps_per_iter = np.zeros(total_agents, dtype=np.int64)
+        # Set of retired anchors (positive compare_past entries that saturated).
+        saturated_anchors = _load_compare_past_state(experiment_dir)
         current_best = 0
         total_train_steps = 0
         lr_state = _default_lr_state(config)
@@ -3275,20 +3545,38 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                                        zstd_level=config.zstd_level)
 
                 elif phase == "Calibrate ELO":
+                    # Build a one-off list mirroring compare_past behavior but
+                    # walking back from source_n. For the bootstrap calibration
+                    # we still want a fresh comparison against the most-recent
+                    # bootstrap_compare_past iters (legacy semantics).
                     compare_start = max(0, source_n - config.bootstrap_compare_past)
                     for past_iter in tqdm.tqdm(range(compare_start, source_n), desc="  ELO", leave=False):
-                        nn_rate, draw_rate, _, _, _, _, _, _, variant_nn_rates, variant_draw_rates, _ = play_past(
+                        (nn_rate, draw_rate, _, _, _, _, _, _,
+                         variant_nn_rates, variant_draw_rates, _,
+                         n_games, nn_wins_n, past_wins_n, n_draws_n,
+                         variant_counts) = play_past(
                             config, paths, experiment_name, config.compare_mcts_visits,
                             source_n, past_iter, config.past_compare_batch_size,
                             fallback_checkpoint_dir=source_paths["checkpoint"],
                         )
-                        wr[source_n, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
-                        wr[past_iter, source_n] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
+                        # Store raw counts; derive wr from counts for live elo.
+                        wins[source_n, past_iter] = nn_wins_n
+                        wins[past_iter, source_n] = past_wins_n
+                        draws[source_n, past_iter] = n_draws_n
+                        draws[past_iter, source_n] = n_draws_n
+                        wr[source_n, past_iter], wr[past_iter, source_n] = _wr_from_counts(
+                            wins[source_n, past_iter], wins[past_iter, source_n],
+                            draws[source_n, past_iter])
                         if _is_unified_game(config):
-                            for vid, vrate in variant_nn_rates.items():
-                                vadj = vrate + variant_draw_rates.get(vid, 0.0) / Game.NUM_PLAYERS()
-                                wr_v[vid][source_n, past_iter] = vadj
-                                wr_v[vid][past_iter, source_n] = 1.0 - vadj
+                            for vid, (vng, vnw, vpw, vnd) in variant_counts.items():
+                                wins_v[vid][source_n, past_iter] = vnw
+                                wins_v[vid][past_iter, source_n] = vpw
+                                draws_v[vid][source_n, past_iter] = vnd
+                                draws_v[vid][past_iter, source_n] = vnd
+                                wr_v[vid][source_n, past_iter], wr_v[vid][past_iter, source_n] = _wr_from_counts(
+                                    wins_v[vid][source_n, past_iter],
+                                    wins_v[vid][past_iter, source_n],
+                                    draws_v[vid][source_n, past_iter])
                         gc.collect()
 
                     elo = get_elo(elo, wr, source_n)
@@ -3317,10 +3605,12 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
         np.savetxt(os.path.join(experiment_dir, "elo.csv"), elo, delimiter=",")
         np.savetxt(os.path.join(experiment_dir, "win_rate.csv"), wr, delimiter=",")
+        _save_counts(experiment_dir, "", wins, draws)
         if _is_unified_game(config):
             for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
                 np.savetxt(os.path.join(experiment_dir, f"elo_{vname}.csv"), elo_v[vid], delimiter=",")
                 np.savetxt(os.path.join(experiment_dir, f"win_rate_{vname}.csv"), wr_v[vid], delimiter=",")
+                _save_counts(experiment_dir, vname, wins_v[vid], draws_v[vid])
         np.savetxt(
             os.path.join(experiment_dir, "total_train_steps.txt"),
             [total_train_steps],
@@ -3333,28 +3623,62 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         wr[:] = np.nan
         old_size = min(tmp_wr.shape[0], total_agents)
         wr[:old_size, :old_size] = tmp_wr[:old_size, :old_size]
+        # Raw count matrices. Load from disk if present; else fall back to
+        # deriving approximate counts from win_rate * batch_size assumption.
+        wins = np.zeros((total_agents, total_agents), dtype=np.int64)
+        draws = np.zeros((total_agents, total_agents), dtype=np.int64)
+        wins, draws = _load_counts(
+            experiment_dir, "", total_agents, wr,
+            assumed_batch=int(config.past_compare_batch_size))
         tmp_elo = np.genfromtxt(os.path.join(experiment_dir, "elo.csv"), delimiter=",")
         elo = np.zeros(total_agents)
         old_size = min(tmp_elo.shape[0], total_agents)
         elo[:old_size] = tmp_elo[:old_size]
+        whr = np.zeros(total_agents)
+        whr_path = os.path.join(experiment_dir, "whr.csv")
+        if os.path.exists(whr_path):
+            tmp = np.genfromtxt(whr_path, delimiter=",")
+            sz = min(len(tmp), total_agents)
+            whr[:sz] = tmp[:sz]
         if _is_unified_game(config):
             wr_v = []
+            wins_v = []
+            draws_v = []
             elo_v = []
+            whr_v = []
             for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
                 vwr_path = os.path.join(experiment_dir, f"win_rate_{vname}.csv")
                 velo_path = os.path.join(experiment_dir, f"elo_{vname}.csv")
+                vwhr_path = os.path.join(experiment_dir, f"whr_{vname}.csv")
                 m = np.full((total_agents, total_agents), np.nan)
                 if os.path.exists(vwr_path):
                     tmp = np.genfromtxt(vwr_path, delimiter=",")
                     sz = min(tmp.shape[0], total_agents)
                     m[:sz, :sz] = tmp[:sz, :sz]
                 wr_v.append(m)
+                wins_vid, draws_vid = _load_counts(
+                    experiment_dir, vname, total_agents, m,
+                    assumed_batch=int(config.past_compare_batch_size))
+                wins_v.append(wins_vid)
+                draws_v.append(draws_vid)
                 ev = np.zeros(total_agents)
                 if os.path.exists(velo_path):
                     tmp = np.genfromtxt(velo_path, delimiter=",")
                     sz = min(len(tmp), total_agents)
                     ev[:sz] = tmp[:sz]
                 elo_v.append(ev)
+                wv = np.zeros(total_agents)
+                if os.path.exists(vwhr_path):
+                    tmp = np.genfromtxt(vwhr_path, delimiter=",")
+                    sz = min(len(tmp), total_agents)
+                    wv[:sz] = tmp[:sz]
+                whr_v.append(wv)
+        else:
+            wins_v = None
+            draws_v = None
+            whr_v = None
+        train_steps_per_iter = _load_train_steps_per_iter(experiment_dir, total_agents)
+        saturated_anchors = _load_compare_past_state(experiment_dir)
         total_train_steps = int(
             np.genfromtxt(os.path.join(experiment_dir, "total_train_steps.txt"))
         )
@@ -3427,63 +3751,134 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             stage_start = time.time()
             with TracyZone("stage_history"):
-                past_iter = max(0, i - config.compare_past)
-                if past_iter != i and math.isnan(wr[i, past_iter]):
-                    nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy, bench_mpt, bench_vm, variant_nn_rates, variant_draw_rates, variant_play_metrics = play_past(
+                sat_thr = config.compare_past_saturation_threshold
+                for entry in config.compare_past:
+                    if entry < 0:
+                        past_iter = max(0, i + entry)
+                        is_anchor = False
+                        vs_tag = f"-{abs(entry)}"
+                    else:
+                        if entry in saturated_anchors or entry >= i:
+                            continue
+                        past_iter = entry
+                        is_anchor = True
+                        vs_tag = f"anchor{entry}"
+                    if past_iter == i or not math.isnan(wr[i, past_iter]):
+                        continue
+                    (nn_rate, draw_rate, _, game_length, bench_depth, bench_entropy,
+                     bench_mpt, bench_vm, variant_nn_rates, variant_draw_rates,
+                     variant_play_metrics,
+                     n_games_played, nn_wins_n, past_wins_n, n_draws_n,
+                     variant_counts) = play_past(
                         config, paths, experiment_name,
-                        config.compare_mcts_visits, i, past_iter, config.past_compare_batch_size,
+                        config.compare_mcts_visits, i, past_iter,
+                        config.past_compare_batch_size,
                         fallback_checkpoint_dir=fallback_checkpoint_dir,
                         variant_probs=unified_probs,
                     )
-                    wr[i, past_iter] = nn_rate + draw_rate / Game.NUM_PLAYERS()
-                    wr[past_iter, i] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
-                    run.track(nn_rate, name="win_rate", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}", "from": "all_games"})
-                    run.track(draw_rate, name="draw_rate", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}", "from": "all_games"})
-                    run.track(game_length, name="average_game_length", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
-                    run.track(bench_depth, name="avg_leaf_depth", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}", "search": "full"})
-                    run.track(bench_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}", "search": "full"})
-                    run.track(bench_mpt, name="moves_per_turn", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
-                    run.track(bench_vm, name="avg_valid_moves", epoch=i, step=total_train_steps, context={"vs": f"-{config.compare_past}"})
+                    # Store raw counts. wins is asymmetric (i-wins vs j-wins),
+                    # draws is symmetric. wr is derived from counts via the half-
+                    # draw convention -- this fixes the existing 1/N-per-draw bug
+                    # for multi-player games as a side effect. Uses assignment
+                    # (not +=) to match the existing wr[i,j] = ... semantics:
+                    # the NaN-guard above ensures we never overwrite real data.
+                    wins[i, past_iter] = nn_wins_n
+                    wins[past_iter, i] = past_wins_n
+                    draws[i, past_iter] = n_draws_n
+                    draws[past_iter, i] = n_draws_n
+                    full_rate, inv_rate = _wr_from_counts(
+                        wins[i, past_iter], wins[past_iter, i], draws[i, past_iter])
+                    wr[i, past_iter] = full_rate
+                    wr[past_iter, i] = inv_rate
+                    run.track(nn_rate, name="win_rate", epoch=i, step=total_train_steps, context={"vs": vs_tag, "from": "all_games"})
+                    run.track(draw_rate, name="draw_rate", epoch=i, step=total_train_steps, context={"vs": vs_tag, "from": "all_games"})
+                    run.track(game_length, name="average_game_length", epoch=i, step=total_train_steps, context={"vs": vs_tag})
+                    run.track(bench_depth, name="avg_leaf_depth", epoch=i, step=total_train_steps, context={"vs": vs_tag, "search": "full"})
+                    run.track(bench_entropy, name="search_entropy", epoch=i, step=total_train_steps, context={"vs": vs_tag, "search": "full"})
+                    run.track(bench_mpt, name="moves_per_turn", epoch=i, step=total_train_steps, context={"vs": vs_tag})
+                    run.track(bench_vm, name="avg_valid_moves", epoch=i, step=total_train_steps, context={"vs": vs_tag})
                     for vid, vrate in variant_nn_rates.items():
                         run.track(vrate, name="win_rate", epoch=i, step=total_train_steps,
-                                  context={"vs": f"-{config.compare_past}", "variant": UNIFIED_VARIANT_NAMES[vid]})
-                        if wr_v is not None:
-                            vadj = vrate + variant_draw_rates.get(vid, 0.0) / Game.NUM_PLAYERS()
-                            wr_v[vid][i, past_iter] = vadj
-                            wr_v[vid][past_iter, i] = 1.0 - vadj
+                                  context={"vs": vs_tag, "variant": UNIFIED_VARIANT_NAMES[vid]})
+                        if wr_v is not None and vid in variant_counts:
+                            _, vnw, vpw, vnd = variant_counts[vid]
+                            wins_v[vid][i, past_iter] = vnw
+                            wins_v[vid][past_iter, i] = vpw
+                            draws_v[vid][i, past_iter] = vnd
+                            draws_v[vid][past_iter, i] = vnd
+                            v_full, v_inv = _wr_from_counts(
+                                wins_v[vid][i, past_iter],
+                                wins_v[vid][past_iter, i],
+                                draws_v[vid][i, past_iter])
+                            wr_v[vid][i, past_iter] = v_full
+                            wr_v[vid][past_iter, i] = v_inv
                     for vid, drate in variant_draw_rates.items():
                         run.track(drate, name="draw_rate", epoch=i, step=total_train_steps,
-                                  context={"vs": f"-{config.compare_past}", "variant": UNIFIED_VARIANT_NAMES[vid]})
+                                  context={"vs": vs_tag, "variant": UNIFIED_VARIANT_NAMES[vid]})
                     _track_variant_play_metrics(run, variant_play_metrics, epoch=i,
                                                 step=total_train_steps,
-                                                vs_context=f"-{config.compare_past}")
-                    postfix[f"vs -{config.compare_past}"] = _fmt_pct(nn_rate + draw_rate / Game.NUM_PLAYERS())
+                                                vs_context=vs_tag)
+                    postfix[f"vs {vs_tag}"] = _fmt_pct(full_rate)
+                    # Retire anchor if it saturated (only for positive entries).
+                    if is_anchor and (full_rate >= sat_thr or full_rate <= 1 - sat_thr):
+                        saturated_anchors.add(entry)
+                        _save_compare_past_state(experiment_dir, saturated_anchors)
                     gc.collect()
             stage_times["history"] = time.time() - stage_start
 
             stage_start = time.time()
             with TracyZone("stage_elo"):
                 elo = get_elo(elo, wr, i)
+                # Record the train step at which this iter's live elo is logged.
+                # Same value is reused for whr's overwrite-logging at this epoch
+                # so the two metrics share the same x-axis position in aim.
+                train_steps_per_iter[i] = total_train_steps
                 run.track(elo[i], name="elo", epoch=i, step=total_train_steps, context={"type": "current"})
                 run.track(elo[current_best], name="elo", epoch=i, step=total_train_steps, context={"type": "best"})
                 if elo_v is not None:
                     for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
                         if not np.all(np.isnan(wr_v[vid][i])):
                             elo_v[vid] = get_elo(elo_v[vid], wr_v[vid], i)
-                        run.track(elo_v[vid][i], name="variant_elo", epoch=i, step=total_train_steps,
-                                  context={"variant": vname})
+                        # Per-variant elo now lives on the same `elo` metric
+                        # with a `variant` context tag (was `variant_elo`).
+                        run.track(elo_v[vid][i], name="elo", epoch=i, step=total_train_steps,
+                                  context={"type": "current", "variant": vname})
+
+                # WHR refit on raw W/L/D counts (no rate-based approximation,
+                # no Wiener prior -- each iter is a fully independent player).
+                # aim's overwrite semantics keep the chart at the latest refit.
+                whr = whr_refit(wins, draws, max_sweeps=200, tol=0.1)
+                if whr_v is not None:
+                    for vid in range(len(UNIFIED_VARIANT_NAMES)):
+                        whr_v[vid] = whr_refit(
+                            wins_v[vid], draws_v[vid], max_sweeps=200, tol=0.1)
+                for j in range(i + 1):
+                    step_j = int(train_steps_per_iter[j])
+                    run.track(float(whr[j]), name="whr", epoch=j, step=step_j,
+                              context={"type": "current"})
+                    if whr_v is not None:
+                        for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+                            run.track(float(whr_v[vid][j]), name="whr",
+                                      epoch=j, step=step_j,
+                                      context={"type": "current", "variant": vname})
+
                 postfix["elo"] = int(elo[i])
+                postfix["whr"] = int(whr[i])
                 pbar.set_postfix(postfix)
                 np.savetxt(os.path.join(experiment_dir, "elo.csv"), elo, delimiter=",")
-                # Persist wr matrices here too. Without this, a crash between
-                # training (which writes checkpoint i+1) and gating's save would
-                # cause iter i to be skipped on resume, leaving wr[i, i-compare_past]
-                # permanently NaN and dragging variant elo down by 100s of points.
+                np.savetxt(os.path.join(experiment_dir, "whr.csv"), whr, delimiter=",")
+                _save_train_steps_per_iter(experiment_dir, train_steps_per_iter)
+                # Persist wr + raw counts. Without these, a crash between
+                # training and gating's save would cause iter i to be skipped
+                # on resume, leaving wr[i, i-compare_past] permanently NaN.
                 np.savetxt(os.path.join(experiment_dir, "win_rate.csv"), wr, delimiter=",")
+                _save_counts(experiment_dir, "", wins, draws)
                 if wr_v is not None:
                     for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
                         np.savetxt(os.path.join(experiment_dir, f"win_rate_{vname}.csv"), wr_v[vid], delimiter=",")
                         np.savetxt(os.path.join(experiment_dir, f"elo_{vname}.csv"), elo_v[vid], delimiter=",")
+                        np.savetxt(os.path.join(experiment_dir, f"whr_{vname}.csv"), whr_v[vid], delimiter=",")
+                        _save_counts(experiment_dir, vname, wins_v[vid], draws_v[vid])
             stage_times["elo"] = time.time() - stage_start
 
             stage_start = time.time()
@@ -3668,7 +4063,11 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 for gate_net in tqdm.tqdm(
                     panel, desc=f"Pitting against Panel {panel}", leave=False
                 ):
-                    nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy, gate_mpt, gate_vm, variant_nn_rates, variant_draw_rates, variant_play_metrics = play_past(
+                    (nn_rate, draw_rate, _, game_length, gate_depth, gate_entropy,
+                     gate_mpt, gate_vm, variant_nn_rates, variant_draw_rates,
+                     variant_play_metrics,
+                     n_games_played, nn_wins_n, past_wins_n, n_draws_n,
+                     variant_counts) = play_past(
                         config, paths, experiment_name,
                         config.compare_mcts_visits, next_net, gate_net, config.gate_compare_batch_size,
                         fallback_checkpoint_dir=fallback_checkpoint_dir,
@@ -3681,8 +4080,16 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     panel_entropy += gate_entropy
                     panel_mpt += gate_mpt
                     panel_vm += gate_vm
-                    wr[next_net, gate_net] = nn_rate + draw_rate / Game.NUM_PLAYERS()
-                    wr[gate_net, next_net] = 1 - (nn_rate + draw_rate / Game.NUM_PLAYERS())
+                    # Store raw counts (gating uses gate_compare_batch_size).
+                    wins[next_net, gate_net] = nn_wins_n
+                    wins[gate_net, next_net] = past_wins_n
+                    draws[next_net, gate_net] = n_draws_n
+                    draws[gate_net, next_net] = n_draws_n
+                    g_full, g_inv = _wr_from_counts(
+                        wins[next_net, gate_net], wins[gate_net, next_net],
+                        draws[next_net, gate_net])
+                    wr[next_net, gate_net] = g_full
+                    wr[gate_net, next_net] = g_inv
                     gc.collect()
                     if gate_net == current_best:
                         run.track(nn_rate, name="win_rate", epoch=next_net, step=total_train_steps, context={"vs": "best", "from": "all_games"})
@@ -3695,16 +4102,24 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         for vid, vrate in variant_nn_rates.items():
                             run.track(vrate, name="win_rate", epoch=next_net, step=total_train_steps,
                                       context={"vs": "best", "variant": UNIFIED_VARIANT_NAMES[vid]})
-                            if wr_v is not None:
-                                vadj = vrate + variant_draw_rates.get(vid, 0.0) / Game.NUM_PLAYERS()
-                                wr_v[vid][next_net, gate_net] = vadj
-                                wr_v[vid][gate_net, next_net] = 1.0 - vadj
+                            if wr_v is not None and vid in variant_counts:
+                                _, vnw, vpw, vnd = variant_counts[vid]
+                                wins_v[vid][next_net, gate_net] = vnw
+                                wins_v[vid][gate_net, next_net] = vpw
+                                draws_v[vid][next_net, gate_net] = vnd
+                                draws_v[vid][gate_net, next_net] = vnd
+                                gv_full, gv_inv = _wr_from_counts(
+                                    wins_v[vid][next_net, gate_net],
+                                    wins_v[vid][gate_net, next_net],
+                                    draws_v[vid][next_net, gate_net])
+                                wr_v[vid][next_net, gate_net] = gv_full
+                                wr_v[vid][gate_net, next_net] = gv_inv
                         for vid, drate in variant_draw_rates.items():
                             run.track(drate, name="draw_rate", epoch=next_net, step=total_train_steps,
                                       context={"vs": "best", "variant": UNIFIED_VARIANT_NAMES[vid]})
                         _track_variant_play_metrics(run, variant_play_metrics, epoch=next_net,
                                                     step=total_train_steps, vs_context="best")
-                        best_win_rate = nn_rate + draw_rate / Game.NUM_PLAYERS()
+                        best_win_rate = g_full
                         postfix["vs best"] = _fmt_pct(best_win_rate)
                         pbar.set_postfix(postfix)
                 panel_nn_rate /= len(panel)
@@ -3740,10 +4155,12 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     while len(panel) > config.gating_panel_size:
                         panel = panel[1:]
                 np.savetxt(os.path.join(experiment_dir, "win_rate.csv"), wr, delimiter=",")
+                _save_counts(experiment_dir, "", wins, draws)
                 if wr_v is not None:
                     for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
                         np.savetxt(os.path.join(experiment_dir, f"win_rate_{vname}.csv"), wr_v[vid], delimiter=",")
                         np.savetxt(os.path.join(experiment_dir, f"elo_{vname}.csv"), elo_v[vid], delimiter=",")
+                        _save_counts(experiment_dir, vname, wins_v[vid], draws_v[vid])
             stage_times["gating"] = time.time() - stage_start
 
             # Per-checkpoint diagnostics (Features 1, 3).

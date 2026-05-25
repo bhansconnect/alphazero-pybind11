@@ -1,20 +1,69 @@
 game: star_gambit_unified
 
 # Network: same arch as individual Battle config; spatial head required for all variants.
-depth: 4
-channels: 16
-kernel_size: 3
 star_gambit_spatial: true
+dense_net: false
+depth: 4
+channels: 64
+kernel_size: 3
+head_channels: 64
 
 # MCTS
-temp_decay_half_life: 8
-selfplay_mcts_visits: 120
+selfplay_mcts_visits: 240
 fast_mcts_visits: 30
 compare_mcts_visits: 30
 
+# Per-variant half-life in player turns. ~17-20% of each variant's avg turn
+# count (17.5 / 20 / 25 / 45), so all four reach near-final temp by end of game.
+temp_decay_half_life:
+  skirmish: 3
+  showdown: 4
+  clash: 5
+  battle: 8
+self_play_temp: 1.2
+final_temp: 0.2
+
+# self_play_concurrent_batch_mult: 4
+
+frozen_eval_anchor_iters: [5, 50, 200]
+
+# Historical elo comparisons. Negative = relative offset (legacy behavior:
+# -20 means "vs 20 iters back"). Positive = absolute anchor iter (reuses the
+# frozen_eval_anchor_iters checkpoints). Anchors auto-retire (stop firing
+# in future iters) once their win rate saturates >= 0.97 or <= 0.03 -- their
+# aim win_rate curves cleanly terminate at the last live iter.
+compare_past: [-20, 5, 50, 200]
+
+# Halve the historical-comparison batch size so the 4-entry compare_past
+# above doesn't blow up iter wall-time vs the old single-entry default.
+past_compare_batch_size: 32
+
 # Training
-lr_schedule: adaptive
+# LR drops scaled to match train_sample_rate=4 (below): each iter does ~4x
+# the gradient steps it did in the old single-pass regime, so the network is
+# effectively "older" per-iter than the original schedule assumed. Halving
+# the iter offsets keeps the equivalent total-gradient-steps target.
+# Pre-fix schedule was [[0, 0.01], [120, 0.003], [240, 0.001], [400, 0.0003]].
+lr_schedule: step
+lr_steps: [[0, 0.01], [60, 0.003], [150, 0.001], [300, 0.0003]]
 iterations: 800
+
+# Match reference (KataGo / AlphaZero) loop ratios. Train ~4x more per fresh
+# sample (KataGo's max-train-bucket-per-new-data) and weight-decay 10x lower
+# (matches AlphaZero's 1e-4; KataGo's L2=3e-5 is even lower). Together these
+# push training compute and feature retention into the reference regime.
+train_sample_rate: 4
+weight_decay: 1e-4
+
+# Games-based window matching KataGo's growth curve. c=4096 games (one
+# self-play iter's worth = bs * NUM_PLAYERS * concurrent_mult * chunks =
+# 1024 * 2 * 2 * 1). KataGo's curve constants alpha=0.75, beta=0.4 give a
+# smaller window early (faster turnover of weak early data) growing
+# sublinearly toward our reference target.
+window_size_unit: games
+window_size_scalar_games: 4096
+window_size_alpha: 0.75
+window_size_beta: 0.4
 
 # --- Multi-variant mixing ---
 # Fraction of games (game_based) or samples (sample_based) per variant.

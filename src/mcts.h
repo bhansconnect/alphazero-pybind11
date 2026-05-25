@@ -38,7 +38,9 @@ class DLLEXPORT MCTS {
   MCTS(float cpuct, uint32_t num_players, uint32_t num_moves, float epsilon = 0,
        float root_policy_temp = 1.0, float fpu_reduction = 0,
        bool relative_values = false, bool root_fpu_zero = false,
-       bool shaped_dirichlet = false)
+       bool shaped_dirichlet = false, bool gumbel_enabled = false,
+       uint32_t gumbel_m = 16, float gumbel_c_visit = 50.0f,
+       float gumbel_c_scale = 1.0f, bool gumbel_full = false)
       : cpuct_(cpuct),
         num_players_(num_players),
         num_moves_(num_moves),
@@ -48,7 +50,12 @@ class DLLEXPORT MCTS {
         fpu_reduction_(fpu_reduction),
         relative_values_(relative_values),
         root_fpu_zero_(root_fpu_zero),
-        shaped_dirichlet_(shaped_dirichlet) {}
+        shaped_dirichlet_(shaped_dirichlet),
+        gumbel_enabled_(gumbel_enabled),
+        gumbel_m_(gumbel_m),
+        gumbel_c_visit_(gumbel_c_visit),
+        gumbel_c_scale_(gumbel_c_scale),
+        gumbel_full_(gumbel_full) {}
   void update_root(const GameState& gs, uint32_t move);
   [[nodiscard]] std::unique_ptr<GameState> find_leaf(const GameState& gs);
   void process_result(const GameState& gs, Vector<float>& value,
@@ -103,6 +110,19 @@ class DLLEXPORT MCTS {
 
   [[nodiscard]] static uint32_t pick_move(const Vector<float>& p);
 
+  // ----- Gumbel AlphaZero (Danihelka 2022) --------------------------------
+  // Caller must invoke set_gumbel_num_sims(n) BEFORE the first find_leaf of
+  // each search when Gumbel is active. Re-init happens lazily inside
+  // find_leaf once the root is expanded.
+  void set_gumbel_num_sims(uint32_t n) noexcept;
+  [[nodiscard]] bool gumbel_enabled() const noexcept { return gumbel_enabled_; }
+  // Improved policy target (paper Eq 11), softmax(logits + sigma(completedQ)).
+  // Returns a length-num_moves_ vector with mass only on legal moves.
+  [[nodiscard]] Vector<float> gumbel_improved_policy() const noexcept;
+  // The action A_{n+1} the paper recommends playing: argmax over the final
+  // surviving candidates of (g + logits + sigma(q_hat)).
+  [[nodiscard]] uint32_t gumbel_final_action() const noexcept;
+
  private:
   struct InFlightLeaf {
     std::vector<Node*> path;
@@ -124,6 +144,35 @@ class DLLEXPORT MCTS {
   bool root_fpu_zero_;
   bool shaped_dirichlet_;
   std::vector<InFlightLeaf> in_flight_;
+
+  // Gumbel AlphaZero state ---------------------------------------------------
+  bool gumbel_enabled_;
+  uint32_t gumbel_m_;
+  float gumbel_c_visit_;
+  float gumbel_c_scale_;
+  bool gumbel_full_;
+  // Per-search (reset by update_root and on set_gumbel_num_sims).
+  bool gumbel_initialized_ = false;
+  uint32_t gumbel_num_sims_target_ = 0;
+  uint32_t gumbel_effective_m_ = 0;
+  // gumbel_g_[i] = Gumbel(0) sample for root_.children[i] (legal-action
+  // index, NOT move id). Length = root_.children.size() once initialized.
+  std::vector<float> gumbel_g_;
+  // Indices into root_.children of currently-surviving candidates.
+  std::vector<size_t> gumbel_survivors_;
+  // Phase plan: (num_candidates_in_phase, visits_per_candidate).
+  std::vector<std::pair<uint32_t, uint32_t>> gumbel_phases_;
+  uint32_t gumbel_phase_idx_ = 0;
+  uint32_t gumbel_sims_in_phase_ = 0;
+
+  void init_gumbel_state() noexcept;
+  void reset_gumbel_state() noexcept;
+  // Decide next root child index (into root_.children) per sequential halving.
+  size_t gumbel_next_root_child() noexcept;
+  // After phase complete, rank survivors by g+logit+sigma(q_hat) and keep top.
+  void gumbel_advance_phase() noexcept;
+  // pi'-matching interior selection (paper Eq 14). Returns child index.
+  size_t gumbel_interior_select(Node& node) const noexcept;
 };
 
 }  // namespace alphazero

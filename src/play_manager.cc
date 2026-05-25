@@ -234,17 +234,26 @@ void PlayManager::play() {
             }
           }
         }
-        const auto pi = mcts.probs(temp);
-        const auto chosen_m = MCTS::pick_move(pi);
+        uint32_t chosen_m;
+        if (params_.gumbel_enabled && !game.capped) {
+          // Gumbel: deterministic argmax over final-phase survivors; temp
+          // is irrelevant because Gumbel noise already perturbed the prior.
+          chosen_m = mcts.gumbel_final_action();
+        } else {
+          const auto pi = mcts.probs(temp);
+          chosen_m = MCTS::pick_move(pi);
+        }
         if (params_.history_enabled && !game.capped) {
           PlayHistory ph{
               .canonical = Tensor<float, 3>{game.gs->canonicalized()},
               .v = Vector<float>{game.v.size()},
               .pi = Vector<float>{
-                  (params_.policy_target_pruning &&
-                   seat_epsilon_[game.perm_index][cp] > 0)
-                      ? mcts.probs_pruned(1.0)
-                      : mcts.probs(1.0)
+                  params_.gumbel_enabled
+                      ? mcts.gumbel_improved_policy()
+                      : ((params_.policy_target_pruning &&
+                          seat_epsilon_[game.perm_index][cp] > 0)
+                             ? mcts.probs_pruned(1.0)
+                             : mcts.probs(1.0))
               },
           };
           ph.v.setZero();
@@ -352,6 +361,14 @@ void PlayManager::play() {
         // A move has been played, update playout cap.
         game.capped = params_.playout_cap_randomization &&
                       (dist(re) < params_.playout_cap_percent);
+        if (params_.gumbel_enabled) {
+          // Capped searches use PUCT (sims_target=0 disables Gumbel).
+          const auto next_cp_g = game.gs->current_player();
+          const auto sims_target = game.capped
+              ? 0u
+              : seat_visits_[game.perm_index][next_cp_g];
+          game.mcts[next_cp_g].set_gumbel_num_sims(sims_target);
+        }
         // If not reusing the mcts tree, reset mcts.
         if (!params_.tree_reuse) {
           for (auto j = 0; j < base_gs_->num_players(); ++j) {
@@ -373,6 +390,13 @@ void PlayManager::play() {
       game.initialized = true;
       game.capped = params_.playout_cap_randomization &&
                     (dist(re) < params_.playout_cap_percent);
+      if (params_.gumbel_enabled) {
+        const auto first_cp = game.gs->current_player();
+        const auto sims_target = game.capped
+            ? 0u
+            : seat_visits_[game.perm_index][first_cp];
+        game.mcts[first_cp].set_gumbel_num_sims(sims_target);
+      }
     }
     // Find the next leaf to process and put it in the inference queue.
     const auto cp = game.gs->current_player();
@@ -413,7 +437,12 @@ MCTS PlayManager::make_mcts(uint8_t perm_index, int player) const {
               params_.fpu_reduction,
               base_gs_->relative_values(),
               static_cast<bool>(seat_root_fpu_zero_[perm_index][player]),
-              params_.shaped_dirichlet};
+              params_.shaped_dirichlet,
+              params_.gumbel_enabled,
+              params_.gumbel_m,
+              params_.gumbel_c_visit,
+              params_.gumbel_c_scale,
+              params_.gumbel_full};
 }
 
 void PlayManager::update_inferences(const uint8_t group,

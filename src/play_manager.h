@@ -80,6 +80,15 @@ struct PlayParams {
   bool root_fpu_zero = false;
   bool shaped_dirichlet = false;
   bool policy_target_pruning = false;
+  // Gumbel AlphaZero (Danihelka 2022). When enabled, full-budget (non-capped)
+  // searches use Gumbel-Top-K + Sequential Halving at the root, the improved
+  // policy as the training target, and a deterministic final action. Capped
+  // searches always fall back to PUCT.
+  bool gumbel_enabled = false;
+  uint32_t gumbel_m = 16;
+  float gumbel_c_visit = 50.0f;
+  float gumbel_c_scale = 1.0f;
+  bool gumbel_full = false;  // also use pi'-matching at non-root nodes
   float resign_percent = 0.0;
   float resign_playthrough_percent = 0.0;
   std::vector<EvalType> eval_type{};  // per player, empty = all NN

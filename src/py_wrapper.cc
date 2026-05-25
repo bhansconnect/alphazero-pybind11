@@ -193,6 +193,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def(py::init<float, uint32_t, uint32_t, float, float, float>())
       .def(py::init<float, uint32_t, uint32_t, float, float, float, bool>())
       .def(py::init<float, uint32_t, uint32_t, float, float, float, bool, bool, bool>())
+      .def(py::init<float, uint32_t, uint32_t, float, float, float, bool, bool,
+                    bool, bool, uint32_t, float, float, bool>())
       .def("update_root", &MCTS::update_root)
       .def("find_leaf", &MCTS::find_leaf)
       .def("process_result", &MCTS::process_result)
@@ -209,6 +211,10 @@ PYBIND11_MODULE(alphazero, m) {
       .def("process_result_batched", &MCTS::process_result_batched)
       .def("in_flight_count", &MCTS::in_flight_count)
       .def("reset_batch", &MCTS::reset_batch)
+      .def("set_gumbel_num_sims", &MCTS::set_gumbel_num_sims)
+      .def("gumbel_enabled", &MCTS::gumbel_enabled)
+      .def("gumbel_improved_policy", &MCTS::gumbel_improved_policy)
+      .def("gumbel_final_action", &MCTS::gumbel_final_action)
       .def_static("pick_move", &MCTS::pick_move);
 
   py::class_<S3FIFOCache>(m, "S3FIFOCache")
@@ -310,6 +316,11 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("root_fpu_zero", &PlayParams::root_fpu_zero)
       .def_readwrite("shaped_dirichlet", &PlayParams::shaped_dirichlet)
       .def_readwrite("policy_target_pruning", &PlayParams::policy_target_pruning)
+      .def_readwrite("gumbel_enabled", &PlayParams::gumbel_enabled)
+      .def_readwrite("gumbel_m", &PlayParams::gumbel_m)
+      .def_readwrite("gumbel_c_visit", &PlayParams::gumbel_c_visit)
+      .def_readwrite("gumbel_c_scale", &PlayParams::gumbel_c_scale)
+      .def_readwrite("gumbel_full", &PlayParams::gumbel_full)
       .def_readwrite("mcts_root_temp", &PlayParams::mcts_root_temp)
       .def_readwrite("resign_percent", &PlayParams::resign_percent)
       .def_readwrite("resign_playthrough_percent",

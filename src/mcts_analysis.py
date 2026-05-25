@@ -51,14 +51,20 @@ ANALYSIS_GAMES = 64
 
 
 class Entry(NamedTuple):
-    """An analysis entry: (visit_count, mode, batch_size).
+    """An analysis entry: (visit_count, mode, batch_size, gumbel, gumbel_m).
 
     mode: "base" (no noise, eval temp) or "selfplay" (Dirichlet, root temp).
     batch_size: WU-UCT batch size. 1 = sequential (default).
+    gumbel: when True, use Gumbel AlphaZero (replaces PUCT at root, skips
+        Dirichlet, uses pi' as training target). Off by default.
+    gumbel_m: max considered actions for Gumbel root selection. Only used
+        when gumbel=True. Auto-capped to min(num_legal, num_sims) at runtime.
     """
     vc: int
     mode: str
     batch_size: int = 1
+    gumbel: bool = False
+    gumbel_m: int = 16
 
 
 # --- Entry helpers ---
@@ -73,13 +79,16 @@ def _to_entry(e):
 
 
 def entry_label(entry):
-    """Label for an entry: '200', '200sp', '200b8', '200spb8'."""
+    """Label for an entry: '200', '200sp', '200b8', '200g', '200gm8'."""
     e = _to_entry(entry)
     label = f"{e.vc}sp" if e.mode == "selfplay" else str(e.vc)
     if e.batch_size > 1:
         label += f"b{e.batch_size}"
     elif e.batch_size == 0:
         label += "b0"
+    if getattr(e, "gumbel", False):
+        # Always show m so different m values get distinct labels.
+        label += f"gm{e.gumbel_m}"
     return label
 
 
@@ -206,19 +215,34 @@ def select_checkpoint(checkpoints):
 BENCHMARK_POSITIONS = 30
 
 
-def _make_mcts(is_selfplay, config, Game):
-    """Create an MCTS instance with config params for the given mode."""
+def _make_mcts(is_selfplay, config, Game, gumbel=False, gumbel_m=16):
+    """Create an MCTS instance with config params for the given mode.
+
+    When gumbel=True the returned MCTS will be in Gumbel mode for the next
+    search (caller must still call set_gumbel_num_sims(target) before the
+    first find_leaf to set the budget).
+    """
     num_players = Game.NUM_PLAYERS()
     num_moves = Game.NUM_MOVES()
     relative_values = Game().relative_values()
     if is_selfplay:
-        return alphazero.MCTS(config.cpuct, num_players, num_moves, 0.25,
-                              config.mcts_root_temp, config.fpu_reduction,
-                              relative_values, config.root_fpu_zero,
-                              config.shaped_dirichlet)
-    return alphazero.MCTS(config.cpuct, num_players, num_moves, 0.0, 1.0,
-                          config.fpu_reduction, relative_values,
-                          config.root_fpu_zero, config.shaped_dirichlet)
+        epsilon, root_temp, root_fpu_zero = 0.25, config.mcts_root_temp, config.root_fpu_zero
+    else:
+        epsilon, root_temp, root_fpu_zero = 0.0, 1.0, False
+    if not gumbel:
+        return alphazero.MCTS(config.cpuct, num_players, num_moves, epsilon,
+                              root_temp, config.fpu_reduction, relative_values,
+                              root_fpu_zero, config.shaped_dirichlet)
+    return alphazero.MCTS(
+        config.cpuct, num_players, num_moves, epsilon, root_temp,
+        config.fpu_reduction, relative_values, root_fpu_zero,
+        config.shaped_dirichlet,
+        True,                      # gumbel_enabled
+        gumbel_m,
+        config.gumbel_c_visit,
+        config.gumbel_c_scale,
+        config.gumbel_full,
+    )
 
 
 def run_benchmark(config, Game, agent, entries, cache_size=0, tree_reuse=False):

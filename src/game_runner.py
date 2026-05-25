@@ -768,6 +768,11 @@ def base_params(config, start_temp, bs, cb):
     params.max_batch_size = bs
     params.concurrent_games = bs * cb
     params.fpu_reduction = config.fpu_reduction
+    params.gumbel_enabled = config.gumbel_enabled
+    params.gumbel_m = config.gumbel_m
+    params.gumbel_c_visit = config.gumbel_c_visit
+    params.gumbel_c_scale = config.gumbel_c_scale
+    params.gumbel_full = config.gumbel_full
     return params
 
 

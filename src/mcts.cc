@@ -3,14 +3,90 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <numeric>
 #include <random>
+#include <utility>
 
 #include "pcg/pcg_random.hpp"
 
 namespace alphazero {
 
 constexpr const float NOISE_ALPHA_RATIO = 10.83;
+// Small clamp to keep log(policy) finite when the prior collapses on an
+// action. The Gumbel-Top-K trick uses logits == log(prior) up to an additive
+// constant; this floor only matters for arithmetic stability.
+constexpr const float GUMBEL_LOG_FLOOR = 1e-20f;
 thread_local pcg32 re{pcg_extras::seed_seq_from<std::random_device>{}};
+
+namespace {
+
+// Mirror of test_gumbel.py:_ref_seq_halving_phase_plan. Returns vector of
+// (num_candidates, visits_per_candidate) per phase. Caller guarantees
+// m >= 1 and n >= m so each candidate gets >= 1 visit in phase 0.
+std::vector<std::pair<uint32_t, uint32_t>> seq_halving_phase_plan(uint32_t m,
+                                                                  uint32_t n) {
+  std::vector<std::pair<uint32_t, uint32_t>> phases;
+  if (m <= 1) {
+    phases.emplace_back(1, n);
+    return phases;
+  }
+  uint32_t log2m = 0;
+  {
+    uint32_t v = m - 1;
+    while (v > 0) {
+      ++log2m;
+      v >>= 1;
+    }
+    if (log2m == 0) log2m = 1;  // m == 2 -> log2m = 1
+  }
+  uint32_t base_v = std::max<uint32_t>(1u, n / (log2m * m));
+  uint32_t sims_used = 0;
+  uint32_t num_c = m;
+  for (uint32_t phase_idx = 0; phase_idx < log2m; ++phase_idx) {
+    if (sims_used >= n) break;
+    uint32_t remaining = n - sims_used;
+    bool is_final = (phase_idx == log2m - 1);
+    uint32_t v_per = is_final
+                         ? std::max<uint32_t>(1u, remaining / num_c)
+                         : base_v * (1u << phase_idx);
+    if (num_c * v_per > remaining) {
+      v_per = remaining / num_c;
+      if (v_per == 0) {
+        num_c = remaining;
+        v_per = 1;
+      }
+    }
+    phases.emplace_back(num_c, v_per);
+    sims_used += num_c * v_per;
+    num_c = std::max<uint32_t>(1u, num_c / 2);
+  }
+  return phases;
+}
+
+// Paper Appendix D mixed-value approximation. q_i, N_i, prior_i are
+// per-child arrays of length k. raw_v is the network value at this node
+// (player-perspective). When no children have been visited, returns raw_v.
+float compute_v_mix_from_children(float raw_v, const std::vector<float>& qs,
+                                  const std::vector<uint32_t>& ns,
+                                  const std::vector<float>& priors) {
+  float sum_visits = 0.0f;
+  float sum_priors_visited = 0.0f;
+  float weighted_num = 0.0f;
+  for (size_t i = 0; i < qs.size(); ++i) {
+    sum_visits += static_cast<float>(ns[i]);
+    if (ns[i] > 0) {
+      sum_priors_visited += priors[i];
+      weighted_num += priors[i] * qs[i];
+    }
+  }
+  if (sum_priors_visited <= 0.0f) {
+    return raw_v;
+  }
+  float weighted_q = weighted_num / sum_priors_visited;
+  return (raw_v + sum_visits * weighted_q) / (sum_visits + 1.0f);
+}
+
+}  // namespace
 
 void Node::add_children(const Vector<uint8_t>& valids) noexcept {
   children.reserve(valids.sum());
@@ -70,6 +146,235 @@ void MCTS::update_root(const GameState& gs, uint32_t move) {
   }
   Node tmp = *x;
   root_ = tmp;
+  reset_gumbel_state();
+}
+
+void MCTS::set_gumbel_num_sims(uint32_t n) noexcept {
+  gumbel_num_sims_target_ = n;
+  reset_gumbel_state();
+}
+
+void MCTS::reset_gumbel_state() noexcept {
+  gumbel_initialized_ = false;
+  gumbel_effective_m_ = 0;
+  gumbel_g_.clear();
+  gumbel_survivors_.clear();
+  gumbel_phases_.clear();
+  gumbel_phase_idx_ = 0;
+  gumbel_sims_in_phase_ = 0;
+}
+
+void MCTS::init_gumbel_state() noexcept {
+  // Caller guarantees: root_ is expanded (children populated, policies set,
+  // root_.n >= 1) and gumbel_enabled_ is true and not yet initialized.
+  const auto num_legal = static_cast<uint32_t>(root_.children.size());
+  if (num_legal == 0) return;
+  // Sims already consumed by this search (typically 1 for root expansion on
+  // a fresh tree; 0 when subtree was reused). The phase plan only allocates
+  // the REMAINING sims, since those are the only ones Gumbel selection
+  // controls.
+  const uint32_t remaining =
+      depth_ < gumbel_num_sims_target_ ? gumbel_num_sims_target_ - depth_ : 0;
+  if (remaining == 0) return;  // nothing for Gumbel to do
+  gumbel_effective_m_ = std::max<uint32_t>(
+      1u, std::min({gumbel_m_, num_legal, remaining}));
+
+  std::extreme_value_distribution<float> gumbel_dist{0.0f, 1.0f};
+  gumbel_g_.resize(num_legal);
+  for (uint32_t i = 0; i < num_legal; ++i) {
+    gumbel_g_[i] = gumbel_dist(re);
+  }
+
+  // Initial survivors: top-effective_m by (g + log(prior)).
+  std::vector<size_t> idx(num_legal);
+  std::iota(idx.begin(), idx.end(), 0);
+  std::partial_sort(
+      idx.begin(), idx.begin() + gumbel_effective_m_, idx.end(),
+      [this](size_t a, size_t b) {
+        const float la = std::log(root_.children[a].policy + GUMBEL_LOG_FLOOR);
+        const float lb = std::log(root_.children[b].policy + GUMBEL_LOG_FLOOR);
+        return gumbel_g_[a] + la > gumbel_g_[b] + lb;
+      });
+  gumbel_survivors_.assign(idx.begin(), idx.begin() + gumbel_effective_m_);
+
+  gumbel_phases_ = seq_halving_phase_plan(gumbel_effective_m_, remaining);
+  gumbel_phase_idx_ = 0;
+  gumbel_sims_in_phase_ = 0;
+  gumbel_initialized_ = true;
+}
+
+void MCTS::gumbel_advance_phase() noexcept {
+  if (gumbel_phase_idx_ + 1 >= gumbel_phases_.size()) return;
+  const auto next_num_c = gumbel_phases_[gumbel_phase_idx_ + 1].first;
+  if (next_num_c >= gumbel_survivors_.size()) {
+    ++gumbel_phase_idx_;
+    gumbel_sims_in_phase_ = 0;
+    return;
+  }
+  // Rank survivors by g + log(prior) + sigma(q_hat). Q at root is from the
+  // root player's perspective (matches the perspective the network learned).
+  uint32_t max_visit = 0;
+  for (const auto child_idx : gumbel_survivors_) {
+    max_visit = std::max(max_visit, root_.children[child_idx].n);
+  }
+  const float sigma_scale =
+      (gumbel_c_visit_ + static_cast<float>(max_visit)) * gumbel_c_scale_;
+  std::vector<std::pair<float, size_t>> scored;
+  scored.reserve(gumbel_survivors_.size());
+  for (const auto child_idx : gumbel_survivors_) {
+    const auto& c = root_.children[child_idx];
+    const float logit = std::log(c.policy + GUMBEL_LOG_FLOOR);
+    // Unvisited survivors in this phase shouldn't happen (each phase visits
+    // every survivor v_per times), but defensively fall back to v=0.
+    const float q_hat = c.n > 0 ? c.q : 0.0f;
+    const float score = gumbel_g_[child_idx] + logit + sigma_scale * q_hat;
+    scored.emplace_back(score, child_idx);
+  }
+  std::partial_sort(scored.begin(), scored.begin() + next_num_c, scored.end(),
+                    [](const auto& a, const auto& b) { return a.first > b.first; });
+  gumbel_survivors_.resize(next_num_c);
+  for (size_t i = 0; i < next_num_c; ++i) {
+    gumbel_survivors_[i] = scored[i].second;
+  }
+  ++gumbel_phase_idx_;
+  gumbel_sims_in_phase_ = 0;
+}
+
+size_t MCTS::gumbel_next_root_child() noexcept {
+  // Check whether the current phase is exhausted.
+  if (gumbel_phase_idx_ < gumbel_phases_.size()) {
+    const auto& [num_c, v_per] = gumbel_phases_[gumbel_phase_idx_];
+    if (gumbel_sims_in_phase_ >= num_c * v_per) {
+      gumbel_advance_phase();
+    }
+  }
+  // Out of plan: fall back to round-robin over current survivors. This can
+  // happen if PlayManager dispatches extra sims past gumbel_num_sims_target_
+  // (e.g. one bookkeeping pass).
+  if (gumbel_survivors_.empty()) {
+    return 0;
+  }
+  const size_t pick = gumbel_sims_in_phase_ % gumbel_survivors_.size();
+  ++gumbel_sims_in_phase_;
+  return gumbel_survivors_[pick];
+}
+
+size_t MCTS::gumbel_interior_select(Node& node) const noexcept {
+  // Paper Eq 14:  argmax_a [ pi'(a) - N(a) / (1 + sum_b N(b)) ]
+  // pi' = softmax(logits + sigma(completedQ)), max_visit is local to `node`.
+  const auto k = node.children.size();
+  uint32_t max_visit = 0;
+  uint32_t sum_visits = 0;
+  for (const auto& c : node.children) {
+    max_visit = std::max(max_visit, c.n);
+    sum_visits += c.n;
+  }
+  // Build per-child priors, qs, Ns (light: just from children).
+  std::vector<float> qs(k), priors(k);
+  std::vector<uint32_t> ns(k);
+  for (size_t i = 0; i < k; ++i) {
+    qs[i] = node.children[i].q;
+    ns[i] = node.children[i].n;
+    priors[i] = node.children[i].policy;
+  }
+  const float v_mix = compute_v_mix_from_children(node.v, qs, ns, priors);
+  const float sigma_scale =
+      (gumbel_c_visit_ + static_cast<float>(max_visit)) * gumbel_c_scale_;
+
+  // pi' = softmax(log(prior) + sigma * completedQ). Numerically stable.
+  std::vector<float> z(k);
+  float z_max = -std::numeric_limits<float>::infinity();
+  for (size_t i = 0; i < k; ++i) {
+    const float completed_q = ns[i] > 0 ? qs[i] : v_mix;
+    z[i] = std::log(priors[i] + GUMBEL_LOG_FLOOR) + sigma_scale * completed_q;
+    if (z[i] > z_max) z_max = z[i];
+  }
+  float z_sum = 0.0f;
+  for (size_t i = 0; i < k; ++i) {
+    z[i] = std::exp(z[i] - z_max);
+    z_sum += z[i];
+  }
+  const float inv = z_sum > 0 ? (1.0f / z_sum) : 0.0f;
+  const float denom = 1.0f + static_cast<float>(sum_visits);
+
+  size_t best = 0;
+  float best_score = -std::numeric_limits<float>::infinity();
+  for (size_t i = 0; i < k; ++i) {
+    const float pi_prime = z[i] * inv;
+    const float score = pi_prime - static_cast<float>(ns[i]) / denom;
+    if (score > best_score) {
+      best_score = score;
+      best = i;
+    }
+  }
+  return best;
+}
+
+Vector<float> MCTS::gumbel_improved_policy() const noexcept {
+  // pi' over all legal moves, length num_moves_ (zeros for illegal moves).
+  Vector<float> out{num_moves_};
+  out.setZero();
+  const auto k = root_.children.size();
+  if (k == 0) return out;
+  uint32_t max_visit = 0;
+  for (const auto& c : root_.children) {
+    max_visit = std::max(max_visit, c.n);
+  }
+  std::vector<float> qs(k), priors(k);
+  std::vector<uint32_t> ns(k);
+  for (size_t i = 0; i < k; ++i) {
+    qs[i] = root_.children[i].q;
+    ns[i] = root_.children[i].n;
+    priors[i] = root_.children[i].policy;
+  }
+  const float v_mix = compute_v_mix_from_children(root_.v, qs, ns, priors);
+  const float sigma_scale =
+      (gumbel_c_visit_ + static_cast<float>(max_visit)) * gumbel_c_scale_;
+  std::vector<float> z(k);
+  float z_max = -std::numeric_limits<float>::infinity();
+  for (size_t i = 0; i < k; ++i) {
+    const float completed_q = ns[i] > 0 ? qs[i] : v_mix;
+    z[i] = std::log(priors[i] + GUMBEL_LOG_FLOOR) + sigma_scale * completed_q;
+    if (z[i] > z_max) z_max = z[i];
+  }
+  float z_sum = 0.0f;
+  for (size_t i = 0; i < k; ++i) {
+    z[i] = std::exp(z[i] - z_max);
+    z_sum += z[i];
+  }
+  if (z_sum <= 0) return out;
+  for (size_t i = 0; i < k; ++i) {
+    out(root_.children[i].move) = z[i] / z_sum;
+  }
+  return out;
+}
+
+uint32_t MCTS::gumbel_final_action() const noexcept {
+  // argmax over surviving final-phase candidates of (g + log(prior) +
+  // sigma(q_hat)). When Gumbel never initialized (search was capped /
+  // PUCT), fall back to most-visited child.
+  if (!gumbel_initialized_ || gumbel_survivors_.empty()) {
+    return MCTS::pick_move(probs(0.0f));
+  }
+  uint32_t max_visit = 0;
+  for (const auto& c : root_.children) {
+    max_visit = std::max(max_visit, c.n);
+  }
+  const float sigma_scale =
+      (gumbel_c_visit_ + static_cast<float>(max_visit)) * gumbel_c_scale_;
+  size_t best = gumbel_survivors_[0];
+  float best_score = -std::numeric_limits<float>::infinity();
+  for (const auto child_idx : gumbel_survivors_) {
+    const auto& c = root_.children[child_idx];
+    const float logit = std::log(c.policy + GUMBEL_LOG_FLOOR);
+    const float q_hat = c.n > 0 ? c.q : 0.0f;
+    const float score = gumbel_g_[child_idx] + logit + sigma_scale * q_hat;
+    if (score > best_score) {
+      best_score = score;
+      best = child_idx;
+    }
+  }
+  return root_.children[best].move;
 }
 
 void MCTS::add_root_noise() {
@@ -134,11 +439,28 @@ void MCTS::apply_root_policy_temp() {
 std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
   current_ = &root_;
   auto leaf = gs.copy();
+  // Lazy Gumbel init: must happen AFTER root is expanded (first process_result
+  // sets up children + policies). Only fires when caller has supplied a
+  // non-zero sims target, signaling Gumbel mode for this search.
+  if (gumbel_enabled_ && !gumbel_initialized_ &&
+      gumbel_num_sims_target_ > 0 && root_.n > 0 &&
+      !root_.children.empty()) {
+    init_gumbel_state();
+  }
   while (current_->n > 0 && !current_->scores.has_value()) {
     path_.push_back(current_);
 
-    float fpu = (current_ == &root_ && root_fpu_zero_) ? 0.0f : fpu_reduction_;
-    current_ = current_->best_child(cpuct_, fpu);
+    if (gumbel_enabled_ && gumbel_initialized_ && current_ == &root_) {
+      const auto child_idx = gumbel_next_root_child();
+      current_ = &root_.children[child_idx];
+    } else if (gumbel_enabled_ && gumbel_initialized_ && gumbel_full_) {
+      const auto child_idx = gumbel_interior_select(*current_);
+      current_ = &current_->children[child_idx];
+    } else {
+      const float fpu =
+          (current_ == &root_ && root_fpu_zero_) ? 0.0f : fpu_reduction_;
+      current_ = current_->best_child(cpuct_, fpu);
+    }
     leaf->play_move(current_->move);
   }
   total_leaf_depth_ += path_.size();
@@ -167,7 +489,9 @@ void MCTS::process_result(const GameState& gs, Vector<float>& value,
       pi = pi.array().pow(1.0f / root_policy_temp_);
       pi /= pi.sum();
       current_->update_policy(pi);
-      if (root_noise_enabled) {
+      // Gumbel replaces Dirichlet noise (paper Section 3.1): if Gumbel is
+      // active for this search, skip noise even when caller asked for it.
+      if (root_noise_enabled && !gumbel_enabled_) {
         add_root_noise();
       }
     } else {
@@ -418,7 +742,9 @@ void MCTS::process_result_batched(const GameState& gs, uint32_t leaf_index,
       pi = pi.array().pow(1.0f / root_policy_temp_);
       pi /= pi.sum();
       current_->update_policy(pi);
-      if (root_noise_enabled) {
+      // Gumbel replaces Dirichlet noise (paper Section 3.1): if Gumbel is
+      // active for this search, skip noise even when caller asked for it.
+      if (root_noise_enabled && !gumbel_enabled_) {
         add_root_noise();
       }
     } else {

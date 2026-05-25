@@ -153,7 +153,13 @@ class TrainConfig:
 
     # Iteration control
     iterations: int = 200
-    compare_past: int = 20
+    # List of historical comparisons to run each iter for elo.
+    # Negative entries = relative offset (-20 = "20 iters back").
+    # Positive entries = absolute anchor iters (e.g. 50 = "always vs iter 50").
+    # Anchors auto-retire (skip future iters) once their win rate saturates
+    # past compare_past_saturation_threshold.
+    compare_past: list = field(default_factory=lambda: [-20])
+    compare_past_saturation_threshold: float = 0.97
 
     # Reservoir
     reservoir_recency_decay: float = 0.995
@@ -374,6 +380,12 @@ def load_config(yaml_path: str, cli_overrides: dict, warn=True) -> TrainConfig:
                 if warn:
                     print(f"Warning: ignoring unknown config key in YAML: {key}")
                 continue
+            # YAML 1.1 (PyYAML default) parses unsigned scientific notation like
+            # "1e-4" as a string, not a float. Coerce to the field's declared
+            # type when the default is numeric and the YAML value is a string.
+            field_type = type(getattr(config, key))
+            if field_type in (int, float) and isinstance(val, str):
+                val = field_type(val)
             setattr(config, key, val)
 
     for key, val in cli_overrides.items():

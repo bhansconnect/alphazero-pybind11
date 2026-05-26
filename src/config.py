@@ -74,6 +74,11 @@ class TrainConfig:
     selfplay_mcts_visits: int = 100
     fast_mcts_visits: int = 25
     compare_mcts_visits: int = 50
+    # Playout cap randomization (KataGo). Fraction of self-play moves that
+    # use fast_mcts_visits instead of selfplay_mcts_visits. Capped moves
+    # don't enter training data. Set 0 to disable (every move is full search
+    # and contributes data).
+    playout_cap_percent: float = 0.75
     # Gumbel AlphaZero (Danihelka 2022). Replaces PUCT root + Dirichlet noise
     # with Gumbel-Top-K + Sequential Halving and trains on the improved-policy
     # target. Off by default. Capped searches always fall back to PUCT.
@@ -85,6 +90,26 @@ class TrainConfig:
     gumbel_c_visit: float = 50.0  # sigma formula constant (paper default)
     gumbel_c_scale: float = 1.0   # sigma formula constant (paper default)
     gumbel_full: bool = False     # also use pi'-matching at non-root nodes
+    # What algorithm to use for capped/fast self-play searches:
+    #   "auto"   - same as the main search algo (Gumbel if gumbel_enabled, else PUCT)
+    #   "puct"   - force PUCT for capped (even when main is Gumbel)
+    #   "gumbel" - force Gumbel for capped (Gumbel-everywhere)
+    # Connect4 retest showed PUCT-for-capped trains a stronger network than
+    # Gumbel-for-capped at low capped visit counts (capped Gumbel introduces
+    # ~40% top-1 variance in trajectories, polluting training data).
+    fast_search_algo: str = "auto"
+
+    def resolve_fast_search_uses_gumbel(self) -> bool:
+        """Return True iff capped self-play searches should run Gumbel."""
+        if self.fast_search_algo == "auto":
+            return self.gumbel_enabled
+        if self.fast_search_algo == "puct":
+            return False
+        if self.fast_search_algo == "gumbel":
+            return True
+        raise ValueError(
+            f"fast_search_algo must be 'auto'/'puct'/'gumbel', got {self.fast_search_algo!r}"
+        )
 
     # Temperature
     self_play_temp: float = 1.0

@@ -5,6 +5,7 @@ import os
 import signal
 import shutil
 import tempfile
+import warnings
 from collections import deque, namedtuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import math
@@ -773,6 +774,7 @@ def base_params(config, start_temp, bs, cb):
     params.gumbel_c_visit = config.gumbel_c_visit
     params.gumbel_c_scale = config.gumbel_c_scale
     params.gumbel_full = config.gumbel_full
+    params.fast_search_uses_gumbel = config.resolve_fast_search_uses_gumbel()
     return params
 
 
@@ -2024,9 +2026,9 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     params.mcts_visits = [depth] * Game.NUM_PLAYERS()
     params.history_enabled = True
     params.epsilon = 0.25
-    params.playout_cap_randomization = True
+    params.playout_cap_randomization = config.playout_cap_percent > 0.0
     params.playout_cap_depth = fast_depth
-    params.playout_cap_percent = 0.75
+    params.playout_cap_percent = config.playout_cap_percent
     params.resign_percent = config.resign_percent
     params.resign_playthrough_percent = config.resign_playthrough_percent
     params.mcts_root_temp = config.mcts_root_temp
@@ -3168,7 +3170,12 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                     avgs[pi_row, vid, 1, ui] = unit_counts_opp[ui][combo].mean()
 
         # Per-variant y-max: largest avg across all phases / sides / units, +10% headroom.
-        ymax_per_variant = np.nanmax(avgs, axis=(0, 2, 3))
+        # All-NaN columns (variant had < MIN_SAMPLES in every phase) are
+        # expected during skirmish-only / variant-restricted runs; the
+        # np.where below defaults them to 1.0.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="All-NaN slice encountered")
+            ymax_per_variant = np.nanmax(avgs, axis=(0, 2, 3))
         ymax_per_variant = np.where(np.isnan(ymax_per_variant), 1.0, ymax_per_variant)
         ymax_per_variant = np.maximum(ymax_per_variant * 1.1, 0.5)
 

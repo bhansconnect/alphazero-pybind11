@@ -93,6 +93,9 @@ def calc_elo(past_elo, win_rates):
 def pit_agents(config, Game, players, mcts_visits, bs, name,
                player_epsilon=None, player_mcts_root_temp=None,
                player_root_fpu_zero=None,
+               player_gumbel_enabled=None, player_gumbel_m=None,
+               player_gumbel_c_visit=None, player_gumbel_c_scale=None,
+               player_gumbel_full=None,
                tree_reuse=True, cache_size=0, caches=None,
                variant_probs=None, return_per_variant=False):
     """Play agents against each other across all seat permutations in one run.
@@ -167,6 +170,23 @@ def pit_agents(config, Game, players, mcts_visits, bs, name,
             perm_rfz = [int(player_root_fpu_zero[(j + i) % num_players]) for j in range(num_players)]
             seat_root_fpu_zero.append(perm_rfz)
         params.seat_root_fpu_zero = seat_root_fpu_zero
+
+    # Per-seat Gumbel overrides (lets each player use its training algorithm).
+    def _rotate_per_seat(player_vals, cast=lambda x: x):
+        out = []
+        for i in range(num_players):
+            out.append([cast(player_vals[(j + i) % num_players]) for j in range(num_players)])
+        return out
+    if player_gumbel_enabled is not None:
+        params.seat_gumbel_enabled = _rotate_per_seat(player_gumbel_enabled, int)
+    if player_gumbel_m is not None:
+        params.seat_gumbel_m = _rotate_per_seat(player_gumbel_m, int)
+    if player_gumbel_c_visit is not None:
+        params.seat_gumbel_c_visit = _rotate_per_seat(player_gumbel_c_visit, float)
+    if player_gumbel_c_scale is not None:
+        params.seat_gumbel_c_scale = _rotate_per_seat(player_gumbel_c_scale, float)
+    if player_gumbel_full is not None:
+        params.seat_gumbel_full = _rotate_per_seat(player_gumbel_full, int)
 
     n = bs * cb * num_players  # all perms at once
     params.games_to_play = n
@@ -380,8 +400,11 @@ def _build_matchup_caches(Game, agents, players, model_groups, cache_dict):
     return caches if has_any else None
 
 
-def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, cache_size=0):
+def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, cache_size=0,
+               agent_overrides=None):
     """Run a Monrad (Swiss-style) tournament."""
+    if agent_overrides is None:
+        agent_overrides = {}
     if len(agents) % 2 == 1:
         agents.insert(0, "dummy")
 
@@ -476,6 +499,7 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
                     Game, matchup_agents, players, list(range(Game.NUM_PLAYERS())), cache_dict
                 )
 
+                gumbel_kwargs = build_player_gumbel_args(matchup_agents, agent_overrides)
                 win_rates = pit_agents(
                     config,
                     Game,
@@ -485,6 +509,7 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
                     f"{_agent_label(agents[i])}-{_agent_label(agents[j])}",
                     cache_size=0 if matchup_caches else cache_size,
                     caches=matchup_caches,
+                    **gumbel_kwargs,
                 )
 
                 win_matrix[i, j] = win_rates[0]
@@ -505,8 +530,11 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
     return agents, elo, win_matrix
 
 
-def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agents, cache_size=0):
+def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agents, cache_size=0,
+                   agent_overrides=None):
     """Run a round-robin tournament."""
+    if agent_overrides is None:
+        agent_overrides = {}
     count = len(agents)
     win_matrix = np.zeros((count, count))
 
@@ -535,6 +563,7 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                     Game, matchup_agents, players, list(range(Game.NUM_PLAYERS())), cache_dict
                 )
 
+                gumbel_kwargs = build_player_gumbel_args(matchup_agents, agent_overrides)
                 win_rates = pit_agents(
                     config,
                     Game,
@@ -544,6 +573,7 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                     f"{_agent_label(agents[i])}-{_agent_label(agents[j])}",
                     cache_size=0 if matchup_caches else cache_size,
                     caches=matchup_caches,
+                    **gumbel_kwargs,
                 )
 
                 if Game.NUM_PLAYERS() == 2:
@@ -563,6 +593,7 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                     Game, matchup_agents2, players, list(range(Game.NUM_PLAYERS())), cache_dict
                 )
 
+                gumbel_kwargs2 = build_player_gumbel_args(matchup_agents2, agent_overrides)
                 win_rates2 = pit_agents(
                     config,
                     Game,
@@ -572,6 +603,7 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                     f"{_agent_label(agents[j])}-{_agent_label(agents[i])}",
                     cache_size=0 if matchup_caches2 else cache_size,
                     caches=matchup_caches2,
+                    **gumbel_kwargs2,
                 )
 
                 wr1 = win_rates[0]
@@ -599,6 +631,104 @@ def _agent_label(agent_name):
     if name.endswith(".pt"):
         name = name[:-3]
     return name
+
+
+# ---------------------------------------------------------------------------
+# Per-network Gumbel spec
+# ---------------------------------------------------------------------------
+
+# Spec syntax: "path/to/net.pt" or "path/to/net.pt:puct" or
+# "path/to/net.pt:gumbel". Defaults to auto-detect from the network's
+# experiment config.yaml.
+_PUCT_GUMBEL_CFG = {
+    "gumbel_enabled": False, "gumbel_m": 16,
+    "gumbel_c_visit": 50.0, "gumbel_c_scale": 1.0, "gumbel_full": False,
+}
+_DEFAULT_GUMBEL_CFG = {
+    "gumbel_enabled": True, "gumbel_m": 16,
+    "gumbel_c_visit": 50.0, "gumbel_c_scale": 1.0, "gumbel_full": False,
+}
+
+
+def parse_network_spec(spec):
+    """Parse 'path[:algo]' -> (path, override). override in {None, 'puct', 'gumbel'}."""
+    if ":" not in spec:
+        return spec, None
+    path, algo = spec.rsplit(":", 1)
+    algo = algo.lower()
+    if algo not in ("puct", "gumbel", "auto"):
+        raise ValueError(
+            f"Network spec algorithm must be 'puct'/'gumbel'/'auto', got {algo!r} in {spec!r}"
+        )
+    return path, (None if algo == "auto" else algo)
+
+
+_GUMBEL_CFG_CACHE = {}
+
+
+def get_agent_gumbel_config(agent_path, override=None):
+    """Resolve Gumbel config for a network at agent_path.
+
+    override: 'puct' / 'gumbel' / None (None = auto-detect from config.yaml).
+    Returns a dict with gumbel_* keys, or None for non-NN agents (random/playout/dummy).
+    """
+    if override == "puct":
+        return dict(_PUCT_GUMBEL_CFG)
+    if override == "gumbel":
+        return dict(_DEFAULT_GUMBEL_CFG)
+
+    if not isinstance(agent_path, str) or not agent_path.endswith(".pt"):
+        return None
+    if agent_path in _GUMBEL_CFG_CACHE:
+        return dict(_GUMBEL_CFG_CACHE[agent_path])
+    # checkpoint path: data/<game>/<experiment>/checkpoint/<file>.pt
+    exp_dir = os.path.dirname(os.path.dirname(agent_path))
+    cfg_path = os.path.join(exp_dir, "config.yaml")
+    if not os.path.exists(cfg_path):
+        # No config => assume PUCT (matches historical defaults).
+        result = dict(_PUCT_GUMBEL_CFG)
+    else:
+        try:
+            cfg = load_config(cfg_path, {})
+            result = {
+                "gumbel_enabled": bool(cfg.gumbel_enabled),
+                "gumbel_m": int(cfg.gumbel_m),
+                "gumbel_c_visit": float(cfg.gumbel_c_visit),
+                "gumbel_c_scale": float(cfg.gumbel_c_scale),
+                "gumbel_full": bool(cfg.gumbel_full),
+            }
+        except Exception as e:
+            print(f"Warning: could not load {cfg_path} for Gumbel config ({e}); defaulting to PUCT")
+            result = dict(_PUCT_GUMBEL_CFG)
+    _GUMBEL_CFG_CACHE[agent_path] = dict(result)
+    return result
+
+
+def build_player_gumbel_args(players_agent_paths, agent_overrides):
+    """Compute the player_gumbel_* arg dict for pit_agents from a list of
+    per-player agent paths and a dict {agent_path: override}.
+
+    Returns a dict that can be **-splatted into pit_agents. Returns {} if
+    all players are non-NN / PUCT (no need to pass anything)."""
+    cfgs = []
+    any_gumbel = False
+    for p in players_agent_paths:
+        cfg = get_agent_gumbel_config(p, agent_overrides.get(p))
+        if cfg is None:
+            cfg = dict(_PUCT_GUMBEL_CFG)
+        cfgs.append(cfg)
+        if cfg["gumbel_enabled"]:
+            any_gumbel = True
+    if not any_gumbel:
+        # All PUCT -- skip per-seat overrides entirely (backward compat).
+        return {}
+    return {
+        "player_gumbel_enabled": [c["gumbel_enabled"] for c in cfgs],
+        "player_gumbel_m":       [c["gumbel_m"] for c in cfgs],
+        "player_gumbel_c_visit": [c["gumbel_c_visit"] for c in cfgs],
+        "player_gumbel_c_scale": [c["gumbel_c_scale"] for c in cfgs],
+        "player_gumbel_full":    [c["gumbel_full"] for c in cfgs],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -647,6 +777,23 @@ def parse_args():
     parser.add_argument(
         "--cache_size", type=int, default=200000, help="S3-FIFO cache size (default: 200000)"
     )
+    parser.add_argument(
+        "--networks",
+        action="append",
+        default=[],
+        help="Explicit network spec: 'path/to/net.pt[:puct|gumbel|auto]'. "
+             "Default per-network algorithm is auto-detected from the "
+             "network's experiment config.yaml. Can repeat.",
+    )
+    parser.add_argument(
+        "--algo",
+        choices=["auto", "puct", "gumbel"],
+        default="auto",
+        help="Global override for ALL agents' search algorithm. 'auto' "
+             "(default) uses each agent's training config. 'puct'/'gumbel' "
+             "forces every agent to that algorithm. Per-network ':algo' "
+             "suffixes on --networks still win over --algo.",
+    )
     return parser.parse_args()
 
 
@@ -661,6 +808,17 @@ def main():
     agents = []
     rand_agents = []
     model_path = None
+    # agent_path -> override ('puct' | 'gumbel' | None for auto-detect)
+    agent_overrides = {}
+
+    if args.networks:
+        for spec in args.networks:
+            path, override = parse_network_spec(spec)
+            agents.append(path)
+            if override is not None:
+                agent_overrides[path] = override
+        # Derive model_path from first network's checkpoint dir.
+        model_path = os.path.dirname(agents[0])
 
     if args.dir:
         # Directory-based selection
@@ -763,6 +921,12 @@ def main():
         print("Need at least 2 agents for a tournament")
         sys.exit(1)
 
+    # Global algorithm override (only applies where no per-network override).
+    if args.algo != "auto":
+        for a in agents:
+            if a not in agent_overrides and isinstance(a, str) and a.endswith(".pt"):
+                agent_overrides[a] = args.algo
+
     print(f"\n=== {args.game} {args.format.capitalize()} Tournament ===")
     print(f"MCTS visits: {args.mcts_visits}")
     print(f"Batch size: {args.batch_size}")
@@ -771,16 +935,28 @@ def main():
         print(f"  {_agent_label(a)}")
     print()
 
+    # Print per-agent Gumbel resolution so the user can sanity-check.
+    if any(get_agent_gumbel_config(a, agent_overrides.get(a)) and
+           get_agent_gumbel_config(a, agent_overrides.get(a))["gumbel_enabled"]
+           for a in agents):
+        print("Per-agent search algorithm:")
+        for a in agents:
+            cfg = get_agent_gumbel_config(a, agent_overrides.get(a))
+            algo = "GUMBEL" if cfg and cfg["gumbel_enabled"] else "puct"
+            src = "override" if a in agent_overrides else ("auto" if cfg else "default")
+            print(f"  {_agent_label(a):<55}  {algo}  ({src})")
+        print()
+
     # Run tournament
     if args.format == "monrad":
         agents, elo, win_matrix = run_monrad(
             config, Game, agents, args.mcts_visits, args.batch_size, model_path, rand_agents,
-            cache_size=args.cache_size,
+            cache_size=args.cache_size, agent_overrides=agent_overrides,
         )
     else:
         agents, elo, win_matrix = run_roundrobin(
             config, Game, agents, args.mcts_visits, args.batch_size, model_path, rand_agents,
-            cache_size=args.cache_size,
+            cache_size=args.cache_size, agent_overrides=agent_overrides,
         )
 
     # Print results

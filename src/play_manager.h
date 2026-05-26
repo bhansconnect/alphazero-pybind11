@@ -89,6 +89,10 @@ struct PlayParams {
   float gumbel_c_visit = 50.0f;
   float gumbel_c_scale = 1.0f;
   bool gumbel_full = false;  // also use pi'-matching at non-root nodes
+  // When true, capped self-play searches run Gumbel (at playout_cap_depth
+  // visits) instead of falling back to PUCT. Only meaningful when
+  // gumbel_enabled is also true.
+  bool fast_search_uses_gumbel = false;
   float resign_percent = 0.0;
   float resign_playthrough_percent = 0.0;
   std::vector<EvalType> eval_type{};  // per player, empty = all NN
@@ -98,6 +102,14 @@ struct PlayParams {
   std::vector<std::vector<float>> seat_epsilon{};          // per-perm, per-seat (empty = use global)
   std::vector<std::vector<float>> seat_mcts_root_temp{};   // per-perm, per-seat (empty = use global)
   std::vector<std::vector<uint8_t>> seat_root_fpu_zero{};  // per-perm, per-seat (empty = use global)
+  // Per-seat Gumbel overrides (empty = use global). Lets tournaments evaluate
+  // each network with its training algorithm without per-pairing PlayManager
+  // sessions.
+  std::vector<std::vector<uint8_t>> seat_gumbel_enabled{};
+  std::vector<std::vector<uint32_t>> seat_gumbel_m{};
+  std::vector<std::vector<float>> seat_gumbel_c_visit{};
+  std::vector<std::vector<float>> seat_gumbel_c_scale{};
+  std::vector<std::vector<uint8_t>> seat_gumbel_full{};
 };
 
 // This is a multithread safe game play manager.
@@ -343,6 +355,11 @@ class DLLEXPORT PlayManager {
   std::vector<std::vector<float>> seat_epsilon_;     // per-perm, per-seat (never empty after init)
   std::vector<std::vector<float>> seat_mcts_root_temp_;  // per-perm, per-seat (never empty after init)
   std::vector<std::vector<uint8_t>> seat_root_fpu_zero_; // per-perm, per-seat (never empty after init)
+  std::vector<std::vector<uint8_t>> seat_gumbel_enabled_;
+  std::vector<std::vector<uint32_t>> seat_gumbel_m_;
+  std::vector<std::vector<float>> seat_gumbel_c_visit_;
+  std::vector<std::vector<float>> seat_gumbel_c_scale_;
+  std::vector<std::vector<uint8_t>> seat_gumbel_full_;
   std::atomic<bool> eager_{false};          // GPU steal: true = hand off partial batches
 
   // Create an MCTS instance with per-seat settings for the given permutation and player.

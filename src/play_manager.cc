@@ -98,6 +98,42 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     seat_root_fpu_zero_ = params_.seat_root_fpu_zero;
   }
 
+  if (params_.seat_gumbel_enabled.empty()) {
+    seat_gumbel_enabled_.resize(num_perms,
+        std::vector<uint8_t>(np, params_.gumbel_enabled ? 1u : 0u));
+  } else {
+    validate_2d(params_.seat_gumbel_enabled, "seat_gumbel_enabled");
+    seat_gumbel_enabled_ = params_.seat_gumbel_enabled;
+  }
+  if (params_.seat_gumbel_m.empty()) {
+    seat_gumbel_m_.resize(num_perms,
+        std::vector<uint32_t>(np, params_.gumbel_m));
+  } else {
+    validate_2d(params_.seat_gumbel_m, "seat_gumbel_m");
+    seat_gumbel_m_ = params_.seat_gumbel_m;
+  }
+  if (params_.seat_gumbel_c_visit.empty()) {
+    seat_gumbel_c_visit_.resize(num_perms,
+        std::vector<float>(np, params_.gumbel_c_visit));
+  } else {
+    validate_2d(params_.seat_gumbel_c_visit, "seat_gumbel_c_visit");
+    seat_gumbel_c_visit_ = params_.seat_gumbel_c_visit;
+  }
+  if (params_.seat_gumbel_c_scale.empty()) {
+    seat_gumbel_c_scale_.resize(num_perms,
+        std::vector<float>(np, params_.gumbel_c_scale));
+  } else {
+    validate_2d(params_.seat_gumbel_c_scale, "seat_gumbel_c_scale");
+    seat_gumbel_c_scale_ = params_.seat_gumbel_c_scale;
+  }
+  if (params_.seat_gumbel_full.empty()) {
+    seat_gumbel_full_.resize(num_perms,
+        std::vector<uint8_t>(np, params_.gumbel_full ? 1u : 0u));
+  } else {
+    validate_2d(params_.seat_gumbel_full, "seat_gumbel_full");
+    seat_gumbel_full_ = params_.seat_gumbel_full;
+  }
+
   // 6. Create per-model-group queues and caches
   for (auto i = 0U; i < num_model_groups_; ++i) {
     awaiting_inference_.push_back(
@@ -361,11 +397,18 @@ void PlayManager::play() {
         // A move has been played, update playout cap.
         game.capped = params_.playout_cap_randomization &&
                       (dist(re) < params_.playout_cap_percent);
-        if (params_.gumbel_enabled) {
-          // Capped searches use PUCT (sims_target=0 disables Gumbel).
+        // Capped self-play searches use PUCT (sims_target=0 disables Gumbel),
+        // even when gumbel_enabled. Connect4 retest showed that Gumbel-at-
+        // capped-visits (high inherent variance ~40% at low visits) produces
+        // noisier game trajectories than PUCT-at-capped, hurting training
+        // data quality. v1 design (Gumbel for full + PUCT for capped) beats
+        // v2 (Gumbel everywhere) by 217 elo at equal compute on Connect4.
+        {
           const auto next_cp_g = game.gs->current_player();
           const auto sims_target = game.capped
-              ? 0u
+              ? (params_.fast_search_uses_gumbel
+                     ? params_.playout_cap_depth
+                     : 0u)
               : seat_visits_[game.perm_index][next_cp_g];
           game.mcts[next_cp_g].set_gumbel_num_sims(sims_target);
         }
@@ -390,10 +433,13 @@ void PlayManager::play() {
       game.initialized = true;
       game.capped = params_.playout_cap_randomization &&
                     (dist(re) < params_.playout_cap_percent);
-      if (params_.gumbel_enabled) {
+      // Capped: see note above. Controlled by fast_search_uses_gumbel.
+      {
         const auto first_cp = game.gs->current_player();
         const auto sims_target = game.capped
-            ? 0u
+            ? (params_.fast_search_uses_gumbel
+                   ? params_.playout_cap_depth
+                   : 0u)
             : seat_visits_[game.perm_index][first_cp];
         game.mcts[first_cp].set_gumbel_num_sims(sims_target);
       }
@@ -438,11 +484,11 @@ MCTS PlayManager::make_mcts(uint8_t perm_index, int player) const {
               base_gs_->relative_values(),
               static_cast<bool>(seat_root_fpu_zero_[perm_index][player]),
               params_.shaped_dirichlet,
-              params_.gumbel_enabled,
-              params_.gumbel_m,
-              params_.gumbel_c_visit,
-              params_.gumbel_c_scale,
-              params_.gumbel_full};
+              static_cast<bool>(seat_gumbel_enabled_[perm_index][player]),
+              seat_gumbel_m_[perm_index][player],
+              seat_gumbel_c_visit_[perm_index][player],
+              seat_gumbel_c_scale_[perm_index][player],
+              static_cast<bool>(seat_gumbel_full_[perm_index][player])};
 }
 
 void PlayManager::update_inferences(const uint8_t group,

@@ -321,6 +321,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("gumbel_c_visit", &PlayParams::gumbel_c_visit)
       .def_readwrite("gumbel_c_scale", &PlayParams::gumbel_c_scale)
       .def_readwrite("gumbel_full", &PlayParams::gumbel_full)
+      .def_readwrite("fast_search_uses_gumbel", &PlayParams::fast_search_uses_gumbel)
       .def_readwrite("mcts_root_temp", &PlayParams::mcts_root_temp)
       .def_readwrite("resign_percent", &PlayParams::resign_percent)
       .def_readwrite("resign_playthrough_percent",
@@ -331,7 +332,12 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("seat_visits", &PlayParams::seat_visits)
       .def_readwrite("seat_epsilon", &PlayParams::seat_epsilon)
       .def_readwrite("seat_mcts_root_temp", &PlayParams::seat_mcts_root_temp)
-      .def_readwrite("seat_root_fpu_zero", &PlayParams::seat_root_fpu_zero);
+      .def_readwrite("seat_root_fpu_zero", &PlayParams::seat_root_fpu_zero)
+      .def_readwrite("seat_gumbel_enabled", &PlayParams::seat_gumbel_enabled)
+      .def_readwrite("seat_gumbel_m", &PlayParams::seat_gumbel_m)
+      .def_readwrite("seat_gumbel_c_visit", &PlayParams::seat_gumbel_c_visit)
+      .def_readwrite("seat_gumbel_c_scale", &PlayParams::seat_gumbel_c_scale)
+      .def_readwrite("seat_gumbel_full", &PlayParams::seat_gumbel_full);
 
   py::class_<PlayManager>(m, "PlayManager")
       .def(py::init([](const GameState* gs, PlayParams params) {

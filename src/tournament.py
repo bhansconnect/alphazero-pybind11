@@ -345,21 +345,32 @@ def select_from_experiment_dir(exp_dir, count, elo_path=None):
     return result
 
 
-def load_agent(Game, agent_name, model_path, mcts_visits, rand_agents):
-    """Load an agent from its descriptor. Returns (player, depth)."""
+def load_agent(Game, agent_name, model_path, mcts_visits, rand_agents, nn_cache=None):
+    """Load an agent from its descriptor. Returns (player, depth).
+
+    For NN agents the descriptor may carry an optional ':puct'/':gumbel' suffix
+    (see parse_network_spec); the suffix is stripped before resolving the .pt
+    path. When ``nn_cache`` is given, NNs are looked up / stored by underlying
+    path so that two agent IDs sharing a network (e.g. ``foo.pt`` and
+    ``foo.pt:gumbel``) reuse the same NNWrapper.
+    """
     if agent_name == "playout":
         return PlayoutPlayer(), mcts_visits
     if agent_name in rand_agents:
         return RandPlayer(), agent_name
-    # Network agent - agent_name is either a filename or full path
-    if os.path.isabs(agent_name) or os.path.exists(agent_name):
+    path = _agent_path(agent_name) or agent_name
+    if nn_cache is not None and path in nn_cache:
+        return nn_cache[path], mcts_visits
+    # Network agent - path is either a filename or full path
+    if os.path.isabs(path) or os.path.exists(path):
         nn = neural_net.NNWrapper.load_checkpoint(
-            Game, os.path.dirname(agent_name), os.path.basename(agent_name)
+            Game, os.path.dirname(path), os.path.basename(path)
         )
-        nn.enable_inference_optimizations()
-        return nn, mcts_visits
-    nn = neural_net.NNWrapper.load_checkpoint(Game, model_path, agent_name)
+    else:
+        nn = neural_net.NNWrapper.load_checkpoint(Game, model_path, path)
     nn.enable_inference_optimizations()
+    if nn_cache is not None:
+        nn_cache[path] = nn
     return nn, mcts_visits
 
 
@@ -377,8 +388,36 @@ def _is_nn_agent(agent_name, rand_agents):
     return True
 
 
+def _agent_path(agent_name):
+    """Return the underlying .pt path for an NN agent ID, or None.
+
+    Agent IDs may carry an optional ':puct'/':gumbel' suffix (the per-network
+    algorithm override). This strips the suffix and returns the path if it
+    refers to a network checkpoint.
+    """
+    if not isinstance(agent_name, str):
+        return None
+    if agent_name in ("playout", "dummy"):
+        return None
+    path, _ = parse_network_spec(agent_name)
+    return path
+
+
+def _agent_override(agent_name):
+    """Return the explicit per-agent algorithm override ('puct'/'gumbel') or None."""
+    if not isinstance(agent_name, str):
+        return None
+    if agent_name in ("playout", "dummy"):
+        return None
+    _, override = parse_network_spec(agent_name)
+    return override
+
+
 def _build_matchup_caches(Game, agents, players, model_groups, cache_dict):
     """Build per-model-group cache list for a matchup from cache_dict.
+
+    cache_dict is keyed by underlying NN path so that two agents sharing a
+    network (e.g. ``foo.pt`` and ``foo.pt:gumbel``) share its cache.
 
     Returns list of shared_ptr<ShardedS3FIFOCache> (with None for non-NN groups),
     or None if no caches apply.
@@ -394,17 +433,22 @@ def _build_matchup_caches(Game, agents, players, model_groups, cache_dict):
             continue
         # Find agent name for this player
         agent_key = agents[player_idx] if player_idx < len(agents) else None
-        if agent_key is not None and agent_key in cache_dict:
-            caches[group] = cache_dict[agent_key]
+        if agent_key is None:
+            continue
+        path = _agent_path(agent_key)
+        if path is not None and path in cache_dict:
+            caches[group] = cache_dict[path]
             has_any = True
     return caches if has_any else None
 
 
 def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, cache_size=0,
-               agent_overrides=None):
-    """Run a Monrad (Swiss-style) tournament."""
-    if agent_overrides is None:
-        agent_overrides = {}
+               global_algo=None):
+    """Run a Monrad (Swiss-style) tournament.
+
+    ``global_algo`` ('puct'/'gumbel' or None) is applied to NN agents that do
+    not carry their own ':puct'/':gumbel' override in their agent ID.
+    """
     if len(agents) % 2 == 1:
         agents.insert(0, "dummy")
 
@@ -415,13 +459,27 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
     rounds = int(np.ceil(np.log2(count)))
     dist = count
 
-    # Pre-create shared caches for NN agents, splitting budget evenly
+    # Pre-create shared caches for NN agents (keyed by underlying path so that
+    # two agent IDs sharing a network share a cache), splitting budget evenly.
     cache_dict = {}
     if cache_size > 0:
-        nn_agents = [a for a in dict.fromkeys(agents) if _is_nn_agent(a, rand_agents)]
-        per_agent_cache = cache_size // max(len(nn_agents), 1)
-        for a in nn_agents:
-            cache_dict[a] = create_sharded_cache(Game, per_agent_cache)
+        nn_paths = []
+        for a in dict.fromkeys(agents):
+            if not _is_nn_agent(a, rand_agents):
+                continue
+            p = _agent_path(a)
+            if p is not None and p not in cache_dict:
+                cache_dict[p] = None  # placeholder for ordering
+                nn_paths.append(p)
+        per_agent_cache = cache_size // max(len(nn_paths), 1)
+        for p in nn_paths:
+            cache_dict[p] = create_sharded_cache(Game, per_agent_cache)
+
+    # NN loader cache shared across rounds: two agent IDs that resolve to the
+    # same underlying .pt path reuse a single NNWrapper. This is what makes
+    # ``foo.pt`` vs ``foo.pt:gumbel`` end up in the same C++ model_group and
+    # share inference / cache lookups.
+    nn_cache = {}
 
     for r in tqdm.trange(rounds, desc="Rounds"):
         dist = math.ceil(dist / 2)
@@ -485,21 +543,28 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
                     current -= 1
                     continue
 
-                p1, d1 = load_agent(Game, agents[i], model_path, mcts_visits, rand_agents)
-                p2, d2 = load_agent(Game, agents[j], model_path, mcts_visits, rand_agents)
+                p1, d1 = load_agent(
+                    Game, agents[i], model_path, mcts_visits, rand_agents, nn_cache=nn_cache
+                )
+                p2, d2 = load_agent(
+                    Game, agents[j], model_path, mcts_visits, rand_agents, nn_cache=nn_cache
+                )
 
                 players = [p2] * Game.NUM_PLAYERS()
                 depths = [d2] * Game.NUM_PLAYERS()
                 players[0] = p1
                 depths[0] = d1
 
-                # Build per-group caches for this matchup
+                # Build per-group caches for this matchup. set_model_groups
+                # uses id(p), so when agents[i] and agents[j] share an NN
+                # (same path, different :algo) the matchup has a single model
+                # group; _build_matchup_caches keys on underlying path.
                 matchup_agents = [agents[i]] + [agents[j]] * (Game.NUM_PLAYERS() - 1)
                 matchup_caches = _build_matchup_caches(
-                    Game, matchup_agents, players, list(range(Game.NUM_PLAYERS())), cache_dict
+                    Game, matchup_agents, players, _player_groups(players), cache_dict
                 )
 
-                gumbel_kwargs = build_player_gumbel_args(matchup_agents, agent_overrides)
+                gumbel_kwargs = build_player_gumbel_args(matchup_agents, global_algo)
                 win_rates = pit_agents(
                     config,
                     Game,
@@ -530,28 +595,56 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
     return agents, elo, win_matrix
 
 
+def _player_groups(players):
+    """Per-player model group IDs by object identity."""
+    groups = []
+    seen = {}
+    for p in players:
+        pid = id(p)
+        if pid not in seen:
+            seen[pid] = len(seen)
+        groups.append(seen[pid])
+    return groups
+
+
 def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agents, cache_size=0,
-                   agent_overrides=None):
-    """Run a round-robin tournament."""
-    if agent_overrides is None:
-        agent_overrides = {}
+                   global_algo=None):
+    """Run a round-robin tournament.
+
+    ``global_algo`` ('puct'/'gumbel' or None) is applied to NN agents that do
+    not carry their own ':puct'/':gumbel' override in their agent ID.
+    """
     count = len(agents)
     win_matrix = np.zeros((count, count))
 
-    # Pre-create shared caches for NN agents, splitting budget evenly
+    # Pre-create shared caches for NN agents (keyed by underlying path so
+    # ``foo.pt`` and ``foo.pt:gumbel`` share its cache), splitting budget evenly.
     cache_dict = {}
     if cache_size > 0:
-        nn_agents = [a for a in dict.fromkeys(agents) if _is_nn_agent(a, rand_agents)]
-        per_agent_cache = cache_size // max(len(nn_agents), 1)
-        for a in nn_agents:
-            cache_dict[a] = create_sharded_cache(Game, per_agent_cache)
+        nn_paths = []
+        for a in dict.fromkeys(agents):
+            if not _is_nn_agent(a, rand_agents):
+                continue
+            p = _agent_path(a)
+            if p is not None and p not in cache_dict:
+                cache_dict[p] = None
+                nn_paths.append(p)
+        per_agent_cache = cache_size // max(len(nn_paths), 1)
+        for p in nn_paths:
+            cache_dict[p] = create_sharded_cache(Game, per_agent_cache)
+
+    # NN-by-path cache so same network shared across distinct agent IDs reuses
+    # one NNWrapper (and thus one C++ model_group).
+    nn_cache = {}
 
     with tqdm.trange(count * (count - 1) // 2, desc="Pit Agents") as pbar:
         for i in range(count):
-            p1, d1 = load_agent(Game, agents[i], model_path, mcts_visits, rand_agents)
+            p1, d1 = load_agent(
+                Game, agents[i], model_path, mcts_visits, rand_agents, nn_cache=nn_cache
+            )
             for j in range(i + 1, count):
                 p2, d2 = load_agent(
-                    Game, agents[j], model_path, mcts_visits, rand_agents
+                    Game, agents[j], model_path, mcts_visits, rand_agents, nn_cache=nn_cache
                 )
                 players = [p2] * Game.NUM_PLAYERS()
                 depths = [d2] * Game.NUM_PLAYERS()
@@ -560,10 +653,10 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
 
                 matchup_agents = [agents[i]] + [agents[j]] * (Game.NUM_PLAYERS() - 1)
                 matchup_caches = _build_matchup_caches(
-                    Game, matchup_agents, players, list(range(Game.NUM_PLAYERS())), cache_dict
+                    Game, matchup_agents, players, _player_groups(players), cache_dict
                 )
 
-                gumbel_kwargs = build_player_gumbel_args(matchup_agents, agent_overrides)
+                gumbel_kwargs = build_player_gumbel_args(matchup_agents, global_algo)
                 win_rates = pit_agents(
                     config,
                     Game,
@@ -590,10 +683,10 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
 
                 matchup_agents2 = [agents[j]] + [agents[i]] * (Game.NUM_PLAYERS() - 1)
                 matchup_caches2 = _build_matchup_caches(
-                    Game, matchup_agents2, players, list(range(Game.NUM_PLAYERS())), cache_dict
+                    Game, matchup_agents2, players, _player_groups(players), cache_dict
                 )
 
-                gumbel_kwargs2 = build_player_gumbel_args(matchup_agents2, agent_overrides)
+                gumbel_kwargs2 = build_player_gumbel_args(matchup_agents2, global_algo)
                 win_rates2 = pit_agents(
                     config,
                     Game,
@@ -624,12 +717,20 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
 
 
 def _agent_label(agent_name):
-    """Short label for agent name (truncate long paths)."""
+    """Short label for agent name (truncate long paths). Includes an
+    algorithm suffix (-puct/-gumbel) only when the agent ID carries an
+    explicit per-network override."""
     if isinstance(agent_name, (int, float)):
         return f"rand-{agent_name}"
-    name = os.path.basename(str(agent_name))
+    path = _agent_path(agent_name)
+    if path is None:
+        return os.path.basename(str(agent_name))
+    name = os.path.basename(path)
     if name.endswith(".pt"):
         name = name[:-3]
+    override = _agent_override(agent_name)
+    if override:
+        name = f"{name}-{override}"
     return name
 
 
@@ -640,18 +741,20 @@ def _agent_label(agent_name):
 # Spec syntax: "path/to/net.pt" or "path/to/net.pt:puct" or
 # "path/to/net.pt:gumbel". Defaults to auto-detect from the network's
 # experiment config.yaml.
+#
+# Library defaults used when a network has no config.yaml (or it fails to
+# parse). These mirror the C++ MCTS defaults in mcts.h.
 _PUCT_GUMBEL_CFG = {
     "gumbel_enabled": False, "gumbel_m": 16,
-    "gumbel_c_visit": 50.0, "gumbel_c_scale": 1.0, "gumbel_full": False,
-}
-_DEFAULT_GUMBEL_CFG = {
-    "gumbel_enabled": True, "gumbel_m": 16,
     "gumbel_c_visit": 50.0, "gumbel_c_scale": 1.0, "gumbel_full": False,
 }
 
 
 def parse_network_spec(spec):
-    """Parse 'path[:algo]' -> (path, override). override in {None, 'puct', 'gumbel'}."""
+    """Parse 'path[:algo]' -> (path, override). override in {None, 'puct', 'gumbel'}.
+
+    Used for both --networks and --dir arguments — the syntax is the same.
+    """
     if ":" not in spec:
         return spec, None
     path, algo = spec.rsplit(":", 1)
@@ -666,19 +769,12 @@ def parse_network_spec(spec):
 _GUMBEL_CFG_CACHE = {}
 
 
-def get_agent_gumbel_config(agent_path, override=None):
-    """Resolve Gumbel config for a network at agent_path.
+def _load_yaml_gumbel_cfg(agent_path):
+    """Load gumbel_* params from a network's experiment config.yaml. Cached.
 
-    override: 'puct' / 'gumbel' / None (None = auto-detect from config.yaml).
-    Returns a dict with gumbel_* keys, or None for non-NN agents (random/playout/dummy).
+    Falls back to library defaults (PUCT, m=16 etc.) if the config is missing
+    or unparseable.
     """
-    if override == "puct":
-        return dict(_PUCT_GUMBEL_CFG)
-    if override == "gumbel":
-        return dict(_DEFAULT_GUMBEL_CFG)
-
-    if not isinstance(agent_path, str) or not agent_path.endswith(".pt"):
-        return None
     if agent_path in _GUMBEL_CFG_CACHE:
         return dict(_GUMBEL_CFG_CACHE[agent_path])
     # checkpoint path: data/<game>/<experiment>/checkpoint/<file>.pt
@@ -701,19 +797,47 @@ def get_agent_gumbel_config(agent_path, override=None):
             print(f"Warning: could not load {cfg_path} for Gumbel config ({e}); defaulting to PUCT")
             result = dict(_PUCT_GUMBEL_CFG)
     _GUMBEL_CFG_CACHE[agent_path] = dict(result)
-    return result
+    return dict(result)
 
 
-def build_player_gumbel_args(players_agent_paths, agent_overrides):
+def get_agent_gumbel_config(agent_path, override=None):
+    """Resolve Gumbel config for a network at agent_path.
+
+    override: 'puct' / 'gumbel' / None (None = auto-detect from config.yaml).
+    Returns a dict with gumbel_* keys, or None for non-NN agents
+    (random/playout/dummy).
+
+    The override only flips ``gumbel_enabled``; m/c_visit/c_scale/full are
+    always inherited from the network's config.yaml so that a :gumbel override
+    reuses the training-time Gumbel hyperparameters.
+    """
+    if not isinstance(agent_path, str) or not agent_path.endswith(".pt"):
+        return None
+    base = _load_yaml_gumbel_cfg(agent_path)
+    if override == "puct":
+        base["gumbel_enabled"] = False
+    elif override == "gumbel":
+        base["gumbel_enabled"] = True
+    return base
+
+
+def build_player_gumbel_args(players_agent_ids, global_override=None):
     """Compute the player_gumbel_* arg dict for pit_agents from a list of
-    per-player agent paths and a dict {agent_path: override}.
+    per-player agent IDs (which may carry an explicit ':puct'/':gumbel'
+    suffix).
+
+    ``global_override`` ('puct'/'gumbel' or None) applies to agents that do
+    *not* carry an explicit per-agent override.
 
     Returns a dict that can be **-splatted into pit_agents. Returns {} if
     all players are non-NN / PUCT (no need to pass anything)."""
     cfgs = []
     any_gumbel = False
-    for p in players_agent_paths:
-        cfg = get_agent_gumbel_config(p, agent_overrides.get(p))
+    for agent_id in players_agent_ids:
+        path = _agent_path(agent_id)
+        per_agent = _agent_override(agent_id)
+        effective = per_agent if per_agent is not None else global_override
+        cfg = get_agent_gumbel_config(path, effective)
         if cfg is None:
             cfg = dict(_PUCT_GUMBEL_CFG)
         cfgs.append(cfg)
@@ -754,7 +878,11 @@ def parse_args():
         "--dir",
         action="append",
         default=[],
-        help="Experiment directory to load checkpoints from (can repeat)",
+        help="Experiment directory to load checkpoints from (can repeat). "
+             "Accepts an optional ':puct'/':gumbel'/':auto' suffix that is "
+             "applied to every checkpoint selected from this directory, e.g. "
+             "'data/connect4/exp1:gumbel'. Per-network ':algo' on --networks "
+             "still wins for that one network.",
     )
     parser.add_argument(
         "--count",
@@ -804,44 +932,55 @@ def main():
     config = TrainConfig(game=args.game)
     Game = config.Game
 
-    # Build agent list
+    # Build agent list. Agent IDs for NN agents are the spec string itself
+    # (path or path:algo); two agent IDs that resolve to the same .pt path
+    # but have different :algo overrides are tracked as separate competitors.
     agents = []
     rand_agents = []
     model_path = None
-    # agent_path -> override ('puct' | 'gumbel' | None for auto-detect)
-    agent_overrides = {}
 
     if args.networks:
         for spec in args.networks:
             path, override = parse_network_spec(spec)
-            agents.append(path)
-            if override is not None:
-                agent_overrides[path] = override
-        # Derive model_path from first network's checkpoint dir.
-        model_path = os.path.dirname(agents[0])
+            agent_id = f"{path}:{override}" if override is not None else path
+            agents.append(agent_id)
+        # Derive model_path from first network's underlying checkpoint dir.
+        first_path = _agent_path(agents[0]) or agents[0]
+        model_path = os.path.dirname(first_path)
+
+    def _wrap_with_algo(paths, algo):
+        """Apply an algo override to a list of bare .pt paths (no override
+        means leave the path alone)."""
+        if not algo:
+            return list(paths)
+        return [f"{p}:{algo}" for p in paths]
 
     if args.dir:
-        # Directory-based selection
+        # Directory-based selection. Each --dir entry may carry a ':algo'
+        # suffix that is applied to every checkpoint selected from that dir.
         if args.count and len(args.count) != len(args.dir):
             print(
                 f"Error: {len(args.dir)} --dir args but {len(args.count)} --count args"
             )
             sys.exit(1)
 
-        for idx, exp_dir in enumerate(args.dir):
+        first_dir_path = None
+        for idx, exp_dir_spec in enumerate(args.dir):
+            exp_dir, dir_algo = parse_network_spec(exp_dir_spec)
+            if first_dir_path is None:
+                first_dir_path = exp_dir
             count = args.count[idx] if idx < len(args.count) else 10
             selected = select_from_experiment_dir(exp_dir, count)
-            for iter_num, path in selected:
-                agents.append(path)
-            print(
-                f"Selected {len(selected)} networks from {exp_dir}"
-            )
+            wrapped = _wrap_with_algo([p for _, p in selected], dir_algo)
+            agents.extend(wrapped)
+            algo_str = f" (algo={dir_algo})" if dir_algo else ""
+            print(f"Selected {len(selected)} networks from {exp_dir}{algo_str}")
 
         # Use first dir's checkpoint for model_path fallback
-        model_path = os.path.join(args.dir[0], "checkpoint")
+        model_path = os.path.join(first_dir_path, "checkpoint")
     else:
-        # Interactive selection via network_selector
-        # Try new-style experiment dirs first, then old-style
+        # Interactive selection via network_selector. After each batch the
+        # user is asked once for an algorithm override applied to that batch.
         game_dir = os.path.join(args.base_dir, args.game)
         old_model_path = os.path.join(args.base_dir, "checkpoint")
         old_bench_path = os.path.join(args.base_dir, "bench")
@@ -854,9 +993,20 @@ def main():
                     found_experiments = True
                     break
 
+        def _select_into_agents(runs):
+            # interactive_select prompts for an algo override per run, so each
+            # ``path`` returned may already carry a ':puct'/':gumbel' suffix.
+            nn_agents, mcts_visits_local, num_random, num_playout = interactive_select(
+                runs, default_mcts=args.mcts_visits
+            )
+            args.mcts_visits = mcts_visits_local
+            if num_random:
+                args.random = True
+            if num_playout:
+                args.playout = True
+            agents.extend(nn_agents)
+
         if found_experiments:
-            # Flatten all checkpoints into old-style runs for network_selector
-            exp_model_path = os.path.join(game_dir, "_tournament_tmp")
             # Point to the first experiment's checkpoint dir
             for entry in sorted(os.listdir(game_dir)):
                 cdir = os.path.join(game_dir, entry, "checkpoint")
@@ -871,41 +1021,17 @@ def main():
                     runs = discover_runs(cdir)
                     all_runs.update(runs)
             if all_runs:
-                nn_agents, mcts_visits, num_random, num_playout = interactive_select(
-                    all_runs, default_mcts=args.mcts_visits
-                )
-                args.mcts_visits = mcts_visits
-                if num_random:
-                    args.random = True
-                if num_playout:
-                    args.playout = True
-                agents.extend(nn_agents)
+                _select_into_agents(all_runs)
         elif os.path.isdir(old_bench_path):
             model_path = old_bench_path
             runs = discover_runs(model_path)
             if runs:
-                nn_agents, mcts_visits, num_random, num_playout = interactive_select(
-                    runs, default_mcts=args.mcts_visits
-                )
-                args.mcts_visits = mcts_visits
-                if num_random:
-                    args.random = True
-                if num_playout:
-                    args.playout = True
-                agents.extend(nn_agents)
+                _select_into_agents(runs)
         elif os.path.isdir(old_model_path):
             model_path = old_model_path
             runs = discover_runs(model_path)
             if runs:
-                nn_agents, mcts_visits, num_random, num_playout = interactive_select(
-                    runs, default_mcts=args.mcts_visits
-                )
-                args.mcts_visits = mcts_visits
-                if num_random:
-                    args.random = True
-                if num_playout:
-                    args.playout = True
-                agents.extend(nn_agents)
+                _select_into_agents(runs)
         else:
             print(f"No checkpoints found for {args.game}")
             sys.exit(1)
@@ -921,11 +1047,10 @@ def main():
         print("Need at least 2 agents for a tournament")
         sys.exit(1)
 
-    # Global algorithm override (only applies where no per-network override).
-    if args.algo != "auto":
-        for a in agents:
-            if a not in agent_overrides and isinstance(a, str) and a.endswith(".pt"):
-                agent_overrides[a] = args.algo
+    # Global algorithm override applies to NN agents that don't carry their
+    # own ':puct'/':gumbel' suffix in the agent ID. Passed through to
+    # build_player_gumbel_args at matchup time.
+    global_algo = args.algo if args.algo != "auto" else None
 
     print(f"\n=== {args.game} {args.format.capitalize()} Tournament ===")
     print(f"MCTS visits: {args.mcts_visits}")
@@ -935,15 +1060,26 @@ def main():
         print(f"  {_agent_label(a)}")
     print()
 
-    # Print per-agent Gumbel resolution so the user can sanity-check.
-    if any(get_agent_gumbel_config(a, agent_overrides.get(a)) and
-           get_agent_gumbel_config(a, agent_overrides.get(a))["gumbel_enabled"]
-           for a in agents):
+    # Print per-agent Gumbel resolution so the user can sanity-check. Any
+    # gumbel agent triggers the table.
+    def _resolve(a):
+        path = _agent_path(a)
+        per_agent = _agent_override(a)
+        effective = per_agent if per_agent is not None else global_algo
+        return get_agent_gumbel_config(path, effective), per_agent, effective
+    if any((_resolve(a)[0] or {}).get("gumbel_enabled") for a in agents):
         print("Per-agent search algorithm:")
         for a in agents:
-            cfg = get_agent_gumbel_config(a, agent_overrides.get(a))
+            cfg, per_agent, effective = _resolve(a)
             algo = "GUMBEL" if cfg and cfg["gumbel_enabled"] else "puct"
-            src = "override" if a in agent_overrides else ("auto" if cfg else "default")
+            if per_agent is not None:
+                src = "override"
+            elif effective is not None:
+                src = "global"
+            elif cfg is not None:
+                src = "auto"
+            else:
+                src = "default"
             print(f"  {_agent_label(a):<55}  {algo}  ({src})")
         print()
 
@@ -951,12 +1087,12 @@ def main():
     if args.format == "monrad":
         agents, elo, win_matrix = run_monrad(
             config, Game, agents, args.mcts_visits, args.batch_size, model_path, rand_agents,
-            cache_size=args.cache_size, agent_overrides=agent_overrides,
+            cache_size=args.cache_size, global_algo=global_algo,
         )
     else:
         agents, elo, win_matrix = run_roundrobin(
             config, Game, agents, args.mcts_visits, args.batch_size, model_path, rand_agents,
-            cache_size=args.cache_size, agent_overrides=agent_overrides,
+            cache_size=args.cache_size, global_algo=global_algo,
         )
 
     # Print results

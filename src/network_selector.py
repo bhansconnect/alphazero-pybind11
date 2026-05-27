@@ -96,10 +96,38 @@ def parse_manual_iters(input_str: str, available: list[int]) -> list[int]:
     return sorted(requested)
 
 
+def _prompt_run_algo(run_name: str, n_selected: int) -> str | None:
+    """Ask the user for an algorithm override for a single run's checkpoints.
+
+    Returns None (auto = use each network's training config), 'puct', or
+    'gumbel'. Used by interactive_select to give per-directory control,
+    matching the '--dir path:algo' CLI syntax.
+    """
+    while True:
+        choice = input(
+            f"    Algorithm for {run_name} ({n_selected} network(s))? "
+            "[a]uto/[p]uct/[g]umbel (default=auto): "
+        ).strip().lower()
+        if choice in ("", "a", "auto"):
+            return None
+        if choice in ("p", "puct"):
+            return "puct"
+        if choice in ("g", "gumbel"):
+            return "gumbel"
+        print("    Please answer auto, puct, or gumbel.")
+
+
 def interactive_select(
-    runs: dict[str, RunInfo], default_mcts: int = 200
+    runs: dict[str, RunInfo], default_mcts: int = 200, prompt_algo: bool = True
 ) -> tuple[list[str], int, int, int]:
-    """Interactive flow for selecting networks. Returns (agent_filenames, mcts_visits, num_random, num_playout)."""
+    """Interactive flow for selecting networks.
+
+    Returns ``(agent_specs, mcts_visits, num_random, num_playout)``. When
+    ``prompt_algo`` is True (default), each run is also prompted for a
+    PUCT/Gumbel override, and selected paths are wrapped as ``path:algo``
+    for use by the tournament runner. The returned strings are still valid
+    paths-or-specs accepted by the rest of the tournament pipeline.
+    """
     run_names = sorted(runs.keys())
 
     # --- Run selection ---
@@ -142,6 +170,16 @@ def interactive_select(
     print("  m. Manual (specify iterations per run)")
     sel_mode = input("Selection [a]: ").strip().lower() or 'a'
 
+    def _extend_with_algo(paths, run_name):
+        """Wrap paths with ':algo' if the user picks an override for this run."""
+        if not paths:
+            return
+        algo = _prompt_run_algo(run_name, len(paths)) if prompt_algo else None
+        if algo is None:
+            nn_agents.extend(paths)
+        else:
+            nn_agents.extend(f"{p}:{algo}" for p in paths)
+
     nn_agents = []
     if sel_mode == 'n':
         count_str = input("Networks per run [10]: ").strip() or '10'
@@ -155,7 +193,8 @@ def interactive_select(
             selected = auto_select(info.iterations, count)
             labels = [f"{it:04d}" for it in selected]
             print(f"  {name}: {', '.join(labels)}")
-            nn_agents.extend(info.filenames[it] for it in selected)
+            paths = [info.filenames[it] for it in selected]
+            _extend_with_algo(paths, name)
     elif sel_mode == 'm':
         for name in selected_run_names:
             info = runs[name]
@@ -171,11 +210,13 @@ def interactive_select(
                 selected = info.iterations
             labels = [f"{it:04d}" for it in selected]
             print(f"  Selected: {', '.join(labels)}")
-            nn_agents.extend(info.filenames[it] for it in selected)
+            paths = [info.filenames[it] for it in selected]
+            _extend_with_algo(paths, name)
     else:
         for name in selected_run_names:
             info = runs[name]
-            nn_agents.extend(info.filenames[it] for it in info.iterations)
+            paths = [info.filenames[it] for it in info.iterations]
+            _extend_with_algo(paths, name)
 
     nn_agents.sort()  # Sort by filename (iteration order)
 

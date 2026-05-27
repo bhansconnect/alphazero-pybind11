@@ -45,6 +45,12 @@ DEFAULT_FPU_REDUCTION = 0.25
 DEFAULT_TEMPERATURE = 0.5
 DEFAULT_NODE_LIMIT = 100
 
+# Library defaults for Gumbel (mirror mcts.h). Used when a network has no
+# config.yaml — and as a starting point that load_experiment_config tweaks.
+DEFAULT_GUMBEL_M = 16
+DEFAULT_GUMBEL_C_VISIT = 50.0
+DEFAULT_GUMBEL_C_SCALE = 1.0
+
 
 class PlayerConfig:
     """Configuration for a single player (human or AI)."""
@@ -62,6 +68,20 @@ class PlayerConfig:
         self.greedy = False
         self.batch_size = 0  # 0 = auto, 1 = off (sequential), >1 = fixed
         self._calibrated_timed_bs = None
+        # Per-player search algorithm. ``algo_override`` is the explicit user
+        # choice ('puct'/'gumbel'/None=auto). The gumbel_* fields are the
+        # currently-applied parameters, refreshed each time the network is
+        # loaded or the algo override changes.
+        self.algo_override = None
+        self.gumbel_enabled = False
+        self.gumbel_m = DEFAULT_GUMBEL_M
+        self.gumbel_c_visit = DEFAULT_GUMBEL_C_VISIT
+        self.gumbel_c_scale = DEFAULT_GUMBEL_C_SCALE
+        self.gumbel_full = False
+        # Gumbel params auto-detected from the network's config.yaml on load.
+        # Stored separately so we can restore them when the user flips back to
+        # ':auto' after an explicit override.
+        self._yaml_gumbel = None
 
     def __str__(self):
         if not self.is_ai:
@@ -79,7 +99,14 @@ class PlayerConfig:
         batch_str = ""
         if self.batch_size != 1:
             batch_str = f", batch={'auto' if self.batch_size == 0 else self.batch_size}"
-        return f"AI(net={net_str}, nodes={node_str}, time={time_str}, temp={self.temperature}{greedy_str}{batch_str})"
+        algo_str = ""
+        if self.eval_type == "network" or self.eval_type == "playout":
+            if self.gumbel_enabled:
+                tag = "gumbel" if self.algo_override is None else "gumbel*"
+            else:
+                tag = "puct" if self.algo_override is None else "puct*"
+            algo_str = f", algo={tag}"
+        return f"AI(net={net_str}, nodes={node_str}, time={time_str}, temp={self.temperature}{greedy_str}{batch_str}{algo_str})"
 
 
 class PlayContext:
@@ -125,16 +152,31 @@ def _get_cache(ctx, player_idx):
     return ctx.cache
 
 
-def create_mcts(game_class, cpuct=DEFAULT_CPUCT, fpu_reduction=DEFAULT_FPU_REDUCTION):
-    """Create a new MCTS instance."""
+def create_mcts(game_class, cpuct=DEFAULT_CPUCT, fpu_reduction=DEFAULT_FPU_REDUCTION,
+                gumbel_enabled=False, gumbel_m=DEFAULT_GUMBEL_M,
+                gumbel_c_visit=DEFAULT_GUMBEL_C_VISIT,
+                gumbel_c_scale=DEFAULT_GUMBEL_C_SCALE, gumbel_full=False):
+    """Create a new MCTS instance.
+
+    The full constructor is used unconditionally so the Gumbel parameters
+    are wired in; when ``gumbel_enabled`` is False those values are inert
+    in the C++ MCTS (matches the previous PUCT-only construction).
+    """
     return alphazero.MCTS(
         cpuct,
         game_class.NUM_PLAYERS(),
         game_class.NUM_MOVES(),
-        0.25,
-        1.0,
+        0.25,  # epsilon (Dirichlet)
+        1.0,   # root_policy_temp
         fpu_reduction,
         game_class().relative_values(),
+        False,  # root_fpu_zero
+        False,  # shaped_dirichlet
+        bool(gumbel_enabled),
+        int(gumbel_m),
+        float(gumbel_c_visit),
+        float(gumbel_c_scale),
+        bool(gumbel_full),
     )
 
 
@@ -286,6 +328,10 @@ def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None, eval_type
     """Run MCTS search. Returns (visit_counts, num_simulations, wld).
 
     max_batch_size: 0=auto, 1=sequential (no batching), >1=fixed batch size.
+
+    When ``mcts.gumbel_enabled()`` is true, ``set_gumbel_num_sims`` is called
+    once before the search loop with the resolved sim budget. Gumbel requires
+    a fixed budget; for the time-only case we estimate from the batch size.
     """
     if time_limit is None and node_limit is None:
         node_limit = DEFAULT_NODE_LIMIT
@@ -304,6 +350,16 @@ def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None, eval_type
             effective_bs = min(_compute_batch_size(node_limit), max_batch_size)
         else:
             effective_bs = max_batch_size
+
+    # Gumbel needs the sim target before the first find_leaf. When only a
+    # time limit is set we don't know the true budget, so fall back to a
+    # heuristic large enough to allow Sequential Halving to make progress.
+    if mcts.gumbel_enabled():
+        if node_limit is not None:
+            gumbel_target = max(1, int(node_limit))
+        else:
+            gumbel_target = max(16, effective_bs * 16)
+        mcts.set_gumbel_num_sims(gumbel_target)
 
     start = time.time()
     sims = 0
@@ -345,12 +401,25 @@ def run_mcts_search(gs, agent, mcts, time_limit=None, node_limit=None, eval_type
 
 
 def get_ai_probs(ctx, player_idx, valids):
-    """Get AI move probabilities. Returns (probs, source_str, sims, wld)."""
+    """Get AI move probabilities. Returns (probs, source_str, sims, wld).
+
+    When the player's MCTS is in Gumbel mode and greedy is enabled, the
+    returned ``probs`` is a one-hot vector on ``mcts.gumbel_final_action()``
+    so that the move selected matches the Sequential Halving result rather
+    than naive visit-count argmax.
+    """
     pcfg = ctx.players[player_idx]
     wld = None
 
     if pcfg.mcts is None:
-        pcfg.mcts = create_mcts(ctx.game_class, ctx.cpuct, ctx.fpu_reduction)
+        pcfg.mcts = create_mcts(
+            ctx.game_class, ctx.cpuct, ctx.fpu_reduction,
+            gumbel_enabled=pcfg.gumbel_enabled,
+            gumbel_m=pcfg.gumbel_m,
+            gumbel_c_visit=pcfg.gumbel_c_visit,
+            gumbel_c_scale=pcfg.gumbel_c_scale,
+            gumbel_full=pcfg.gumbel_full,
+        )
 
     should_search = (pcfg.think_time is not None and pcfg.think_time > 0) or (
         pcfg.node_limit is not None and pcfg.node_limit > 0
@@ -420,8 +489,22 @@ def get_ai_probs(ctx, player_idx, valids):
 
 
 def get_ai_move(ctx, player_idx, valids, greedy=False):
-    """Get AI move. Returns (action, probs, source, sims, wld)."""
+    """Get AI move. Returns (action, probs, source, sims, wld).
+
+    For Gumbel-enabled players we ask the MCTS directly for its final action
+    (Sequential Halving result) instead of taking argmax over visit counts,
+    which can disagree with the algorithm's choice for small budgets.
+    """
     probs, source, sims, wld = get_ai_probs(ctx, player_idx, valids)
+    pcfg = ctx.players[player_idx]
+    if greedy and pcfg.is_ai and pcfg.gumbel_enabled and pcfg.mcts is not None \
+            and sims > 0:
+        try:
+            action = int(pcfg.mcts.gumbel_final_action())
+            if valids[action] != 0:
+                return action, probs, source, sims, wld
+        except Exception:
+            pass
     if greedy:
         action = np.argmax(probs)
     else:
@@ -509,14 +592,83 @@ def load_experiment_config(checkpoint_path):
     return DEFAULT_CPUCT, DEFAULT_FPU_REDUCTION
 
 
+def load_experiment_gumbel(checkpoint_path):
+    """Load gumbel_* params from a network's experiment config.yaml.
+
+    Returns a dict with keys gumbel_enabled, gumbel_m, gumbel_c_visit,
+    gumbel_c_scale, gumbel_full. Falls back to library defaults (PUCT) when
+    the config is missing or unparseable.
+    """
+    defaults = {
+        "gumbel_enabled": False,
+        "gumbel_m": DEFAULT_GUMBEL_M,
+        "gumbel_c_visit": DEFAULT_GUMBEL_C_VISIT,
+        "gumbel_c_scale": DEFAULT_GUMBEL_C_SCALE,
+        "gumbel_full": False,
+    }
+    checkpoint_dir = os.path.dirname(checkpoint_path)
+    experiment_dir = os.path.dirname(checkpoint_dir)
+    config_path = os.path.join(experiment_dir, "config.yaml")
+    if not os.path.isfile(config_path):
+        return defaults
+    try:
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f) or {}
+        return {
+            "gumbel_enabled": bool(cfg.get("gumbel_enabled", defaults["gumbel_enabled"])),
+            "gumbel_m": int(cfg.get("gumbel_m", defaults["gumbel_m"])),
+            "gumbel_c_visit": float(cfg.get("gumbel_c_visit", defaults["gumbel_c_visit"])),
+            "gumbel_c_scale": float(cfg.get("gumbel_c_scale", defaults["gumbel_c_scale"])),
+            "gumbel_full": bool(cfg.get("gumbel_full", defaults["gumbel_full"])),
+        }
+    except Exception:
+        return defaults
+
+
+def _apply_player_gumbel(pcfg):
+    """Refresh ``pcfg``'s gumbel_* fields from its current ``algo_override``
+    and the cached yaml config (``_yaml_gumbel``).
+
+    The override only flips ``gumbel_enabled``; m/c_visit/c_scale/full are
+    inherited from the yaml so that a manual ':gumbel' uses the same Gumbel
+    hyperparameters the network was trained with. Resets the player's MCTS
+    so the next search rebuilds it with the new configuration.
+    """
+    y = pcfg._yaml_gumbel or {
+        "gumbel_enabled": False,
+        "gumbel_m": DEFAULT_GUMBEL_M,
+        "gumbel_c_visit": DEFAULT_GUMBEL_C_VISIT,
+        "gumbel_c_scale": DEFAULT_GUMBEL_C_SCALE,
+        "gumbel_full": False,
+    }
+    if pcfg.algo_override == "puct":
+        pcfg.gumbel_enabled = False
+    elif pcfg.algo_override == "gumbel":
+        pcfg.gumbel_enabled = True
+    else:
+        pcfg.gumbel_enabled = bool(y["gumbel_enabled"])
+    pcfg.gumbel_m = int(y["gumbel_m"])
+    pcfg.gumbel_c_visit = float(y["gumbel_c_visit"])
+    pcfg.gumbel_c_scale = float(y["gumbel_c_scale"])
+    pcfg.gumbel_full = bool(y["gumbel_full"])
+    pcfg.mcts = None
+
+
 def load_network(game_class, path, players, ctx):
-    """Load a network and assign to specified players."""
+    """Load a network and assign to specified players.
+
+    The gumbel_* fields on each player are refreshed from the network's
+    experiment config.yaml (auto-detect). Existing per-player algo_override
+    settings are preserved across reloads.
+    """
     if path == "playout":
         for p in players:
             ctx.players[p].network = None
             ctx.players[p].network_path = None
             ctx.players[p].eval_type = "playout"
             ctx.players[p].mcts = None
+            ctx.players[p]._yaml_gumbel = None
+            _apply_player_gumbel(ctx.players[p])
         return True
     if not TORCH_AVAILABLE:
         print("Error: torch not available")
@@ -526,11 +678,13 @@ def load_network(game_class, path, players, ctx):
             game_class, os.path.dirname(path), os.path.basename(path)
         )
         net.enable_inference_optimizations()
+        yaml_gumbel = load_experiment_gumbel(path)
         for p in players:
             ctx.players[p].network = net
             ctx.players[p].network_path = path
             ctx.players[p].eval_type = "network"
-            ctx.players[p].mcts = None
+            ctx.players[p]._yaml_gumbel = dict(yaml_gumbel)
+            _apply_player_gumbel(ctx.players[p])
         return True
     except Exception as e:
         print(f"Error loading network: {e}")

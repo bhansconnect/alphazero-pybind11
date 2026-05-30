@@ -59,7 +59,9 @@ class NNArgs:
     # propagation through bootstrap targets, a documented driver of feature
     # collapse / plasticity loss in deep RL (Liu et al. 2024).
     trunk_norm: str = "batch"
-    weight_decay: float = 1e-3
+    # AlphaZero standard. Mirrors TrainConfig.weight_decay default. Old value
+    # was 1e-3; star_gambit train-fixes validated 1e-4 empirically.
+    weight_decay: float = 1e-4
     # Trunk activation. "relu" = nn.ReLU (default). "crelu" = Concatenated ReLU,
     # which preserves negative-direction features (doubles conv in-channels in
     # blocks). Abbas et al. 2023 found this the single most effective plasticity
@@ -502,7 +504,7 @@ class NNWrapper:
         self.game = game
         self.args = args
         self.nnet = NNArch(game, args)
-        self.weight_decay = getattr(args, "weight_decay", 1e-3)
+        self.weight_decay = getattr(args, "weight_decay", 1e-4)
         self.orth_reg_lambda = getattr(args, "orth_reg_lambda", 0.0)
         self.optimizer = optim.SGD(
             self.nnet.parameters(), lr=args.lr, momentum=0.9,

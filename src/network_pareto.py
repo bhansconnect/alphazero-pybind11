@@ -396,11 +396,10 @@ def train_config(nn_wrapper, file_triples, n_samples, epochs, batch_size,
 
     nn_wrapper.nnet.train()
     # Use the wrapper's weight_decay (threaded from NNArgs) so -wd modifier
-    # actually affects training. Fall back to 1e-3 if not present (legacy).
+    # actually affects training. Fall back to optimizer's stored value if
+    # the wrapper attribute is missing (legacy).
     wd = getattr(nn_wrapper, "weight_decay", None)
     if wd is None:
-        # Older NNWrapper instances may store wd only on the optimizer; check
-        # the existing optimizer in case the wrapper was already constructed.
         wd = next(iter(nn_wrapper.optimizer.param_groups))["weight_decay"]
     optimizer = torch.optim.SGD(
         nn_wrapper.nnet.parameters(), lr=lr, momentum=0.9, weight_decay=wd
@@ -860,7 +859,7 @@ def collect_configs(config, args):
     print("    -vfc{N}    value FC hidden layers (default: 1)")
     print("    -pfc{N}    policy FC hidden layers (default: 0)")
     print("    -cv{F}     value loss coefficient (default: from config)")
-    print("    -wd{F}     weight decay (default: 1e-3; e.g. -wd1e-4, -wd0)")
+    print("    -wd{F}     weight decay (default: 1e-4; e.g. -wd1e-3, -wd0)")
     print("    -orth{F}   orthogonal weight reg lambda (default: 0; e.g. -orth1e-2)")
     print("    -ln / -bn  trunk normalization: LayerNorm (GroupNorm(1,C)) or BatchNorm (default)")
     print("    -crelu     Concatenated ReLU trunk activation (preserves negative-direction features)")

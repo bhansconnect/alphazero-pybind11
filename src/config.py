@@ -55,7 +55,11 @@ class TrainConfig:
     # LayerNorm across (C,H,W); avoids the batch-statistic propagation that
     # contributes to feature collapse in bootstrapped RL targets).
     trunk_norm: str = "batch"
-    weight_decay: float = 1e-3
+    # AlphaZero standard. KataGo uses 3e-5 (even lower) and the AlphaZero
+    # paper specifies 1e-4. star_gambit train-fixes empirically validated
+    # the move from 1e-3 -> 1e-4. 1e-3 was the old codebase default and
+    # produced visibly worse plasticity / effective rank.
+    weight_decay: float = 1e-4
     # "relu" (default) or "crelu" (Concatenated ReLU, preserves negative-direction
     # features and mitigates dying-ReLU plasticity loss; doubles intermediate
     # channel count in blocks).
@@ -126,7 +130,10 @@ class TrainConfig:
 
     # Training
     train_batch_size: int = 1024
-    train_sample_rate: int = 1
+    # KataGo's max-train-bucket-per-new-data. Each fresh sample gets 4
+    # training passes through the network. star_gambit train-fixes
+    # validated this empirically; default was 1 previously.
+    train_sample_rate: int = 4
     lr: float = 0.01
     cv: float = 1.5
 

@@ -1327,9 +1327,11 @@ def train(config, paths, experiment_name, iteration, hist_size, run, total_train
 
     # Phase 4: Train
     dataset = TensorDataset(c_data, v_data, pi_data)
-    _dl_workers = config.resolved_loader_threads
+    # num_workers=0: dataset is already in RAM, so workers add no I/O parallelism
+    # but each forked worker COWs the parent's tensors and Python refcount bumps
+    # dirty every page on read → real-RAM blowup proportional to cpu_count().
     dataloader = DataLoader(dataset, batch_size=bs, shuffle=True, pin_memory=torch.cuda.is_available(),
-                            num_workers=_dl_workers)
+                            num_workers=0)
     del c_data, v_data, pi_data
 
     nn = neural_net.NNWrapper.load_checkpoint(

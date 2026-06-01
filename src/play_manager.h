@@ -51,6 +51,10 @@ struct GameData {
   uint32_t move_count = 0;              // all moves
   uint32_t full_move_count = 0;         // full searches only
   uint32_t fast_move_count = 0;         // fast searches only
+  // Per-seat consecutive bad-WLD count for opt-in resign (see PlayParams
+  // seat_resign_threshold). Reset to 0 when the seat's outcome bounces
+  // above the threshold or when resign isn't configured for that seat.
+  std::vector<uint32_t> resign_streak{};
 };
 
 struct PlayParams {
@@ -110,6 +114,22 @@ struct PlayParams {
   std::vector<std::vector<float>> seat_gumbel_c_visit{};
   std::vector<std::vector<float>> seat_gumbel_c_scale{};
   std::vector<std::vector<uint8_t>> seat_gumbel_full{};
+  // Per-seat opt-in: when true, this Gumbel seat samples from
+  // gumbel_improved_policy() ^ (1/temp) (G3) instead of the paper-faithful
+  // gumbel_final_action() (G1, the default). G3 is empirically weaker but
+  // exposed for explicit use cases (e.g. analyzing improved-policy
+  // sampling, or reproducing pre-G1-default training data).
+  std::vector<std::vector<uint8_t>> seat_gumbel_use_improved_policy{};
+  // Per-seat opt-in resign threshold (KataGo/LeelaZero style). When the
+  // entry is finite (i.e. ``> -2.0``), after each MCTS search the seat's
+  // expected outcome (W − L from root_value) is compared against
+  // ``seat_resign_threshold``. If it stays at or below the threshold for
+  // ``seat_resign_consecutive`` consecutive own moves, the game ends with
+  // the opposing player credited as winner. Empty (or threshold ``<= -2``)
+  // disables for that seat. Independent of ``resign_percent`` which is a
+  // global "game already decided" check fed via the resign_scores output.
+  std::vector<std::vector<float>> seat_resign_threshold{};
+  std::vector<std::vector<uint32_t>> seat_resign_consecutive{};
 };
 
 // This is a multithread safe game play manager.
@@ -360,6 +380,9 @@ class DLLEXPORT PlayManager {
   std::vector<std::vector<float>> seat_gumbel_c_visit_;
   std::vector<std::vector<float>> seat_gumbel_c_scale_;
   std::vector<std::vector<uint8_t>> seat_gumbel_full_;
+  std::vector<std::vector<uint8_t>> seat_gumbel_use_improved_policy_;
+  std::vector<std::vector<float>> seat_resign_threshold_;
+  std::vector<std::vector<uint32_t>> seat_resign_consecutive_;
   std::atomic<bool> eager_{false};          // GPU steal: true = hand off partial batches
 
   // Create an MCTS instance with per-seat settings for the given permutation and player.

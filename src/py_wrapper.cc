@@ -203,6 +203,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def("root_q_values", &MCTS::root_q_values)
       .def("probs", &MCTS::probs)
       .def("probs_pruned", &MCTS::probs_pruned)
+      .def("principal_variation", &MCTS::principal_variation,
+           py::arg("depth") = 5)
       .def("depth", &MCTS::depth)
       .def("add_root_noise", &MCTS::add_root_noise)
       .def("apply_root_policy_temp", &MCTS::apply_root_policy_temp)
@@ -337,7 +339,11 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("seat_gumbel_m", &PlayParams::seat_gumbel_m)
       .def_readwrite("seat_gumbel_c_visit", &PlayParams::seat_gumbel_c_visit)
       .def_readwrite("seat_gumbel_c_scale", &PlayParams::seat_gumbel_c_scale)
-      .def_readwrite("seat_gumbel_full", &PlayParams::seat_gumbel_full);
+      .def_readwrite("seat_gumbel_full", &PlayParams::seat_gumbel_full)
+      .def_readwrite("seat_gumbel_use_improved_policy",
+                     &PlayParams::seat_gumbel_use_improved_policy)
+      .def_readwrite("seat_resign_threshold", &PlayParams::seat_resign_threshold)
+      .def_readwrite("seat_resign_consecutive", &PlayParams::seat_resign_consecutive);
 
   py::class_<PlayManager>(m, "PlayManager")
       .def(py::init([](const GameState* gs, PlayParams params) {

@@ -183,5 +183,129 @@ TEST(PlayManager, InitOrderPerPermMctsSettings) {
   }
 }
 
+// -----------------------------------------------------------------------------
+// New per-seat fields (added with G1-default refactor + per-seat resign).
+// -----------------------------------------------------------------------------
+
+TEST(PlayManager, SeatGumbelUseImprovedPolicyWrongDimThrows) {
+  auto params = PlayParams{};
+  params.games_to_play = 4;
+  params.concurrent_games = 2;
+  params.mcts_visits = {10, 10};
+  params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
+  // Default seat_perms is 1 perm, but the override has 2.
+  params.seat_gumbel_use_improved_policy = {{1, 0}, {0, 1}};
+  EXPECT_THROW(
+      PlayManager(std::make_unique<connect4_gs::Connect4GS>(), params),
+      std::runtime_error);
+}
+
+TEST(PlayManager, SeatGumbelUseImprovedPolicyInnerDimThrows) {
+  auto params = PlayParams{};
+  params.games_to_play = 4;
+  params.concurrent_games = 2;
+  params.mcts_visits = {10, 10};
+  params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
+  // 1 perm (default), but inner dim 3 != num_players (2).
+  params.seat_gumbel_use_improved_policy = {{1, 0, 1}};
+  EXPECT_THROW(
+      PlayManager(std::make_unique<connect4_gs::Connect4GS>(), params),
+      std::runtime_error);
+}
+
+TEST(PlayManager, SeatResignThresholdWrongDimThrows) {
+  auto params = PlayParams{};
+  params.games_to_play = 4;
+  params.concurrent_games = 2;
+  params.mcts_visits = {10, 10};
+  params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
+  params.seat_resign_threshold = {{-0.9, -0.9}, {-0.9, -0.9}};  // 2 perms
+  EXPECT_THROW(
+      PlayManager(std::make_unique<connect4_gs::Connect4GS>(), params),
+      std::runtime_error);
+}
+
+TEST(PlayManager, SeatResignConsecutiveWrongDimThrows) {
+  auto params = PlayParams{};
+  params.games_to_play = 4;
+  params.concurrent_games = 2;
+  params.mcts_visits = {10, 10};
+  params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
+  params.seat_resign_consecutive = {{3, 3, 3}};  // 1 perm, inner=3 != 2
+  EXPECT_THROW(
+      PlayManager(std::make_unique<connect4_gs::Connect4GS>(), params),
+      std::runtime_error);
+}
+
+TEST(PlayManager, NewSeatFieldDefaultsFromEmpty) {
+  // When the new per-seat fields are left empty, PlayManager fills them with
+  // the documented sentinels: G3 opt-in = 0 (paper-faithful G1), resign
+  // threshold = -2.0 (disabled), resign consecutive = 1.
+  auto params = PlayParams{};
+  params.games_to_play = 4;
+  params.concurrent_games = 2;
+  params.mcts_visits = {10, 10};
+  params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
+  EXPECT_NO_THROW(
+      PlayManager(std::make_unique<connect4_gs::Connect4GS>(), params));
+}
+
+TEST(PlayManager, RunsWithG3OptInAndResign) {
+  // Sanity check: a full PlayManager run with both new fields exercised
+  // completes without throwing. With random eval, the resign threshold
+  // (-1.5, below any achievable V) effectively disables resign even when
+  // the field is populated.
+  auto params = PlayParams{};
+  params.games_to_play = 16;
+  params.concurrent_games = 4;
+  params.mcts_visits = {10, 10};
+  params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
+  params.seat_gumbel_use_improved_policy = {{0, 0}};
+  params.seat_resign_threshold = {{-1.5f, -1.5f}};  // never fires
+  params.seat_resign_consecutive = {{1, 1}};
+
+  auto pm = PlayManager{std::make_unique<connect4_gs::Connect4GS>(), params};
+  auto play = std::async(std::launch::async, [&] {
+    try {
+      pm.play();
+    } catch (const std::exception& e) {
+      FAIL() << "Got an exception: " << e.what() << std::endl;
+    }
+  });
+  play.wait();
+  EXPECT_EQ(pm.games_completed(), 16U);
+}
+
+TEST(PlayManager, AggressiveResignTerminatesGames) {
+  // Set the resign threshold high enough that every move triggers
+  // (threshold > +1 makes V <= threshold always true since V ∈ [-1, 1]).
+  // With consecutive=1, the very first move of every game causes the seat
+  // to resign, ending the game immediately. We verify all games complete.
+  auto params = PlayParams{};
+  params.games_to_play = 8;
+  params.concurrent_games = 4;
+  params.mcts_visits = {10, 10};
+  params.eval_type = {EvalType::RANDOM, EvalType::RANDOM};
+  params.seat_resign_threshold = {{2.0f, 2.0f}};   // always triggers
+  params.seat_resign_consecutive = {{1, 1}};
+
+  auto pm = PlayManager{std::make_unique<connect4_gs::Connect4GS>(), params};
+  auto play = std::async(std::launch::async, [&] {
+    try {
+      pm.play();
+    } catch (const std::exception& e) {
+      FAIL() << "Got an exception: " << e.what() << std::endl;
+    }
+  });
+  play.wait();
+  EXPECT_EQ(pm.games_completed(), 8U);
+  // Every game ends via resignation, so the resign_scores accumulator must
+  // have counted them all.
+  const auto rs = pm.resign_scores();
+  float total = 0.0f;
+  for (Eigen::Index i = 0; i < rs.size(); ++i) total += rs[i];
+  EXPECT_GT(total, 0.0f);
+}
+
 }  // namespace
 }  // namespace alphazero

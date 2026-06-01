@@ -9,7 +9,13 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import alphazero
-from config import TrainConfig, GAME_REGISTRY, load_config, find_latest_checkpoint
+from config import (
+    TrainConfig, GAME_REGISTRY, load_config, find_latest_checkpoint,
+    load_experiment_config, load_experiment_gumbel,
+    EXPERIMENT_DEFAULT_CPUCT, EXPERIMENT_DEFAULT_FPU_REDUCTION,
+    EXPERIMENT_DEFAULT_GUMBEL_M, EXPERIMENT_DEFAULT_GUMBEL_C_VISIT,
+    EXPERIMENT_DEFAULT_GUMBEL_C_SCALE,
+)
 import neural_net
 
 
@@ -641,3 +647,122 @@ def test_nnargs_from_config_cli_override(tmp_path):
     # defaults preserved for fields not overridden
     assert nnargs.pi_head_convs == 0
     assert nnargs.v_fc_layers == 1
+
+
+# ---------------------------------------------------------------------------
+# load_experiment_config / load_experiment_gumbel
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_checkpoint(tmp_path, yaml_contents=None):
+    """Build data/<game>/<exp>/checkpoint/<file>.pt layout. Optionally write
+    config.yaml at the experiment dir. Returns the checkpoint .pt path."""
+    exp_dir = tmp_path / "exp"
+    ckpt_dir = exp_dir / "checkpoint"
+    ckpt_dir.mkdir(parents=True)
+    if yaml_contents is not None:
+        (exp_dir / "config.yaml").write_text(yaml_contents)
+    ckpt = ckpt_dir / "0001-foo.pt"
+    ckpt.touch()  # file doesn't need real contents for these helpers
+    return str(ckpt)
+
+
+# --- load_experiment_config ---
+
+
+def test_load_experiment_config_missing_yaml_returns_library_defaults(tmp_path):
+    ckpt = _make_fake_checkpoint(tmp_path)  # no yaml
+    cpuct, fpu = load_experiment_config(ckpt)
+    assert cpuct == EXPERIMENT_DEFAULT_CPUCT
+    assert fpu == EXPERIMENT_DEFAULT_FPU_REDUCTION
+
+
+def test_load_experiment_config_reads_full_yaml(tmp_path):
+    ckpt = _make_fake_checkpoint(tmp_path, "cpuct: 2.0\nfpu_reduction: 0.5\n")
+    cpuct, fpu = load_experiment_config(ckpt)
+    assert cpuct == 2.0
+    assert fpu == 0.5
+
+
+def test_load_experiment_config_partial_yaml_fills_defaults(tmp_path):
+    ckpt = _make_fake_checkpoint(tmp_path, "cpuct: 1.5\n")  # fpu missing
+    cpuct, fpu = load_experiment_config(ckpt)
+    assert cpuct == 1.5
+    assert fpu == EXPERIMENT_DEFAULT_FPU_REDUCTION
+
+
+def test_load_experiment_config_unparseable_yaml_falls_back(tmp_path):
+    # YAML parser raises on this; helper should silently return defaults.
+    ckpt = _make_fake_checkpoint(tmp_path, "::not: valid: yaml:::\nfoo: : :\n")
+    cpuct, fpu = load_experiment_config(ckpt)
+    assert cpuct == EXPERIMENT_DEFAULT_CPUCT
+    assert fpu == EXPERIMENT_DEFAULT_FPU_REDUCTION
+
+
+# --- load_experiment_gumbel ---
+
+
+def test_load_experiment_gumbel_missing_yaml_returns_puct_defaults(tmp_path):
+    ckpt = _make_fake_checkpoint(tmp_path)
+    g = load_experiment_gumbel(ckpt)
+    assert g["gumbel_enabled"] is False
+    assert g["gumbel_m"] == EXPERIMENT_DEFAULT_GUMBEL_M
+    assert g["gumbel_c_visit"] == EXPERIMENT_DEFAULT_GUMBEL_C_VISIT
+    assert g["gumbel_c_scale"] == EXPERIMENT_DEFAULT_GUMBEL_C_SCALE
+    assert g["gumbel_full"] is False
+
+
+def test_load_experiment_gumbel_reads_full_yaml(tmp_path):
+    ckpt = _make_fake_checkpoint(
+        tmp_path,
+        "gumbel_enabled: true\n"
+        "gumbel_m: 8\n"
+        "gumbel_c_visit: 30.0\n"
+        "gumbel_c_scale: 2.0\n"
+        "gumbel_full: true\n",
+    )
+    g = load_experiment_gumbel(ckpt)
+    assert g == {
+        "gumbel_enabled": True,
+        "gumbel_m": 8,
+        "gumbel_c_visit": 30.0,
+        "gumbel_c_scale": 2.0,
+        "gumbel_full": True,
+    }
+
+
+def test_load_experiment_gumbel_partial_yaml_fills_defaults(tmp_path):
+    # Only one key set; rest must fall back to library defaults.
+    ckpt = _make_fake_checkpoint(tmp_path, "gumbel_enabled: true\n")
+    g = load_experiment_gumbel(ckpt)
+    assert g["gumbel_enabled"] is True
+    assert g["gumbel_m"] == EXPERIMENT_DEFAULT_GUMBEL_M
+    assert g["gumbel_c_visit"] == EXPERIMENT_DEFAULT_GUMBEL_C_VISIT
+    assert g["gumbel_c_scale"] == EXPERIMENT_DEFAULT_GUMBEL_C_SCALE
+    assert g["gumbel_full"] is False
+
+
+def test_load_experiment_gumbel_typecasts_yaml_strings(tmp_path):
+    # YAML can hand back strings if the document is quoted weirdly; the
+    # helper should coerce to the documented types.
+    ckpt = _make_fake_checkpoint(
+        tmp_path,
+        "gumbel_enabled: 1\n"        # truthy int -> bool
+        "gumbel_m: 4\n"
+        "gumbel_c_visit: 25\n"        # int parses as float
+        "gumbel_c_scale: 0.5\n"
+        "gumbel_full: 0\n",           # falsy int -> bool
+    )
+    g = load_experiment_gumbel(ckpt)
+    assert g["gumbel_enabled"] is True
+    assert g["gumbel_m"] == 4 and isinstance(g["gumbel_m"], int)
+    assert g["gumbel_c_visit"] == 25.0 and isinstance(g["gumbel_c_visit"], float)
+    assert g["gumbel_c_scale"] == 0.5
+    assert g["gumbel_full"] is False
+
+
+def test_load_experiment_gumbel_unparseable_yaml_falls_back(tmp_path):
+    ckpt = _make_fake_checkpoint(tmp_path, "::not: valid: yaml:::\nfoo: : :\n")
+    g = load_experiment_gumbel(ckpt)
+    assert g["gumbel_enabled"] is False
+    assert g["gumbel_m"] == EXPERIMENT_DEFAULT_GUMBEL_M

@@ -96,6 +96,8 @@ def pit_agents(config, Game, players, mcts_visits, bs, name,
                player_gumbel_enabled=None, player_gumbel_m=None,
                player_gumbel_c_visit=None, player_gumbel_c_scale=None,
                player_gumbel_full=None,
+               player_gumbel_use_improved_policy=None,
+               player_resign_threshold=None, player_resign_consecutive=None,
                tree_reuse=True, cache_size=0, caches=None,
                variant_probs=None, return_per_variant=False):
     """Play agents against each other across all seat permutations in one run.
@@ -187,6 +189,17 @@ def pit_agents(config, Game, players, mcts_visits, bs, name,
         params.seat_gumbel_c_scale = _rotate_per_seat(player_gumbel_c_scale, float)
     if player_gumbel_full is not None:
         params.seat_gumbel_full = _rotate_per_seat(player_gumbel_full, int)
+    if player_gumbel_use_improved_policy is not None:
+        params.seat_gumbel_use_improved_policy = _rotate_per_seat(
+            player_gumbel_use_improved_policy, int)
+
+    # Per-seat resign overrides (opt-in: -2.0 sentinel keeps the seat un-resigning).
+    if player_resign_threshold is not None:
+        params.seat_resign_threshold = _rotate_per_seat(
+            player_resign_threshold, float)
+    if player_resign_consecutive is not None:
+        params.seat_resign_consecutive = _rotate_per_seat(
+            player_resign_consecutive, int)
 
     n = bs * cb * num_players  # all perms at once
     params.games_to_play = n
@@ -443,11 +456,13 @@ def _build_matchup_caches(Game, agents, players, model_groups, cache_dict):
 
 
 def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, cache_size=0,
-               global_algo=None):
+               global_algo=None, gumbel_c_scale=None, gumbel_mode="g1"):
     """Run a Monrad (Swiss-style) tournament.
 
     ``global_algo`` ('puct'/'gumbel' or None) is applied to NN agents that do
     not carry their own ':puct'/':gumbel' override in their agent ID.
+    ``gumbel_c_scale`` overrides the per-network yaml c_scale (None keeps yaml).
+    ``gumbel_mode`` is 'g1' (paper-faithful, default) or 'g3' (improved-policy).
     """
     if len(agents) % 2 == 1:
         agents.insert(0, "dummy")
@@ -564,7 +579,9 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
                     Game, matchup_agents, players, _player_groups(players), cache_dict
                 )
 
-                gumbel_kwargs = build_player_gumbel_args(matchup_agents, global_algo)
+                gumbel_kwargs = build_player_gumbel_args(
+                    matchup_agents, global_algo,
+                    c_scale_override=gumbel_c_scale, mode=gumbel_mode)
                 win_rates = pit_agents(
                     config,
                     Game,
@@ -608,7 +625,7 @@ def _player_groups(players):
 
 
 def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agents, cache_size=0,
-                   global_algo=None):
+                   global_algo=None, gumbel_c_scale=None, gumbel_mode="g1"):
     """Run a round-robin tournament.
 
     ``global_algo`` ('puct'/'gumbel' or None) is applied to NN agents that do
@@ -656,7 +673,9 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                     Game, matchup_agents, players, _player_groups(players), cache_dict
                 )
 
-                gumbel_kwargs = build_player_gumbel_args(matchup_agents, global_algo)
+                gumbel_kwargs = build_player_gumbel_args(
+                    matchup_agents, global_algo,
+                    c_scale_override=gumbel_c_scale, mode=gumbel_mode)
                 win_rates = pit_agents(
                     config,
                     Game,
@@ -686,7 +705,9 @@ def run_roundrobin(config, Game, agents, mcts_visits, bs, model_path, rand_agent
                     Game, matchup_agents2, players, _player_groups(players), cache_dict
                 )
 
-                gumbel_kwargs2 = build_player_gumbel_args(matchup_agents2, global_algo)
+                gumbel_kwargs2 = build_player_gumbel_args(
+                    matchup_agents2, global_algo,
+                    c_scale_override=gumbel_c_scale, mode=gumbel_mode)
                 win_rates2 = pit_agents(
                     config,
                     Game,
@@ -821,13 +842,20 @@ def get_agent_gumbel_config(agent_path, override=None):
     return base
 
 
-def build_player_gumbel_args(players_agent_ids, global_override=None):
+def build_player_gumbel_args(players_agent_ids, global_override=None,
+                             c_scale_override=None, mode="g1"):
     """Compute the player_gumbel_* arg dict for pit_agents from a list of
     per-player agent IDs (which may carry an explicit ':puct'/':gumbel'
     suffix).
 
-    ``global_override`` ('puct'/'gumbel' or None) applies to agents that do
-    *not* carry an explicit per-agent override.
+    Args:
+        players_agent_ids: per-player agent ids.
+        global_override: 'puct'/'gumbel' or None — applies to agents without
+            their own per-agent suffix.
+        c_scale_override: if not None, replaces gumbel_c_scale for every
+            Gumbel-enabled seat (yaml values still drive PUCT seats).
+        mode: 'g1' (default) or 'g3'. 'g3' opts every Gumbel seat into the
+            improved-policy sampling path (paper-faithful G1 is otherwise).
 
     Returns a dict that can be **-splatted into pit_agents. Returns {} if
     all players are non-NN / PUCT (no need to pass anything)."""
@@ -840,19 +868,28 @@ def build_player_gumbel_args(players_agent_ids, global_override=None):
         cfg = get_agent_gumbel_config(path, effective)
         if cfg is None:
             cfg = dict(_PUCT_GUMBEL_CFG)
+        if c_scale_override is not None and cfg["gumbel_enabled"]:
+            cfg = dict(cfg)
+            cfg["gumbel_c_scale"] = float(c_scale_override)
         cfgs.append(cfg)
         if cfg["gumbel_enabled"]:
             any_gumbel = True
     if not any_gumbel:
         # All PUCT -- skip per-seat overrides entirely (backward compat).
         return {}
-    return {
+    out = {
         "player_gumbel_enabled": [c["gumbel_enabled"] for c in cfgs],
         "player_gumbel_m":       [c["gumbel_m"] for c in cfgs],
         "player_gumbel_c_visit": [c["gumbel_c_visit"] for c in cfgs],
         "player_gumbel_c_scale": [c["gumbel_c_scale"] for c in cfgs],
         "player_gumbel_full":    [c["gumbel_full"] for c in cfgs],
     }
+    if mode == "g3":
+        # Opt every Gumbel-enabled seat into improved-policy sampling.
+        out["player_gumbel_use_improved_policy"] = [
+            int(c["gumbel_enabled"]) for c in cfgs
+        ]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -921,6 +958,24 @@ def parse_args():
              "(default) uses each agent's training config. 'puct'/'gumbel' "
              "forces every agent to that algorithm. Per-network ':algo' "
              "suffixes on --networks still win over --algo.",
+    )
+    parser.add_argument(
+        "--gumbel-c-scale", type=float, default=None,
+        help="Override Gumbel c_scale for all Gumbel-enabled agents. "
+             "Default (None): use each network's yaml value (typically 1.0). "
+             "Lower = more variance; higher = sharper Q-driven play. "
+             "Empirical strength sweet spot: ~2.0."
+    )
+    parser.add_argument(
+        "--gumbel-mode",
+        choices=["g1", "g3"],
+        default="g1",
+        help="Gumbel acting mode for all Gumbel-enabled agents. 'g1' "
+             "(default; paper-faithful) uses gumbel_final_action — "
+             "deterministic argmax over Sequential-Halving survivors with "
+             "fresh Gumbel perturbations per search. 'g3' samples from "
+             "gumbel_improved_policy^(1/temp); empirically weaker but "
+             "available for explicit study."
     )
     return parser.parse_args()
 
@@ -1088,11 +1143,13 @@ def main():
         agents, elo, win_matrix = run_monrad(
             config, Game, agents, args.mcts_visits, args.batch_size, model_path, rand_agents,
             cache_size=args.cache_size, global_algo=global_algo,
+            gumbel_c_scale=args.gumbel_c_scale, gumbel_mode=args.gumbel_mode,
         )
     else:
         agents, elo, win_matrix = run_roundrobin(
             config, Game, agents, args.mcts_visits, args.batch_size, model_path, rand_agents,
             cache_size=args.cache_size, global_algo=global_algo,
+            gumbel_c_scale=args.gumbel_c_scale, gumbel_mode=args.gumbel_mode,
         )
 
     # Print results

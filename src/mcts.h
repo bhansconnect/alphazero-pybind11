@@ -88,6 +88,12 @@ class DLLEXPORT MCTS {
   [[nodiscard]] Vector<float> root_q_values() const noexcept;
   [[nodiscard]] Vector<float> probs(float temp) const noexcept;
   [[nodiscard]] Vector<float> probs_pruned(float temp) const noexcept;
+  // Walk the tree from the root, taking the best (most-visited) child at each
+  // level up to ``depth`` plies. For Gumbel-enabled roots the first ply uses
+  // gumbel_final_action() instead of argmax(visits); deeper plies use argmax
+  // because the Gumbel state is only meaningful at the root. Stops early when
+  // a node has no visited children. Returns the move indices played.
+  [[nodiscard]] Vector<uint32_t> principal_variation(uint32_t depth) const noexcept;
   [[nodiscard]] uint32_t depth() const noexcept { return depth_; };
   [[nodiscard]] float avg_leaf_depth() const noexcept {
       return depth_ == 0 ? 0.0f : static_cast<float>(total_leaf_depth_) / static_cast<float>(depth_);
@@ -122,6 +128,11 @@ class DLLEXPORT MCTS {
   // The action A_{n+1} the paper recommends playing: argmax over the final
   // surviving candidates of (g + logits + sigma(q_hat)).
   [[nodiscard]] uint32_t gumbel_final_action() const noexcept;
+
+  // Seed the thread-local RNG used for Dirichlet noise and Gumbel
+  // perturbations. Test-only — production callers rely on the random_device
+  // seed set at first use.
+  static void seed_thread_rng(uint64_t seed) noexcept;
 
  private:
   struct InFlightLeaf {

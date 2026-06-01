@@ -7,7 +7,7 @@ game registry, experiment directory resolution, and path management.
 import glob
 import os
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields as dc_fields
 
 import yaml
 import alphazero
@@ -392,6 +392,71 @@ class TrainConfig:
             yaml.dump(asdict(self), f, default_flow_style=False, sort_keys=False)
 
 
+# Defaults mirroring src/mcts.h library defaults; used as fallback when an
+# experiment's config.yaml is missing or unreadable.
+EXPERIMENT_DEFAULT_CPUCT = 1.25
+EXPERIMENT_DEFAULT_FPU_REDUCTION = 0.25
+EXPERIMENT_DEFAULT_GUMBEL_M = 16
+EXPERIMENT_DEFAULT_GUMBEL_C_VISIT = 50.0
+EXPERIMENT_DEFAULT_GUMBEL_C_SCALE = 1.0
+
+
+def _experiment_config_path(checkpoint_path: str) -> str:
+    """Return data/<game>/<exp>/config.yaml for a checkpoint at
+    data/<game>/<exp>/checkpoint/<iter>-<name>.pt."""
+    checkpoint_dir = os.path.dirname(checkpoint_path)
+    experiment_dir = os.path.dirname(checkpoint_dir)
+    return os.path.join(experiment_dir, "config.yaml")
+
+
+def load_experiment_config(checkpoint_path: str):
+    """Read (cpuct, fpu_reduction) from a checkpoint's experiment config.yaml.
+    Falls back to library defaults if missing/unreadable."""
+    config_path = _experiment_config_path(checkpoint_path)
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f) or {}
+            return (
+                cfg.get("cpuct", EXPERIMENT_DEFAULT_CPUCT),
+                cfg.get("fpu_reduction", EXPERIMENT_DEFAULT_FPU_REDUCTION),
+            )
+        except Exception:
+            pass
+    return EXPERIMENT_DEFAULT_CPUCT, EXPERIMENT_DEFAULT_FPU_REDUCTION
+
+
+def load_experiment_gumbel(checkpoint_path: str) -> dict:
+    """Read gumbel_* params from a checkpoint's experiment config.yaml.
+
+    Returns a dict with keys gumbel_enabled / gumbel_m / gumbel_c_visit /
+    gumbel_c_scale / gumbel_full. Falls back to library defaults (PUCT) when
+    the config is missing or unparseable.
+    """
+    defaults = {
+        "gumbel_enabled": False,
+        "gumbel_m": EXPERIMENT_DEFAULT_GUMBEL_M,
+        "gumbel_c_visit": EXPERIMENT_DEFAULT_GUMBEL_C_VISIT,
+        "gumbel_c_scale": EXPERIMENT_DEFAULT_GUMBEL_C_SCALE,
+        "gumbel_full": False,
+    }
+    config_path = _experiment_config_path(checkpoint_path)
+    if not os.path.isfile(config_path):
+        return defaults
+    try:
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f) or {}
+        return {
+            "gumbel_enabled": bool(cfg.get("gumbel_enabled", defaults["gumbel_enabled"])),
+            "gumbel_m": int(cfg.get("gumbel_m", defaults["gumbel_m"])),
+            "gumbel_c_visit": float(cfg.get("gumbel_c_visit", defaults["gumbel_c_visit"])),
+            "gumbel_c_scale": float(cfg.get("gumbel_c_scale", defaults["gumbel_c_scale"])),
+            "gumbel_full": bool(cfg.get("gumbel_full", defaults["gumbel_full"])),
+        }
+    except Exception:
+        return defaults
+
+
 def find_latest_checkpoint(checkpoint_dir):
     """Scan checkpoint dir for highest iteration number, return it (0 if none)."""
     pattern = os.path.join(checkpoint_dir, "*.pt")
@@ -415,6 +480,12 @@ def load_config(yaml_path: str, cli_overrides: dict, warn=True) -> TrainConfig:
     """
     config = TrainConfig()
 
+    # Declared dataclass-field types (annotation-based). Used to decide whether
+    # to coerce YAML-string values for numeric fields. Falling back to
+    # type(default) misclassifies dual-typed fields like temp_decay_half_life
+    # (declared ``object`` but default ``10`` -> looks like an int).
+    declared_types = {f.name: f.type for f in dc_fields(TrainConfig)}
+
     if yaml_path:
         with open(yaml_path) as f:
             yaml_data = yaml.safe_load(f) or {}
@@ -425,10 +496,13 @@ def load_config(yaml_path: str, cli_overrides: dict, warn=True) -> TrainConfig:
                 continue
             # YAML 1.1 (PyYAML default) parses unsigned scientific notation like
             # "1e-4" as a string, not a float. Coerce to the field's declared
-            # type when the default is numeric and the YAML value is a string.
-            field_type = type(getattr(config, key))
-            if field_type in (int, float) and isinstance(val, str):
-                val = field_type(val)
+            # type when the field is annotated numeric and the YAML value is a
+            # string. Skip coercion for fields with a broader annotation
+            # (object / Union / etc.) so the dedicated validate() check can
+            # produce a friendly error instead of an internal ValueError.
+            declared = declared_types.get(key)
+            if declared in (int, float) and isinstance(val, str):
+                val = declared(val)
             setattr(config, key, val)
 
     for key, val in cli_overrides.items():

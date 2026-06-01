@@ -498,8 +498,21 @@ TEST(MCTS, RawPolicyTemperatureInteraction) {
 }
 
 // NOLINTNEXTLINE
-TEST(MCTS, PuctInversionNeverExceedsActual) {
-  // Structural invariant: for every move, pruned probability <= unpruned.
+TEST(MCTS, PuctInversionPropertiesAfterNoise) {
+  // probs_pruned() implements KataGo's PUCT inversion: each child's "desired"
+  // visit count is clamped to its actual visits, so visited children with
+  // poor Q values get their counts shrunk. After normalization this *can*
+  // raise the share of a non-argmax-visit move when that move has a
+  // dominant Q, so the old "non-best never gains share" claim isn't an
+  // invariant of the algorithm. The properties below ARE invariants:
+  //
+  //   (a) The pruned distribution is a valid probability vector.
+  //   (b) The visited child with the highest Q has pruned share >= regular
+  //       share (its desired = actual; everyone else's desired <= actual,
+  //       so after normalization the Q-best move's relative weight grows).
+  //   (c) Pruned shares are zero exactly where regular shares are zero
+  //       (pruning never lights up unvisited moves).
+  MCTS::seed_thread_rng(20240601u);
   auto gs = connect4_gs::Connect4GS{};
   gs.play_move(1);
   gs.play_move(6);
@@ -519,21 +532,40 @@ TEST(MCTS, PuctInversionNeverExceedsActual) {
     mcts.process_result(gs, v, pi, false);
   }
 
-  auto counts = mcts.counts();
-  auto regular = mcts.probs(1.0);
-  auto pruned = mcts.probs_pruned(1.0);
+  const auto counts = mcts.counts();
+  const auto q_vals = mcts.root_q_values();
+  const auto regular = mcts.probs(1.0);
+  const auto pruned = mcts.probs_pruned(1.0);
 
-  // Pruned uses desired <= actual for each child, so after normalization
-  // the best move gains share and others lose. Under Dirichlet noise a
-  // lightly-pruned non-best move can gain a small amount of share when
-  // other moves are heavily pruned, so use a relaxed tolerance.
-  float best_regular_val = regular.maxCoeff();
-  for (int m = 0; m < gs.num_moves(); ++m) {
-    if (regular(m) == best_regular_val) continue;  // best move can gain
-    EXPECT_LE(pruned(m), regular(m) + 0.01)
-        << "Non-best move " << m << " should not gain significant share after pruning"
-        << "\nregular: " << regular.transpose()
-        << "\npruned:  " << pruned.transpose();
+  // (a) Valid probability vector.
+  EXPECT_NEAR(pruned.sum(), 1.0f, 1e-4f);
+  for (int m = 0; m < static_cast<int>(gs.num_moves()); ++m) {
+    EXPECT_GE(pruned(m), 0.0f) << "Negative pruned share for move " << m;
+  }
+
+  // (b) Q-best visited move gains or holds its share.
+  int q_best_visited = -1;
+  float q_best_value = -std::numeric_limits<float>::infinity();
+  for (int m = 0; m < static_cast<int>(gs.num_moves()); ++m) {
+    if (counts(m) > 0 && q_vals(m) > q_best_value) {
+      q_best_value = q_vals(m);
+      q_best_visited = m;
+    }
+  }
+  ASSERT_GE(q_best_visited, 0) << "expected at least one visited move";
+  EXPECT_GE(pruned(q_best_visited), regular(q_best_visited) - 1e-5f)
+      << "Q-best visited move should not lose share after pruning"
+      << "\nregular: " << regular.transpose()
+      << "\npruned:  " << pruned.transpose()
+      << "\ncounts:  " << counts.transpose()
+      << "\nq_vals:  " << q_vals.transpose();
+
+  // (c) Support set preserved (pruning doesn't create mass at unvisited moves).
+  for (int m = 0; m < static_cast<int>(gs.num_moves()); ++m) {
+    if (regular(m) == 0.0f) {
+      EXPECT_FLOAT_EQ(pruned(m), 0.0f)
+          << "Unvisited move " << m << " gained mass after pruning";
+    }
   }
 }
 

@@ -1,6 +1,8 @@
 #include "play_manager.h"
 
+#include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <optional>
 
 #include "tracy_zones.h"
@@ -132,6 +134,32 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
   } else {
     validate_2d(params_.seat_gumbel_full, "seat_gumbel_full");
     seat_gumbel_full_ = params_.seat_gumbel_full;
+  }
+  // G3 opt-in: default false (i.e. paper-faithful G1 acting for all Gumbel
+  // seats). Tournaments / self-play can flip individual seats to G3 via
+  // seat_gumbel_use_improved_policy.
+  if (params_.seat_gumbel_use_improved_policy.empty()) {
+    seat_gumbel_use_improved_policy_.resize(num_perms,
+        std::vector<uint8_t>(np, 0u));
+  } else {
+    validate_2d(params_.seat_gumbel_use_improved_policy,
+                "seat_gumbel_use_improved_policy");
+    seat_gumbel_use_improved_policy_ = params_.seat_gumbel_use_improved_policy;
+  }
+  // Resign threshold/consecutive default to "disabled" sentinel values when
+  // the caller doesn't specify per-seat overrides. -2.0 is the disabled
+  // marker (any value in [-1, 1] is a meaningful threshold).
+  if (params_.seat_resign_threshold.empty()) {
+    seat_resign_threshold_.resize(num_perms, std::vector<float>(np, -2.0f));
+  } else {
+    validate_2d(params_.seat_resign_threshold, "seat_resign_threshold");
+    seat_resign_threshold_ = params_.seat_resign_threshold;
+  }
+  if (params_.seat_resign_consecutive.empty()) {
+    seat_resign_consecutive_.resize(num_perms, std::vector<uint32_t>(np, 1u));
+  } else {
+    validate_2d(params_.seat_resign_consecutive, "seat_resign_consecutive");
+    seat_resign_consecutive_ = params_.seat_resign_consecutive;
   }
 
   // 6. Create per-model-group queues and caches
@@ -270,11 +298,74 @@ void PlayManager::play() {
             }
           }
         }
+        // Per-seat opt-in resign (independent of resign_percent). Triggered
+        // when the current seat's expected score V = W − L drops to/below
+        // its configured threshold for ``seat_resign_consecutive`` consecutive
+        // own moves. -2.0 sentinel disables per seat.
+        if (!resign_score.has_value() && !game.playthrough) {
+          const float seat_thresh =
+              seat_resign_threshold_[game.perm_index][cp];
+          if (seat_thresh > -2.0f) {
+            if (base_gs_->num_players() != 2) {
+              throw std::runtime_error{"Per-seat resign only works in 2 player games"};
+            }
+            if (game.resign_streak.empty()) {
+              game.resign_streak.assign(base_gs_->num_players(), 0u);
+            }
+            const auto pred_score = mcts.root_value();
+            const float v_self = pred_score[0] - pred_score[1];
+            if (v_self <= seat_thresh) {
+              ++game.resign_streak[cp];
+            } else {
+              game.resign_streak[cp] = 0;
+            }
+            const uint32_t need =
+                std::max(1u, seat_resign_consecutive_[game.perm_index][cp]);
+            if (game.resign_streak[cp] >= need) {
+              auto tmp_score = Vector<float>{base_gs_->num_players() + 1};
+              tmp_score.setZero();
+              const auto opponent = (cp + 1) % 2;
+              tmp_score[opponent] = 1.0;
+              resign_score = std::make_optional(tmp_score);
+            }
+          }
+        }
         uint32_t chosen_m;
-        if (params_.gumbel_enabled && !game.capped) {
-          // Gumbel: deterministic argmax over final-phase survivors; temp
-          // is irrelevant because Gumbel noise already perturbed the prior.
-          chosen_m = mcts.gumbel_final_action();
+        if (mcts.gumbel_enabled() && !game.capped) {
+          // Default Gumbel acting is paper-faithful (Danihelka 2022 Eq. 11):
+          //   a* = argmax_a [ g(a) + logits(a) + sigma(N) q_hat(a) ]
+          // Variance comes from fresh Gumbel perturbations per search, not
+          // from sampling. Temperature does not modulate Gumbel selection;
+          // control diversity via gumbel_c_scale instead. Empirically this
+          // outperforms improved-policy-sampling (G3) on trained networks.
+          // The G3 path remains available behind an explicit opt-in flag
+          // (seat_gumbel_use_improved_policy).
+          const bool use_g3 =
+              static_cast<bool>(seat_gumbel_use_improved_policy_
+                                    [game.perm_index][cp]);
+          if (!use_g3) {
+            chosen_m = mcts.gumbel_final_action();
+          } else {
+            auto pi = mcts.gumbel_improved_policy();
+            if (temp != 1.0f && temp > 0.0f) {
+              pi = pi.array().pow(1.0f / temp);
+              const auto s = pi.sum();
+              if (s > 0) pi /= s;
+            } else if (temp <= 0.0f) {
+              // temp=0 with G3: degenerate, use argmax of pi'
+              chosen_m = static_cast<uint32_t>(
+                  std::distance(pi.data(),
+                                std::max_element(pi.data(),
+                                                 pi.data() + pi.size())));
+              pi.setZero();
+              pi(chosen_m) = 1.0f;
+            }
+            if (pi.sum() > 0) {
+              chosen_m = MCTS::pick_move(pi);
+            } else {
+              chosen_m = mcts.gumbel_final_action();
+            }
+          }
         } else {
           const auto pi = mcts.probs(temp);
           chosen_m = MCTS::pick_move(pi);

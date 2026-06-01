@@ -18,6 +18,8 @@ constexpr const float NOISE_ALPHA_RATIO = 10.83;
 constexpr const float GUMBEL_LOG_FLOOR = 1e-20f;
 thread_local pcg32 re{pcg_extras::seed_seq_from<std::random_device>{}};
 
+void MCTS::seed_thread_rng(uint64_t seed) noexcept { re.seed(seed); }
+
 namespace {
 
 // Mirror of test_gumbel.py:_ref_seq_halving_phase_plan. Returns vector of
@@ -649,6 +651,47 @@ Vector<float> MCTS::probs_pruned(float temp) const noexcept {
     pruned /= pruned.sum();
   }
   return pruned;
+}
+
+Vector<uint32_t> MCTS::principal_variation(uint32_t depth) const noexcept {
+  Vector<uint32_t> pv{};
+  if (depth == 0) return pv;
+  // Walk the tree level by level. ``best_child_n`` picks the most-visited
+  // child; at the root we substitute the Gumbel final action when Gumbel is
+  // active, since visit-count argmax can disagree with Sequential Halving.
+  const Node* node = &root_;
+  for (uint32_t i = 0; i < depth; ++i) {
+    if (node->children.empty()) break;
+    const Node* best = nullptr;
+    if (i == 0 && gumbel_enabled_) {
+      const uint32_t mv = gumbel_final_action();
+      for (const auto& c : node->children) {
+        if (c.move == mv) {
+          best = &c;
+          break;
+        }
+      }
+    }
+    if (best == nullptr) {
+      uint32_t best_n = 0;
+      for (const auto& c : node->children) {
+        if (c.n > best_n) {
+          best_n = c.n;
+          best = &c;
+        }
+      }
+    }
+    if (best == nullptr || best->n == 0) break;
+    const auto idx = static_cast<Eigen::Index>(pv.size());
+    Vector<uint32_t> grown{idx + 1};
+    if (idx > 0) {
+      for (Eigen::Index j = 0; j < idx; ++j) grown(j) = pv(j);
+    }
+    grown(idx) = best->move;
+    pv = grown;
+    node = best;
+  }
+  return pv;
 }
 
 uint32_t MCTS::pick_move(const Vector<float>& p) {

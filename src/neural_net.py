@@ -871,8 +871,16 @@ class NNWrapper:
         if not os.path.exists(filepath):
             raise Exception(f"No model in path {filepath}")
 
-        # Register safe globals for the game class
-        torch.serialization.add_safe_globals([Game])
+        # Register safe globals for any alphazero game-state class. The
+        # checkpoint pickles the original training class, which may not be
+        # ``Game`` (e.g. a unified checkpoint stored as the parent class is
+        # loaded for a variant subclass at play time).
+        safe = [
+            getattr(alphazero, name)
+            for name in dir(alphazero)
+            if name.endswith("GS") and isinstance(getattr(alphazero, name), type)
+        ]
+        torch.serialization.add_safe_globals(safe)
 
         # Try zstd decompression first, fall back to legacy uncompressed
         device = get_device()
@@ -884,8 +892,12 @@ class NNWrapper:
         except zstd.ZstdError:
             checkpoint = torch.load(io.BytesIO(raw), map_location=device, weights_only=True)
 
-        assert checkpoint["game"] == Game, (
-            f"Mismatching game type when loading model: got: {checkpoint['game'].__name__} want: {Game.__name__}"
+        stored_game = checkpoint["game"]
+        compatible = stored_game == Game or (
+            isinstance(Game, type) and issubclass(Game, stored_game)
+        )
+        assert compatible, (
+            f"Mismatching game type when loading model: got: {stored_game.__name__} want: {Game.__name__}"
         )
 
         # Reconstruct NNArgs from dict, dropping removed fields

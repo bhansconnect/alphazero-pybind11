@@ -68,11 +68,11 @@ class PlayerConfig:
         self.greedy = False
         self.batch_size = 0  # 0 = auto, 1 = off (sequential), >1 = fixed
         self._calibrated_timed_bs = None
-        # Per-player search algorithm. ``algo_override`` is the explicit user
-        # choice ('puct'/'gumbel'/None=auto). The gumbel_* fields are the
-        # currently-applied parameters, refreshed each time the network is
-        # loaded or the algo override changes.
-        self.algo_override = None
+        # Per-player search algorithm. ``algo_override`` is 'puct' (default),
+        # 'gumbel', or None (= use whatever the network's yaml specifies).
+        # The gumbel_* fields are the currently-applied parameters, refreshed
+        # each time the network is loaded or the algo override changes.
+        self.algo_override = "puct"
         self.gumbel_enabled = False
         self.gumbel_m = DEFAULT_GUMBEL_M
         self.gumbel_c_visit = DEFAULT_GUMBEL_C_VISIT
@@ -101,10 +101,8 @@ class PlayerConfig:
             batch_str = f", batch={'auto' if self.batch_size == 0 else self.batch_size}"
         algo_str = ""
         if self.eval_type == "network" or self.eval_type == "playout":
-            if self.gumbel_enabled:
-                tag = "gumbel" if self.algo_override is None else "gumbel*"
-            else:
-                tag = "puct" if self.algo_override is None else "puct*"
+            actual = "gumbel" if self.gumbel_enabled else "puct"
+            tag = f"{actual}(auto)" if self.algo_override is None else actual
             algo_str = f", algo={tag}"
         return f"AI(net={net_str}, nodes={node_str}, time={time_str}, temp={self.temperature}{greedy_str}{batch_str}{algo_str})"
 
@@ -996,6 +994,21 @@ def handle_config_command(parts, ctx, game_name, base_dir):
                         print(f"Invalid batch size: {val}")
                         return "config"
             print_status(ctx)
+    elif cmd == "algo":
+        if len(parts) >= (3 if player is not None else 2):
+            val = parts[-1]
+            aliases = {
+                "auto": None, "default": None, "yaml": None,
+                "puct": "puct", "p": "puct",
+                "gumbel": "gumbel", "g": "gumbel",
+            }
+            if val not in aliases:
+                print(f"Invalid algo: {val} (use auto/puct/gumbel)")
+                return "config"
+            for p in targets:
+                ctx.players[p].algo_override = aliases[val]
+                _apply_player_gumbel(ctx.players[p])
+            print_status(ctx)
     elif cmd == "delay":
         if len(parts) >= 2:
             try:
@@ -1036,7 +1049,7 @@ def parse_meta_command(cmd, ctx, game_name="", base_dir="data"):
     if lower == "manual":
         return "manual"
     parts = lower.split()
-    if parts and parts[0] in ["net", "nodes", "time", "temp", "hints", "greedy", "batch", "delay"]:
+    if parts and parts[0] in ["net", "nodes", "time", "temp", "hints", "greedy", "batch", "algo", "delay"]:
         return handle_config_command(parts, ctx, game_name, base_dir)
     return None
 
@@ -1060,6 +1073,7 @@ def print_generic_help():
     print("  hints <0|1> <on|off>     - AI hints for human player")
     print("  greedy <0|1> <on|off>    - Always play best move")
     print("  batch <0|1> <0|1|N>      - Batch size (0=auto, 1=off, N=fixed)")
+    print("  algo <0|1> <auto|puct|gumbel> - Search algorithm (auto=use network's config)")
     print("  delay <seconds>          - Turn delay for auto-full mode")
 
 

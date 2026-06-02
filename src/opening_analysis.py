@@ -311,7 +311,18 @@ def build_tree(
             )
 
         raw_pi, value, _sims = evaluator(state, net, game_class, train_config, mode, cache)
-        temp = temperature_at_depth(depth, mode)
+        # Gumbel self-play selects moves via gumbel_final_action — argmax of
+        # g(a) + logits(a) + σ(N)·q̂(a) with fresh Gumbel noise — which samples
+        # from the improved policy π′ (= softmax(logits + σq̂)) with NO temperature
+        # (play_manager.cc:334-347: "Temperature does not modulate Gumbel
+        # selection"). evaluate_node already returns raw_pi = π′ under Gumbel, so
+        # applying the play temperature here would sharpen a distribution
+        # self-play never sampled from and force a single deep dominant trunk.
+        # Use temp=1.0 under Gumbel to stay faithful to how openings were generated.
+        if getattr(train_config, "gumbel_enabled", False):
+            temp = 1.0
+        else:
+            temp = temperature_at_depth(depth, mode)
         sampling_pi = apply_temperature(raw_pi, temp)
 
         safe = sampling_pi[sampling_pi > 0]
@@ -464,20 +475,35 @@ def _is_dominant(cur: TreeNode, dominance_ratio: float, min_dominance_prob: floa
 def extract_openings(root: TreeNode, tree_config: TreeConfig):
     """Extract openings from a raw tree using the dominance-vs-fork walk.
 
-    Returns (openings, below_threshold_roots) where:
+    Returns (openings, below_threshold_roots, mass) where:
     - openings: list[Opening] sorted by reach descending. Each opening is a
       leaf of the walk: the deepest confident position with reach >=
       opening_threshold.
     - below_threshold_roots: list[(action, reach_prob)] for root children
       that didn't reach opening_threshold, shown in the report footer.
+    - mass: MassAccounting partitioning the unit root mass into named openings,
+      peeled-off variations, and min_reach-pruned mass (sums to ≈1.0).
     """
     openings: list[Opening] = []
     below: list[tuple[int, float]] = []
+    acct = MassAccounting()
 
     # Note root-level below-threshold children for footer.
     for action, child in root.children.items():
         if child.reach_prob < tree_config.opening_threshold:
             below.append((action, child.reach_prob))
+
+    def _account_through(cur_node, continue_reach):
+        """Tally mass that does NOT continue down the walked trunk at this node.
+
+        `continue_reach` is the summed reach of the children we recurse into.
+        Everything else at this node either peeled into a sibling (variations)
+        or was lost to min_reach pruning, so accumulating both here keeps the
+        partition exact: cur_node.reach = continue_reach + variations + pruned.
+        """
+        expanded = sum(ch.reach_prob for ch in cur_node.children.values())
+        acct.pruned += max(0.0, cur_node.reach_prob - expanded)
+        acct.variations += max(0.0, expanded - continue_reach)
 
     def _walk(cur_node, path, name, minor_vars):
         """Recursive walk. `path` is the list of nodes from depth-1 to `cur_node`."""
@@ -518,6 +544,7 @@ def extract_openings(root: TreeNode, tree_config: TreeConfig):
                     conditional_prob=cond, reach_prob=ch.reach_prob,
                 ))
             dom_child = cur_node.children[dom_action]
+            _account_through(cur_node, dom_child.reach_prob)
             _walk(dom_child, path + [dom_child], name, new_minors)
             return
 
@@ -541,6 +568,7 @@ def extract_openings(root: TreeNode, tree_config: TreeConfig):
                     depth=next_depth, action=a, branch_node=ch,
                     conditional_prob=cond, reach_prob=ch.reach_prob,
                 ))
+            _account_through(cur_node, only_child.reach_prob)
             _walk(only_child, path + [only_child], name, new_minors)
             return
 
@@ -563,6 +591,7 @@ def extract_openings(root: TreeNode, tree_config: TreeConfig):
                 conditional_prob=cond, reach_prob=ch.reach_prob,
             ))
 
+        _account_through(cur_node, sum(ch.reach_prob for _a, ch in named_forks))
         for i, (a, ch) in enumerate(named_forks):
             letter = chr(ord('A') + i)
             _walk(ch, path + [ch], name + letter, list(spillover_minors))
@@ -617,7 +646,11 @@ def extract_openings(root: TreeNode, tree_config: TreeConfig):
         ]
 
     below.sort(key=lambda kv: -kv[1])
-    return openings, below
+
+    # Named mass = sum of emitted opening reaches (transposition dedup conserves
+    # the total, so this equals the displayed openings' summed reach).
+    acct.named = sum(op.reach for op in openings)
+    return openings, below, acct
 
 
 def deepest_opening(openings: list) -> int:
@@ -634,6 +667,28 @@ def deepest_opening(openings: list) -> int:
 
 
 @dataclass
+class MassAccounting:
+    """Where the root's probability mass (1.0) settles during the opening walk.
+
+    The three buckets partition the unit mass exactly (named + variations +
+    pruned ≈ 1.0), so a report can show that nothing "disappeared":
+
+    - ``named``: mass in the emitted named openings (their leaf reach).
+    - ``variations``: mass that peeled off the walked trunk into siblings — the
+      minor variations / alternative continuations not carried forward.
+    - ``pruned``: mass lost to ``min_reach`` pruning at walked nodes (children
+      the network considered but that fell below the tree-building floor).
+    """
+    named: float = 0.0
+    variations: float = 0.0
+    pruned: float = 0.0
+
+    @property
+    def total(self) -> float:
+        return self.named + self.variations + self.pruned
+
+
+@dataclass
 class IterationReport:
     """Everything we computed for one iteration in one mode."""
     iteration: int
@@ -642,6 +697,7 @@ class IterationReport:
     openings: list                  # list[Opening], sorted by reach desc
     below_threshold: list           # list[(action, reach_prob)]
     tree_node_count: int
+    mass: MassAccounting = field(default_factory=MassAccounting)
 
     @property
     def root_entropy(self) -> float:
@@ -981,6 +1037,17 @@ def render_iteration_report(report: IterationReport,
         f"{n_with_minors} opening{'s' if n_with_minors != 1 else ''}."
     )
     out.append(f"Tree size: {report.tree_node_count} nodes above min_reach.")
+    m = report.mass
+    out.append(
+        f"Probability mass: {m.named:.1%} in named openings · "
+        f"{m.variations:.1%} in minor variations / alternative continuations · "
+        f"{m.pruned:.1%} pruned below min_reach (accounted {m.total:.0%})."
+    )
+    out.append(
+        "  (Named openings are the deepest confident leaves; the bulk of the mass "
+        "lives in the variations that peeled off the main line along the way — "
+        "nothing is lost, it just isn't promoted to a named opening.)"
+    )
     out.append("")
 
     # Index snapshots by opening identity for quick lookup
@@ -1246,13 +1313,17 @@ def render_summary(reports: list, snapshots_per_iter: list, ui: GameUI,
     # Cross-iter metrics tables
     out.append("## Metrics trajectory")
     out.append("")
-    out.append("| Iter | Openings | Root entropy | Deepest main line | Tree nodes |")
-    out.append("|------|----------|--------------|-------------------|------------|")
+    out.append("| Iter | Openings | Root entropy | Deepest main line | Tree nodes "
+               "| Named % | Variations % | Pruned % |")
+    out.append("|------|----------|--------------|-------------------|------------"
+               "|---------|--------------|----------|")
     for report in reports:
         deepest = max((op.depth for op in report.openings), default=0)
+        m = report.mass
         out.append(
             f"| {report.iteration:04d} | {len(report.openings)} | "
-            f"{report.root_entropy:.2f} | {deepest} | {report.tree_node_count} |"
+            f"{report.root_entropy:.2f} | {deepest} | {report.tree_node_count} | "
+            f"{m.named:.0%} | {m.variations:.0%} | {m.pruned:.0%} |"
         )
     out.append("")
 
@@ -1538,7 +1609,7 @@ def analyze_one_iteration(
     root = build_tree(start_state, net, Game, train_config, mode, tree_config, cache,
                       progress_fn=progress)
     print(" " * 40, end="\r")   # clear the heartbeat
-    openings, below = extract_openings(root, tree_config)
+    openings, below, mass = extract_openings(root, tree_config)
     return IterationReport(
         iteration=iteration,
         mode_name=mode.name,
@@ -1546,6 +1617,7 @@ def analyze_one_iteration(
         openings=openings,
         below_threshold=below,
         tree_node_count=count_tree_nodes(root),
+        mass=mass,
     )
 
 
@@ -1642,9 +1714,14 @@ def run_analysis(setup: dict) -> int:
                 train_config=train_config, mode=mode,
                 tree_config=tree_config, cache=cache, ui=ui,
             )
+            m = report.mass
+            deepest = deepest_opening(report.openings)
             print(f"    → {len(report.openings)} openings, "
                   f"{report.tree_node_count} tree nodes, "
-                  f"root entropy {report.root_entropy:.2f} nats.")
+                  f"root entropy {report.root_entropy:.2f} nats, "
+                  f"deepest {deepest} plies.")
+            print(f"      mass: {m.named:.0%} named · {m.variations:.0%} variations "
+                  f"· {m.pruned:.0%} pruned (below min_reach)")
 
             # Streaming classify so we can show changes inline.
             snaps = classifiers[mode_name].classify(report)

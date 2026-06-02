@@ -252,7 +252,7 @@ class TestOpeningExtractor:
                           [0.70, 0.15, 0.15], children={0: mid})
         root = make_node(0, 0, None, 1.0,
                          [0.70, 0.15, 0.15], children={0: first})
-        openings, _ = extract_openings(
+        openings, _, _ = extract_openings(
             root,
             TreeConfig(min_reach=0.01, opening_threshold=0.05,
                        dominance_ratio=2.0, min_dominance_prob=0.15),
@@ -272,7 +272,7 @@ class TestOpeningExtractor:
         root = make_node(0, 0, None, 1.0,
                          [0.30, 0.25, 0.25, 0.20],
                          children={0: c0, 1: c1, 2: c2, 3: c3})
-        openings, _ = extract_openings(
+        openings, _, _ = extract_openings(
             root,
             TreeConfig(min_reach=0.01, opening_threshold=0.05,
                        dominance_ratio=2.0, min_dominance_prob=0.15),
@@ -303,7 +303,7 @@ class TestOpeningExtractor:
         root = make_node(0, 0, None, 1.0,
                          [0.50, 0.40, 0.10],
                          children={0: branch, 1: leaf2})
-        openings, _ = extract_openings(
+        openings, _, _ = extract_openings(
             root,
             TreeConfig(min_reach=0.01, opening_threshold=0.05,
                        dominance_ratio=2.0, min_dominance_prob=0.15),
@@ -320,7 +320,7 @@ class TestOpeningExtractor:
         child1 = make_node(2, 1, 1, 0.08, [1.0, 0, 0])
         root = make_node(0, 0, None, 1.0, [0.04, 0.08, 0.0],
                          children={0: child0, 1: child1})
-        openings, below = extract_openings(
+        openings, below, _ = extract_openings(
             root,
             TreeConfig(min_reach=0.01, opening_threshold=0.05,
                        dominance_ratio=2.0, min_dominance_prob=0.15),
@@ -344,7 +344,7 @@ class TestOpeningExtractor:
                           [0.70, 0.15, 0.15],
                           children={0: leaf_main, 1: leaf_minor1, 2: leaf_minor2})
         root = make_node(0, 0, None, 1.0, [1.0], children={0: first})
-        openings, _ = extract_openings(
+        openings, _, _ = extract_openings(
             root,
             TreeConfig(min_reach=0.01, opening_threshold=0.05,
                        dominance_ratio=2.0, min_dominance_prob=0.15),
@@ -362,7 +362,7 @@ class TestOpeningExtractor:
         a = make_node(99, 1, 0, 0.4, [1.0, 0, 0])
         b = make_node(99, 1, 1, 0.3, [1.0, 0, 0])
         root = make_node(0, 0, None, 1.0, [0.4, 0.3, 0.0], children={0: a, 1: b})
-        openings, _ = extract_openings(
+        openings, _, _ = extract_openings(
             root,
             TreeConfig(min_reach=0.01, opening_threshold=0.05,
                        dominance_ratio=2.0, min_dominance_prob=0.15),
@@ -387,7 +387,7 @@ class TestOpeningExtractor:
         root_pi = [0.005] * 20
         root_pi[0] = 0.10
         root = make_node(0, 0, None, 1.0, root_pi, children={0: child})
-        openings, _ = extract_openings(
+        openings, _, _ = extract_openings(
             root,
             TreeConfig(min_reach=0.001, opening_threshold=0.05,
                        dominance_ratio=2.0, min_dominance_prob=0.15),
@@ -622,7 +622,7 @@ def test_end_to_end_connect4_smoke(tmp_path):
     )
     mode_configs = {"eval": ModeConfig.eval_default(train_config)}
     tree_config = TreeConfig(min_reach=0.05, opening_threshold=0.10,
-                            main_line_threshold=0.5, display_cap=10)
+                            display_cap=10)
 
     setup = {
         "game_name": "connect4",

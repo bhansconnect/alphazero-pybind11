@@ -12,11 +12,15 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import numpy as np
+
 import alphazero  # noqa: F401
 from tournament import (
     build_player_gumbel_args,
     _PUCT_GUMBEL_CFG,
     pit_agents,
+    compute_seed_order,
+    _seed_metric_chain,
 )
 
 
@@ -222,3 +226,84 @@ def test_play_params_exposes_new_seat_fields():
     assert pp.seat_resign_threshold[0][0] == pytest.approx(-0.9)
     assert pp.seat_resign_threshold[0][1] == pytest.approx(-0.9)
     assert pp.seat_resign_consecutive == [[3, 3]]
+
+
+# ---------------------------------------------------------------------------
+# Monrad seeding
+# ---------------------------------------------------------------------------
+
+
+def _make_experiment(tmp_path, whr=None, elo=None, n_iters=4):
+    """Create an experiment dir with checkpoint/ and optional whr/elo csvs.
+
+    Returns the list of checkpoint paths (one per iteration 0..n_iters-1).
+    """
+    exp = tmp_path / "exp"
+    ckpt = exp / "checkpoint"
+    ckpt.mkdir(parents=True)
+    if whr is not None:
+        np.savetxt(str(exp / "whr.csv"), np.asarray(whr, dtype=float), delimiter=",")
+    if elo is not None:
+        np.savetxt(str(exp / "elo.csv"), np.asarray(elo, dtype=float), delimiter=",")
+    return [str(ckpt / f"{i}-run.pt") for i in range(n_iters)]
+
+
+def test_seed_auto_prefers_whr(tmp_path):
+    # whr disagrees with iteration order: iter2 strongest, iter0 weakest.
+    paths = _make_experiment(tmp_path, whr=[0.0, 50.0, 120.0, 90.0],
+                             elo=[0.0, 40.0, 100.0, 80.0])
+    agents = [paths[0], paths[1], paths[2], paths[3]]
+    assert _seed_metric_chain(agents) == "whr"
+    order = compute_seed_order(agents, "auto")  # weakest -> strongest
+    # Strongest is iter2 (whr 120), then iter3, iter1, iter0.
+    assert [agents.index(agents[i]) for i in order] == [0, 1, 3, 2]
+    assert order[-1] == 2  # top seed = iter2
+
+
+def test_seed_falls_back_to_elo_then_iteration(tmp_path):
+    paths = _make_experiment(tmp_path, whr=None, elo=[0.0, 40.0, 100.0, 80.0])
+    agents = list(paths)
+    assert _seed_metric_chain(agents) == "elo"
+    order = compute_seed_order(agents, "auto")
+    assert order[-1] == 2  # iter2 has top elo
+
+    paths2 = _make_experiment(tmp_path / "b", whr=None, elo=None)
+    agents2 = list(paths2)
+    assert _seed_metric_chain(agents2) == "iteration"
+    order2 = compute_seed_order(agents2, "auto")
+    assert order2 == [0, 1, 2, 3]  # iteration order, strongest last
+
+
+def test_seed_special_agents_sink_to_bottom(tmp_path):
+    paths = _make_experiment(tmp_path, whr=[0.0, 50.0, 120.0, 90.0])
+    # 200 == random agent id, plus playout and dummy
+    agents = [paths[0], paths[2], 200, "playout", "dummy"]
+    order = compute_seed_order(agents, "auto")
+    bottom3 = order[:3]  # weakest three should be the specials
+    assert set(agents[i] for i in bottom3) == {200, "playout", "dummy"}
+    # dummy < random < playout in seed strength
+    assert agents[order[0]] == "dummy"
+    assert agents[order[1]] == 200
+    assert agents[order[2]] == "playout"
+
+
+def test_seed_manual_order(tmp_path):
+    paths = _make_experiment(tmp_path)
+    agents = list(paths)
+    # Strongest-first [2, 0]; the rest (1, 3) sink to the bottom in order.
+    order = compute_seed_order(agents, "manual", manual_order=[2, 0])
+    assert order[-1] == 2 and order[-2] == 0
+    assert order[:2] == [1, 3]
+
+
+def test_seed_as_selected_is_identity(tmp_path):
+    paths = _make_experiment(tmp_path)
+    agents = list(paths)
+    assert compute_seed_order(agents, "as-selected") == [0, 1, 2, 3]
+
+
+def test_seed_random_is_permutation(tmp_path):
+    paths = _make_experiment(tmp_path)
+    agents = list(paths)
+    order = compute_seed_order(agents, "random")
+    assert sorted(order) == [0, 1, 2, 3]

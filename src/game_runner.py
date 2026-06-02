@@ -2677,44 +2677,63 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         # Variant id per sample: channels 32-35 one-hot at grid center (6,6)
         variant_ids = c_data[:, 32:36, 6, 6].numpy().argmax(axis=1)
 
-        # Unit presence (channels 1-8 summed over board)
-        unit_presence_sum = c_data[:, 1:9, :, :].sum(dim=(1, 2, 3)).numpy()
-
-        # Four monotonic phases using two independently-decreasing signals:
-        #   reserves (ch 24-29): only decrease as units deploy
-        #   portal HP (ch 30-31): only decrease as damage lands
-        #   unit count: only decreases after deploy is done (no new units enter)
+        # Phases use signals that are monotonic within a single game so each
+        # mask corresponds to a coherent stretch of moves:
+        #   deploy_frac     = 1 - reserves_normalized        (only increases)
+        #   ship_dmg_frac   = 1 - avg per-hex unit HP        (only increases)
+        #   portal_dmg_frac = combined portal HP shortfall   (only increases)
+        # Thresholds were calibrated against per-game ply quartiles on 200
+        # self-played games from this run (see /tmp/pergame_phases.py); they
+        # match the empirical Q1→Q2, Q2→Q3, Q3→Q4 transition midpoints, so
+        # state-only masks agree with true per-game phase ~72% of the time.
         #
-        # Phase 1 — Deploy:      reserves above per-variant median
-        # Phase 2 — Standstill:  fleet committed, portals intact, unit count high
-        # Phase 3 — Attrition:   unit count declining, portals still intact
-        #                        (game often decided here before portal is touched)
-        # Phase 4 — Portal:      any portal damage (prioritized over phases 2-3)
+        # Deploy   — still committing reserves (deploy_frac < 0.85)
+        # Maneuver — fleet deployed, almost no shots fired (ship_dmg < 0.20)
+        # Combat   — active shot exchange but neither side decisive
+        #            (0.20 ≤ ship_dmg < 0.40, portal still healthy)
+        # Endgame  — heavy ship damage OR meaningful portal hit
+        #            (ship_dmg ≥ 0.40 or portal_dmg ≥ 0.05)
         #
-        # Portal damage is checked first so it always "wins" regardless of unit count.
-        # Within portal-intact states, per-variant median unit count splits standstill/attrition.
-        reserves = c_data[:, 24:30, 6, 6].sum(dim=1).numpy()
-        portal_total = c_data[:, 30:32, 6, 6].sum(dim=1).numpy()
+        # Endgame is checked first within the deployed set so portal pressure
+        # always wins over the ship-damage cuts.
+        _STARTING = {
+            0: (3, 1, 0),   # Skirmish
+            1: (4, 0, 1),   # Showdown
+            2: (3, 2, 1),   # Clash
+            3: (4, 3, 2),   # Battle
+        }
+        _max_res = np.array(
+            [2 * sum(1 for x in _STARTING[v] if x > 0) for v in range(4)],
+            dtype=np.float32)
+        reserves_total = c_data[:, 24:30, 6, 6].sum(dim=1).numpy()
+        deploy_frac    = 1.0 - reserves_total / _max_res[variant_ids]
+        portal_dmg_frac = np.clip(
+            (2.0 - c_data[:, 30:32, 6, 6].sum(dim=1).numpy()) / 2.0, 0.0, 1.0)
 
-        deploy_mask  = np.zeros(len(variant_ids), dtype=bool)
-        for _vid in range(4):
-            _vm = variant_ids == _vid
-            if _vm.sum() > 0:
-                deploy_mask[_vm] = reserves[_vm] > float(np.median(reserves[_vm]))
+        # Ship damage: channel 15 is per-hex normalized HP broadcast across a
+        # unit's hexes, so Σ(ch15 * unit_mask) / Σ(unit_mask) is the hex-size-
+        # weighted mean HP fraction. Damage = 1 - that. Take the max of "my"
+        # and "opp" so first-shot-fired (either side) enters Combat phase.
+        _hp_ch = c_data[:, 15, :, :].numpy()
+        _my_ship_mask  = (c_data[:, 1, :, :] + c_data[:, 2, :, :]
+                          + c_data[:, 3, :, :]).numpy()
+        _opp_ship_mask = (c_data[:, 5, :, :] + c_data[:, 6, :, :]
+                          + c_data[:, 7, :, :]).numpy()
+        _my_hex  = _my_ship_mask.sum(axis=(1, 2))
+        _opp_hex = _opp_ship_mask.sum(axis=(1, 2))
+        _my_hp   = (_hp_ch * _my_ship_mask ).sum(axis=(1, 2))
+        _opp_hp  = (_hp_ch * _opp_ship_mask).sum(axis=(1, 2))
+        _my_avg  = np.where(_my_hex  > 0, _my_hp  / np.maximum(_my_hex,  1e-9), 1.0)
+        _opp_avg = np.where(_opp_hex > 0, _opp_hp / np.maximum(_opp_hex, 1e-9), 1.0)
+        ship_dmg_frac = np.maximum(1.0 - _my_avg, 1.0 - _opp_avg)
 
-        post_deploy    = ~deploy_mask
-        portal_mask    = post_deploy & (portal_total <= 1.99)
-        intact_mask    = post_deploy & (portal_total >  1.99)
-        standstill_mask = np.zeros(len(variant_ids), dtype=bool)
-        attrition_mask  = np.zeros(len(variant_ids), dtype=bool)
-        for _vid in range(4):
-            _vm = intact_mask & (variant_ids == _vid)
-            if _vm.sum() > 1:
-                _med = float(np.median(unit_presence_sum[_vm]))
-                standstill_mask |= _vm & (unit_presence_sum >  _med)
-                attrition_mask  |= _vm & (unit_presence_sum <= _med)
-            elif _vm.sum() == 1:
-                standstill_mask |= _vm
+        deploy_mask  = deploy_frac < 0.85
+        _post_deploy = ~deploy_mask
+        endgame_mask = _post_deploy & ((ship_dmg_frac   >= 0.40)
+                                       | (portal_dmg_frac >= 0.05))
+        _rest        = _post_deploy & ~endgame_mask
+        maneuver_mask = _rest & (ship_dmg_frac < 0.20)
+        combat_mask   = _rest & ~maneuver_mask
 
         # Per-unit-type presence at each hex: channels 1=Fighter, 2=Cruiser, 3=Dreadnought
         unit_presence = [c_data[:, ch, :, :].numpy() > 0.5 for ch in [1, 2, 3]]
@@ -2971,9 +2990,9 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         deploy_valid_mask = np.concatenate(
             [VALID_DEPLOY_FACINGS[ui] for ui in range(3)]).astype(bool)  # (18,)
         phase_specs = [
-            ("Standstill / Maneuver",       standstill_mask),
-            ("Attrition (no portal dmg)",   attrition_mask),
-            ("Portal Damage",               portal_mask),
+            ("Maneuver",  maneuver_mask),
+            ("Combat",    combat_mask),
+            ("Endgame",   endgame_mask),
         ]
 
         # Pass 1: pre-compute every spatial panel so we can share vmax per row.
@@ -3067,8 +3086,8 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         fig3.suptitle(f"Iteration {iteration} — Action Breakdown by Unit Type "
                       "(type-legal slots only; Σπ/unit gives per-instance "
                       "magnitude)", fontsize=13)
-        _phases = [(deploy_mask, "Deploy"), (standstill_mask, "Standstill"),
-                   (attrition_mask, "Attrition"), (portal_mask, "Portal")]
+        _phases = [(deploy_mask, "Deploy"), (maneuver_mask, "Maneuver"),
+                   (combat_mask, "Combat"), (endgame_mask, "Endgame")]
         for ui, uname in enumerate(unit_names):
             valid_slots = VALID_SLOTS_BY_UNIT[ui]
             n_valid = int(valid_slots.sum())
@@ -3145,10 +3164,10 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
 
         # --- Figure 5: unit count by type × phase × variant ---
         _phase_list = [
-            (deploy_mask,     "Deploy"),
-            (standstill_mask, "Standstill"),
-            (attrition_mask,  "Attrition"),
-            (portal_mask,     "Portal"),
+            (deploy_mask,   "Deploy"),
+            (maneuver_mask, "Maneuver"),
+            (combat_mask,   "Combat"),
+            (endgame_mask,  "Endgame"),
         ]
         fig5, axes5u = plt.subplots(4, 4, figsize=(16, 12))
         fig5.suptitle(f"Iteration {iteration} — Unit Count by Type × Phase × Variant "

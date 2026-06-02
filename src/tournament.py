@@ -46,6 +46,7 @@ from game_runner import (
 from network_selector import (
     discover_runs,
     interactive_select,
+    prompt_seed_strategy,
     create_tournament_dir,
     save_tournament_results,
 )
@@ -426,6 +427,175 @@ def _agent_override(agent_name):
     return override
 
 
+# ---------------------------------------------------------------------------
+# Monrad (Swiss) initial seeding
+# ---------------------------------------------------------------------------
+#
+# The initial `rankings` drives round-1 pairings (top half vs bottom half via
+# the dist=ceil(count/2) fold). A good seed orders agents by a prior strength
+# estimate so round 1 isn't wasted and ELO converges in fewer rounds.
+#
+# Available priors (all written by training next to checkpoint/):
+#   - WHR (whr.csv): Bradley-Terry MLE over the full gating record. Best.
+#   - training ELO (elo.csv): gating ELO per iteration. Good.
+#   - iteration number: later ~= stronger. Always available.
+# Both csvs are 1-D, indexed by iteration. Special agents (random/playout/
+# dummy) have no prior and are seeded at the bottom (dummy < random < playout).
+
+SEED_STRATEGIES = ("auto", "whr", "elo", "iteration", "manual", "random",
+                   "as-selected")
+
+_PRIOR_CSV_CACHE = {}
+
+
+def _agent_iteration(agent_id):
+    """Iteration number parsed from an NN agent's filename, or None.
+
+    Filenames look like ``<iter>-<run>.pt``; non-NN agents (random/playout/
+    dummy) and unparseable names return None.
+    """
+    path = _agent_path(agent_id)
+    if path is None:
+        return None
+    m = re.match(r"^(\d+)-", os.path.basename(path))
+    return int(m.group(1)) if m else None
+
+
+def _load_prior_csv(exp_dir, fname):
+    """Load and cache a 1-D iteration-indexed prior csv (whr.csv/elo.csv).
+
+    Returns a 1-D np.ndarray or None if the file is missing/unreadable.
+    """
+    key = (exp_dir, fname)
+    if key in _PRIOR_CSV_CACHE:
+        return _PRIOR_CSV_CACHE[key]
+    path = os.path.join(exp_dir, fname)
+    data = None
+    if os.path.exists(path):
+        try:
+            data = np.atleast_1d(np.genfromtxt(path, delimiter=","))
+        except Exception:
+            data = None
+    _PRIOR_CSV_CACHE[key] = data
+    return data
+
+
+def _agent_prior_value(agent_id, metric):
+    """Finite prior value for an NN agent under ``metric`` in {'whr','elo'}.
+
+    Returns None when the agent isn't an NN, has no parseable iteration, the
+    csv is missing, or the stored value is non-finite.
+    """
+    path = _agent_path(agent_id)
+    it = _agent_iteration(agent_id)
+    if path is None or it is None:
+        return None
+    exp_dir = os.path.dirname(os.path.dirname(path))
+    data = _load_prior_csv(exp_dir, "whr.csv" if metric == "whr" else "elo.csv")
+    if data is None or it >= len(data):
+        return None
+    val = float(data[it])
+    return val if math.isfinite(val) else None
+
+
+def _seed_metric_chain(agents):
+    """Field-wide metric for the 'auto' strategy.
+
+    'whr' if every NN agent has a finite whr.csv value, else 'elo' if every NN
+    agent has a finite elo.csv value, else 'iteration'. Picking one metric for
+    the whole field avoids mixing incomparable scales.
+    """
+    nn = [a for a in agents if _agent_path(a) is not None]
+    if not nn:
+        return "iteration"
+    if all(_agent_prior_value(a, "whr") is not None for a in nn):
+        return "whr"
+    if all(_agent_prior_value(a, "elo") is not None for a in nn):
+        return "elo"
+    return "iteration"
+
+
+def _special_seed_rank(agent_id):
+    """Tiebreak for agents with no prior: dummy < random < playout."""
+    if agent_id == "dummy":
+        return -3.0
+    if agent_id == "playout":
+        return -1.0
+    return -2.0  # random
+
+
+def compute_seed_order(agents, strategy, manual_order=None):
+    """Initial Monrad ``rankings``: agent indices ordered weakest -> strongest
+    (``rankings[-1]`` is the top seed).
+
+    strategy: one of SEED_STRATEGIES. 'auto' resolves to whr/elo/iteration via
+    _seed_metric_chain. For 'manual', ``manual_order`` is a strongest-first
+    list of indices; unlisted agents sink to the bottom in their current order.
+    """
+    n = len(agents)
+    if strategy == "as-selected":
+        return list(range(n))
+    if strategy == "random":
+        order = list(range(n))
+        np.random.default_rng().shuffle(order)
+        return list(order)
+    if strategy == "manual":
+        strong_first = [i for i in (manual_order or []) if 0 <= i < n]
+        seen = set(strong_first)
+        rest = [i for i in range(n) if i not in seen]  # unlisted = weakest
+        return rest + strong_first[::-1]
+
+    metric = _seed_metric_chain(agents) if strategy == "auto" else strategy
+    keyed = []
+    for idx, a in enumerate(agents):
+        it = _agent_iteration(a)
+        if metric in ("whr", "elo"):
+            val = _agent_prior_value(a, metric)
+            if val is None and it is not None:
+                val = float(it)  # per-agent fallback when csv lacks this iter
+        else:  # iteration
+            val = float(it) if it is not None else None
+        if val is None:
+            primary, sub = -math.inf, _special_seed_rank(a)
+        else:
+            primary, sub = val, float(it) if it is not None else 0.0
+        keyed.append((primary, sub, idx))
+    keyed.sort(key=lambda t: (t[0], t[1], t[2]))
+    return [idx for _, _, idx in keyed]
+
+
+def prompt_manual_order(agents):
+    """Interactively collect a manual seed order (strongest first).
+
+    Returns a list of agent indices into ``agents``, strongest first. 'dummy'
+    is never shown and always sinks to the bottom; unlisted agents follow.
+    """
+    shown = [(i, a) for i, a in enumerate(agents) if a != "dummy"]
+    print("\nManual seed order — available agents:")
+    for i, a in shown:
+        print(f"  {i}. {_agent_label(a)}")
+    raw = input(
+        "Enter indices strongest-first (comma/space separated; "
+        "omitted agents go to the bottom): "
+    ).strip()
+    order, seen = [], set()
+    for tok in re.split(r"[,\s]+", raw):
+        if not tok:
+            continue
+        try:
+            idx = int(tok)
+        except ValueError:
+            print(f"  Warning: ignoring '{tok}'")
+            continue
+        if not (0 <= idx < len(agents)) or agents[idx] == "dummy":
+            print(f"  Warning: ignoring out-of-range index {idx}")
+            continue
+        if idx not in seen:
+            seen.add(idx)
+            order.append(idx)
+    return order
+
+
 def _build_matchup_caches(Game, agents, players, model_groups, cache_dict):
     """Build per-model-group cache list for a matchup from cache_dict.
 
@@ -456,13 +626,16 @@ def _build_matchup_caches(Game, agents, players, model_groups, cache_dict):
 
 
 def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, cache_size=0,
-               global_algo=None, gumbel_c_scale=None, gumbel_mode="g1"):
+               global_algo=None, gumbel_c_scale=None, gumbel_mode="g1",
+               seed_strategy="auto"):
     """Run a Monrad (Swiss-style) tournament.
 
     ``global_algo`` ('puct'/'gumbel' or None) is applied to NN agents that do
     not carry their own ':puct'/':gumbel' override in their agent ID.
     ``gumbel_c_scale`` overrides the per-network yaml c_scale (None keeps yaml).
     ``gumbel_mode`` is 'g1' (paper-faithful, default) or 'g3' (improved-policy).
+    ``seed_strategy`` (see SEED_STRATEGIES) picks the initial round-1 seeding;
+    'manual' prompts here for an explicit strongest-first order.
     """
     if len(agents) % 2 == 1:
         agents.insert(0, "dummy")
@@ -470,7 +643,20 @@ def run_monrad(config, Game, agents, mcts_visits, bs, model_path, rand_agents, c
     count = len(agents)
     win_matrix = np.full((count, count), np.nan)
     elo = np.zeros(count)
-    rankings = list(range(count))
+
+    # Initial seeding (drives round-1 pairings). dummy is already inserted, so
+    # indices here match what the manual prompt / seed order operate on.
+    manual_order = prompt_manual_order(agents) if seed_strategy == "manual" else None
+    rankings = compute_seed_order(agents, seed_strategy, manual_order)
+    resolved = (f"{seed_strategy} -> {_seed_metric_chain(agents)}"
+                if seed_strategy == "auto" else seed_strategy)
+    print(f"Seeding strategy: {resolved}")
+    print("Initial seed order (strongest first):")
+    for rank, idx in enumerate(reversed(rankings)):
+        if agents[idx] == "dummy":
+            continue
+        print(f"  {rank + 1}. {_agent_label(agents[idx])}")
+
     rounds = int(np.ceil(np.log2(count)))
     dist = count
 
@@ -967,6 +1153,17 @@ def parse_args():
              "Empirical strength sweet spot: ~2.0."
     )
     parser.add_argument(
+        "--seed-strategy",
+        choices=list(SEED_STRATEGIES),
+        default=None,
+        help="Monrad initial seeding (round-1 pairings). 'auto' seeds by WHR, "
+             "else training ELO, else iteration number; 'whr'/'elo'/'iteration' "
+             "force a metric; 'manual' prompts for an explicit order; 'random' "
+             "shuffles; 'as-selected' keeps selection order. Omit in interactive "
+             "mode to be prompted (defaults to 'auto' otherwise). Ignored for "
+             "roundrobin.",
+    )
+    parser.add_argument(
         "--gumbel-mode",
         choices=["g1", "g3"],
         default="g1",
@@ -993,6 +1190,7 @@ def main():
     agents = []
     rand_agents = []
     model_path = None
+    used_interactive = False
 
     if args.networks:
         for spec in args.networks:
@@ -1036,6 +1234,7 @@ def main():
     else:
         # Interactive selection via network_selector. After each batch the
         # user is asked once for an algorithm override applied to that batch.
+        used_interactive = True
         game_dir = os.path.join(args.base_dir, args.game)
         old_model_path = os.path.join(args.base_dir, "checkpoint")
         old_bench_path = os.path.join(args.base_dir, "bench")
@@ -1107,6 +1306,15 @@ def main():
     # build_player_gumbel_args at matchup time.
     global_algo = args.algo if args.algo != "auto" else None
 
+    # Resolve Monrad seeding: explicit --seed-strategy wins; otherwise prompt
+    # in interactive mode, else default to 'auto'. (Round-robin ignores it.)
+    seed_strategy = args.seed_strategy
+    if seed_strategy is None:
+        if args.format == "monrad" and used_interactive:
+            seed_strategy = prompt_seed_strategy()
+        else:
+            seed_strategy = "auto"
+
     print(f"\n=== {args.game} {args.format.capitalize()} Tournament ===")
     print(f"MCTS visits: {args.mcts_visits}")
     print(f"Batch size: {args.batch_size}")
@@ -1144,6 +1352,7 @@ def main():
             config, Game, agents, args.mcts_visits, args.batch_size, model_path, rand_agents,
             cache_size=args.cache_size, global_algo=global_algo,
             gumbel_c_scale=args.gumbel_c_scale, gumbel_mode=args.gumbel_mode,
+            seed_strategy=seed_strategy,
         )
     else:
         agents, elo, win_matrix = run_roundrobin(

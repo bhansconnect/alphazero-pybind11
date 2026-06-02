@@ -117,6 +117,38 @@ def _prompt_run_algo(run_name: str, n_selected: int) -> str | None:
         print("    Please answer auto, puct, or gumbel.")
 
 
+def prompt_seed_strategy(default: str = "auto") -> str:
+    """Prompt for the Monrad initial-seeding strategy (round-1 pairings).
+
+    Returns one of: 'auto', 'whr', 'elo', 'iteration', 'manual', 'random',
+    'as-selected'. 'auto' seeds by WHR, then training ELO, then iteration
+    (the best metric available across the whole field).
+    """
+    print("\nMonrad seeding (controls round-1 pairings):")
+    print("  a. auto         - WHR, else training ELO, else iteration (recommended)")
+    print("  w. whr          - training WHR (whr.csv), iteration fallback")
+    print("  e. elo          - training ELO (elo.csv), iteration fallback")
+    print("  i. iteration    - iteration number (later = stronger)")
+    print("  m. manual        - type an explicit strongest-first order")
+    print("  r. random        - shuffle")
+    print("  s. as-selected   - keep selection order")
+    mapping = {
+        "": default,
+        "a": "auto", "auto": "auto",
+        "w": "whr", "whr": "whr",
+        "e": "elo", "elo": "elo",
+        "i": "iteration", "iter": "iteration", "iteration": "iteration",
+        "m": "manual", "manual": "manual",
+        "r": "random", "random": "random",
+        "s": "as-selected", "as": "as-selected", "as-selected": "as-selected",
+    }
+    while True:
+        choice = input(f"Seeding [{default}]: ").strip().lower()
+        if choice in mapping:
+            return mapping[choice]
+        print("  Please pick auto/whr/elo/iteration/manual/random/as-selected.")
+
+
 def interactive_select(
     runs: dict[str, RunInfo], default_mcts: int = 200, prompt_algo: bool = True
 ) -> tuple[list[str], int, int, int]:

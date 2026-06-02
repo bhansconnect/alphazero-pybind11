@@ -504,6 +504,11 @@ class NNWrapper:
         self.game = game
         self.args = args
         self.nnet = NNArch(game, args)
+        # Reference to the original eager module. enable_inference_optimizations()
+        # may replace self.nnet with a JIT-traced RecursiveScriptModule (Pascal
+        # path) or a torch.compile wrapper, neither of which exposes the eager
+        # submodules (e.g. conv_layers) needed for hooking/regularization.
+        self._eager_nnet = self.nnet
         self.weight_decay = getattr(args, "weight_decay", 1e-4)
         self.orth_reg_lambda = getattr(args, "orth_reg_lambda", 0.0)
         self.optimizer = optim.SGD(
@@ -780,12 +785,16 @@ class NNWrapper:
         captured = []
         def _hook(_module, _inputs, outputs):
             captured.append(outputs.detach())
-        self.nnet.eval()
-        handle = self.nnet.conv_layers.register_forward_hook(_hook)
+        # Use the eager module: self.nnet may be a JIT-traced/compiled module
+        # without a conv_layers attribute, and a hook on the eager submodule
+        # would not fire when calling the traced module anyway.
+        net = self._eager_nnet
+        net.eval()
+        handle = net.conv_layers.register_forward_hook(_hook)
         try:
             with torch.no_grad():
                 x = batch.to(self.device, non_blocking=self._non_blocking).float()
-                self.nnet(x)
+                net(x)
         finally:
             handle.remove()
         if not captured:
@@ -827,7 +836,7 @@ class NNWrapper:
             return 0
         device = self.device
         total = torch.zeros(1, device=device)
-        for m in self.nnet.conv_layers.modules():
+        for m in self._eager_nnet.conv_layers.modules():
             if isinstance(m, nn.Conv2d):
                 W = m.weight.reshape(m.out_channels, -1)  # [out_c, in_c * kh * kw]
                 gram = W @ W.transpose(0, 1)  # [out_c, out_c]

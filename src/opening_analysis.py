@@ -71,6 +71,28 @@ DEFAULT_CACHE_SIZE = 200_000
 # ---------------------------------------------------------------------------
 
 
+_UNIFIED_VARIANTS = ("skirmish", "showdown", "clash", "battle")
+
+
+def resolve_half_life(train_config: TrainConfig, game_name: str = "") -> float:
+    """Resolve `temp_decay_half_life` to a scalar.
+
+    `temp_decay_half_life` may be a plain number (uniform) or a per-variant dict
+    keyed by skirmish/showdown/clash/battle (unified games). For the dict case
+    we pick the entry matching the variant implied by `game_name` (e.g.
+    `star_gambit_unified_skirmish` -> "skirmish"); if no variant can be inferred
+    (e.g. the base unified class) we fall back to the largest half-life so the
+    temperature schedule errs toward more exploration rather than less.
+    """
+    hl = train_config.temp_decay_half_life
+    if not isinstance(hl, dict):
+        return hl
+    for variant in _UNIFIED_VARIANTS:
+        if game_name.endswith(variant):
+            return hl[variant]
+    return max(hl.values())
+
+
 @dataclass
 class ModeConfig:
     """Per-mode parameters: how many sims, what temperature schedule, what noise."""
@@ -78,28 +100,28 @@ class ModeConfig:
     sims: int
     start_temp: float
     final_temp: float
-    half_life: int
+    half_life: float
     use_root_noise: bool
 
     @classmethod
-    def selfplay_default(cls, train_config: TrainConfig) -> "ModeConfig":
+    def selfplay_default(cls, train_config: TrainConfig, game_name: str = "") -> "ModeConfig":
         return cls(
             name="selfplay",
             sims=train_config.selfplay_mcts_visits,
             start_temp=train_config.self_play_temp,
             final_temp=train_config.final_temp,
-            half_life=train_config.temp_decay_half_life,
+            half_life=resolve_half_life(train_config, game_name),
             use_root_noise=False,
         )
 
     @classmethod
-    def eval_default(cls, train_config: TrainConfig) -> "ModeConfig":
+    def eval_default(cls, train_config: TrainConfig, game_name: str = "") -> "ModeConfig":
         return cls(
             name="eval",
             sims=train_config.compare_mcts_visits,
             start_temp=train_config.eval_temp,
             final_temp=train_config.final_temp,
-            half_life=train_config.temp_decay_half_life,
+            half_life=resolve_half_life(train_config, game_name),
             use_root_noise=False,
         )
 
@@ -154,6 +176,12 @@ def make_mcts(game_class, train_config: TrainConfig, mode: ModeConfig):
     """Build an MCTS instance configured for the given mode.
 
     Matches the constructor used in mcts_analysis._make_mcts and play.create_mcts.
+    When the experiment trained with Gumbel (``train_config.gumbel_enabled``),
+    both self-play and eval games run Gumbel (see game_runner.base_params, which
+    sets ``params.gumbel_enabled = config.gumbel_enabled`` for both the self-play
+    and eval PlayManagers), so we build a Gumbel MCTS here too. ``run_mcts_search``
+    arms Sequential Halving via ``set_gumbel_num_sims`` once ``gumbel_enabled()``
+    is true.
     """
     if mode.use_root_noise:
         epsilon = 0.25
@@ -161,6 +189,18 @@ def make_mcts(game_class, train_config: TrainConfig, mode: ModeConfig):
     else:
         epsilon = 0.0
         root_temp = 1.0
+    if not train_config.gumbel_enabled:
+        return alphazero.MCTS(
+            train_config.cpuct,
+            game_class.NUM_PLAYERS(),
+            game_class.NUM_MOVES(),
+            epsilon,
+            root_temp,
+            train_config.fpu_reduction,
+            game_class().relative_values(),
+            train_config.root_fpu_zero,
+            train_config.shaped_dirichlet,
+        )
     return alphazero.MCTS(
         train_config.cpuct,
         game_class.NUM_PLAYERS(),
@@ -171,6 +211,11 @@ def make_mcts(game_class, train_config: TrainConfig, mode: ModeConfig):
         game_class().relative_values(),
         train_config.root_fpu_zero,
         train_config.shaped_dirichlet,
+        True,                            # gumbel_enabled
+        train_config.gumbel_m,
+        train_config.gumbel_c_visit,
+        train_config.gumbel_c_scale,
+        train_config.gumbel_full,
     )
 
 
@@ -184,17 +229,32 @@ def evaluate_node(state, net, game_class, train_config, mode, cache):
         cache=cache,
         max_batch_size=1,
     )
-    counts = np.asarray(counts, dtype=np.float64)
-    total = counts.sum()
-    if total <= 0:
-        # No visits made (e.g., immediate terminal). Fall back to uniform over valid moves.
-        valids = np.asarray(state.valid_moves(), dtype=np.float64)
-        if valids.sum() > 0:
-            raw_pi = valids / valids.sum()
+
+    # Under Gumbel, raw visit counts are a Sequential-Halving by-product and do
+    # NOT represent the move distribution self-play sampled from. Self-play draws
+    # from the Gumbel improved policy (pi'), so use that as the pre-temperature
+    # distribution to stay faithful to how openings were actually generated.
+    raw_pi = None
+    if mcts.gumbel_enabled():
+        try:
+            ip = np.asarray(mcts.gumbel_improved_policy(), dtype=np.float64)
+            if ip.sum() > 0:
+                raw_pi = ip / ip.sum()
+        except Exception:
+            raw_pi = None
+
+    if raw_pi is None:
+        counts = np.asarray(counts, dtype=np.float64)
+        total = counts.sum()
+        if total <= 0:
+            # No visits made (e.g., immediate terminal). Fall back to uniform over valid moves.
+            valids = np.asarray(state.valid_moves(), dtype=np.float64)
+            if valids.sum() > 0:
+                raw_pi = valids / valids.sum()
+            else:
+                raw_pi = counts  # all zeros
         else:
-            raw_pi = counts  # all zeros
-    else:
-        raw_pi = counts / total
+            raw_pi = counts / total
     return raw_pi, np.asarray(wld, dtype=np.float64), sims
 
 
@@ -1425,11 +1485,11 @@ def interactive_setup(args) -> Optional[dict]:
     mode_configs = {}
     if run_selfplay:
         mode_configs["selfplay"] = _prompt_mode_config(
-            ModeConfig.selfplay_default(train_config), non_int
+            ModeConfig.selfplay_default(train_config, game_name), non_int
         )
     if run_eval:
         mode_configs["eval"] = _prompt_mode_config(
-            ModeConfig.eval_default(train_config), non_int
+            ModeConfig.eval_default(train_config, game_name), non_int
         )
 
     # 7. Tree-building params.

@@ -167,6 +167,18 @@ def parse_config_string(s):
             rest = rest[5:]
             continue
 
+        # -sgspatial / -fcpolicy: override the Star Gambit spatial policy head
+        # (default comes from the experiment's config.yaml). Lets a single run
+        # compare the spatial head against the standard FC head on the same data.
+        if rest.startswith('sgspatial'):
+            kwargs['star_gambit_spatial'] = True
+            rest = rest[9:]
+            continue
+        if rest.startswith('fcpolicy'):
+            kwargs['star_gambit_spatial'] = False
+            rest = rest[8:]
+            continue
+
         if rest.startswith('resnet'):
             kwargs['dense_net'] = False
             rest = rest[6:]
@@ -843,7 +855,7 @@ def collect_configs(config, args):
 
     _setup_readline()
 
-    print("Config format: {depth}d{channels}c[-k{N}][-hc{N}][-vconv{N}][-pconv{N}][-vfc{N}][-pfc{N}][-cv{F}][-wd{F}][-orth{F}][-ln|-bn][-crelu][-resnet]")
+    print("Config format: {depth}d{channels}c[-k{N}][-hc{N}][-vconv{N}][-pconv{N}][-vfc{N}][-pfc{N}][-cv{F}][-wd{F}][-orth{F}][-ln|-bn][-crelu][-sgspatial|-fcpolicy][-resnet]")
     print("  Comma-separated configs:       6d32c-vconv1,4d64c-resnet-vconv1")
     print("  Comma-separated cross-product: 4,6d16,24c -> 4 configs")
     print("    4,6,8d16,24,32c     -> 9 configs")
@@ -863,8 +875,11 @@ def collect_configs(config, args):
     print("    -orth{F}   orthogonal weight reg lambda (default: 0; e.g. -orth1e-2)")
     print("    -ln / -bn  trunk normalization: LayerNorm (GroupNorm(1,C)) or BatchNorm (default)")
     print("    -crelu     Concatenated ReLU trunk activation (preserves negative-direction features)")
+    print("    -sgspatial Star Gambit spatial policy head (override config default on)")
+    print("    -fcpolicy  standard fully-connected policy head (override config default off)")
     print("    -resnet    use ResNet instead of DenseNet")
     print("  Examples: 6d24c  4d32c-k5  6d24c-vconv2-vfc2  4d16c-cv2.0  4d64c-resnet-ln-wd1e-4  4d16c-orth1e-2-crelu")
+    print("  Compare spatial vs FC policy head: 4d32c-sgspatial,4d32c-fcpolicy")
     print()
     print("Add configs (empty or 'go' to start):")
 
@@ -894,7 +909,9 @@ def collect_configs(config, args):
                 if label in seen_labels:
                     print(f"  Skipped duplicate: {label}")
                     continue
-                kwargs['star_gambit_spatial'] = config.star_gambit_spatial
+                # -sgspatial/-fcpolicy may have set this explicitly; only fall
+                # back to the experiment's config default when it didn't.
+                kwargs.setdefault('star_gambit_spatial', config.star_gambit_spatial)
                 kwargs['head_pool'] = config.head_pool
                 cv = kwargs.pop('cv', config.cv)
                 nn_args = NNArgs(lr=args.lr, cv=cv, **kwargs)

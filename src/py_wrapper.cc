@@ -527,6 +527,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_SYMMETRIES", [] { return brandubh_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return brandubh_gs::CANONICAL_SHAPE; })
+      .def_static("POLICY_SHAPE", [] { return brandubh_gs::POLICY_SHAPE; })
       ADD_GS_PICKLE(BrandubhGS);
 
   py::class_<OpenTaflGS, GameState>(m, "OpenTaflGS")
@@ -537,6 +538,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_SYMMETRIES", [] { return opentafl_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return opentafl_gs::CANONICAL_SHAPE; })
+      .def_static("POLICY_SHAPE", [] { return opentafl_gs::POLICY_SHAPE; })
       ADD_GS_PICKLE(OpenTaflGS);
 
   py::class_<TawlbwrddGS, GameState>(m, "TawlbwrddGS")
@@ -547,6 +549,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_SYMMETRIES", [] { return tawlbwrdd_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return tawlbwrdd_gs::CANONICAL_SHAPE; })
+      .def_static("POLICY_SHAPE", [] { return tawlbwrdd_gs::POLICY_SHAPE; })
       ADD_GS_PICKLE(TawlbwrddGS);
 
   py::class_<Connect4GS, GameState>(m, "Connect4GS")
@@ -605,6 +608,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return ActionSpace<SkirmishConfig>::CANONICAL_SHAPE; })
+      .def_static("POLICY_SHAPE",
+                  [] { return ActionSpace<SkirmishConfig>::POLICY_SHAPE; })
       ADD_GS_PICKLE(StarGambitSkirmishGS);
 
   // Star Gambit - Showdown (4F, 0C, 1D, 5-side board)
@@ -617,6 +622,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return ActionSpace<ShowdownConfig>::CANONICAL_SHAPE; })
+      .def_static("POLICY_SHAPE",
+                  [] { return ActionSpace<ShowdownConfig>::POLICY_SHAPE; })
       ADD_GS_PICKLE(StarGambitShowdownGS);
 
   // Star Gambit - Clash (3F, 2C, 1D, 5-side board)
@@ -629,6 +636,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return ActionSpace<ClashConfig>::CANONICAL_SHAPE; })
+      .def_static("POLICY_SHAPE",
+                  [] { return ActionSpace<ClashConfig>::POLICY_SHAPE; })
       ADD_GS_PICKLE(StarGambitClashGS);
 
   // Star Gambit - Battle (4F, 3C, 2D, 6-side board)
@@ -641,6 +650,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return ActionSpace<BattleConfig>::CANONICAL_SHAPE; })
+      .def_static("POLICY_SHAPE",
+                  [] { return ActionSpace<BattleConfig>::POLICY_SHAPE; })
       ADD_GS_PICKLE(StarGambitBattleGS);
 
   // Star Gambit - Unified (all 4 variants, 13×13 canvas, 36 channels)
@@ -656,6 +667,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def_static("NUM_SYMMETRIES", [] { return star_gambit_gs::NUM_SYMMETRIES; })
       .def_static("CANONICAL_SHAPE",
                   [] { return StarGambitUnifiedGS::CANONICAL_SHAPE_ARRAY; })
+      .def_static("POLICY_SHAPE",
+                  [] { return StarGambitUnifiedGS::POLICY_SHAPE; })
       ADD_GS_PICKLE(StarGambitUnifiedGS);
 
   // Pinned-variant subclasses (always play the specified variant)

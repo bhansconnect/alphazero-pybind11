@@ -3502,7 +3502,7 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     and source_cfg.channels == config.channels
                     and source_cfg.kernel_size == config.kernel_size
                     and source_cfg.dense_net == config.dense_net
-                    and source_cfg.star_gambit_spatial == config.star_gambit_spatial
+                    and source_cfg.spatial_policy == config.spatial_policy
                     and source_cfg.head_channels == config.head_channels
                     and source_cfg.head_pool == config.head_pool
                 )

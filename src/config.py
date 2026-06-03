@@ -44,6 +44,12 @@ class TrainConfig:
     channels: int = 12
     kernel_size: int = 5
     dense_net: bool = True
+    # Policy head selection: "auto" (default) uses the spatial conv head for any
+    # game that exposes a POLICY_SHAPE (tafl, star gambit) and the flat FC head
+    # otherwise; "on" forces spatial (errors if unsupported); "off" forces flat.
+    spatial_policy: str = "auto"
+    # Deprecated alias for spatial_policy, kept so existing YAML configs still
+    # load. Normalized into spatial_policy by validate() (True -> "on").
     star_gambit_spatial: bool = False
     head_channels: int = 32
     head_pool: bool = True
@@ -280,6 +286,14 @@ class TrainConfig:
     def validate(self):
         if self.game not in GAME_REGISTRY:
             raise ValueError(f"Unknown game: {self.game}")
+        # Fold the deprecated star_gambit_spatial bool into spatial_policy when
+        # the new field was left at its default.
+        if self.star_gambit_spatial and self.spatial_policy == "auto":
+            self.spatial_policy = "on"
+        if self.spatial_policy not in ("auto", "on", "off"):
+            raise ValueError(
+                f"spatial_policy must be 'auto'/'on'/'off', got {self.spatial_policy!r}"
+            )
         valid_lr_schedules = {"constant", "step", "adaptive"}
         if self.lr_schedule not in valid_lr_schedules:
             raise ValueError(f"Unknown lr_schedule: {self.lr_schedule}")

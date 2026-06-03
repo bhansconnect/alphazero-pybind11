@@ -1,0 +1,34 @@
+game: open_tafl
+
+# OpenTafl is an 11x11 tafl variant (2662 moves, from-square x direction).
+# The action space is fully spatial (channels = WIDTH + HEIGHT per square, no
+# global actions), so use the spatial conv policy head.
+spatial_policy: "on"
+dense_net: false
+depth: 4
+channels: 64
+kernel_size: 3
+
+# Cheap head extensions that tend to reduce loss.
+head_channels: 64
+v_head_convs: 1
+pi_head_convs: 1
+v_fc_layers: 2
+
+# MCTS
+selfplay_mcts_visits: 120
+fast_mcts_visits: 30
+compare_mcts_visits: 30
+
+# Gumbel gives a much stronger learning signal per search.
+gumbel_enabled: true
+fast_search_algo: gumbel
+
+temp_decay_half_life: 12
+self_play_temp: 1.2
+final_temp: 0.2
+
+# Training
+lr_schedule: step
+lr_steps: [[0, 0.01], [60, 0.003], [150, 0.001], [300, 0.0003]]
+iterations: 800

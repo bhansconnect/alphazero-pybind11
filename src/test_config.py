@@ -32,7 +32,7 @@ def test_default_config():
     assert config.channels == 12
     assert config.kernel_size == 5
     assert config.dense_net is True
-    assert config.star_gambit_spatial is False
+    assert config.spatial_policy == "auto"
     assert config.cpuct == 1.25
     assert config.fpu_reduction == 0.25
     assert config.selfplay_mcts_visits == 100
@@ -76,7 +76,7 @@ def test_yaml_loading_star_gambit():
     assert config.depth == 4
     assert config.channels == 16  # overridden
     assert config.kernel_size == 3  # overridden
-    assert config.star_gambit_spatial is True  # overridden
+    assert config.spatial_policy == "on"  # overridden
     assert config.selfplay_mcts_visits == 120  # overridden
     assert config.gating_panel_size == 1  # default preserved
 
@@ -267,7 +267,7 @@ def test_config_save_and_reload(tmp_path):
     assert reloaded.iterations == 50
     assert reloaded.depth == config.depth
     assert reloaded.channels == config.channels
-    assert reloaded.star_gambit_spatial == config.star_gambit_spatial
+    assert reloaded.spatial_policy == config.spatial_policy
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +506,24 @@ def test_validate_iterations_zero(tmp_path):
     with open(yaml_path, "w") as f:
         f.write("game: connect4\niterations: 0\n")
     with pytest.raises(ValueError, match="iterations must be >= 1"):
+        load_config(yaml_path, {})
+
+
+def test_legacy_star_gambit_spatial_normalizes_on(tmp_path):
+    """The deprecated star_gambit_spatial: true folds into spatial_policy 'on'."""
+    yaml_path = str(tmp_path / "legacy.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\nstar_gambit_spatial: true\n")
+    config = load_config(yaml_path, {})
+    assert config.spatial_policy == "on"
+
+
+def test_validate_invalid_spatial_policy(tmp_path):
+    """An out-of-domain spatial_policy raises ValueError."""
+    yaml_path = str(tmp_path / "bad_spatial.yaml")
+    with open(yaml_path, "w") as f:
+        f.write('game: connect4\nspatial_policy: "sometimes"\n')
+    with pytest.raises(ValueError, match="spatial_policy must be"):
         load_config(yaml_path, {})
 
 

@@ -526,6 +526,15 @@ struct ActionSpace {
   //   31:    Opponent portal HP (broadcast)
   static constexpr int CANONICAL_CHANNELS = 32;
   static constexpr std::array<int, 3> CANONICAL_SHAPE = {CANONICAL_CHANNELS, BOARD_DIM, BOARD_DIM};
+
+  // Spatial policy layout: each board cell owns ACTIONS_PER_POSITION action
+  // channels (row-major (row, col, action_type), see encode_spatial_action).
+  // The remaining moves (deploy + end_turn) are global actions appended after
+  // the spatial block: num_global = NUM_MOVES - SPATIAL_ACTIONS.
+  static constexpr std::array<int, 3> POLICY_SHAPE = {ACTIONS_PER_POSITION,
+                                                      BOARD_DIM, BOARD_DIM};
+  static_assert(POLICY_SHAPE[0] * POLICY_SHAPE[1] * POLICY_SHAPE[2] <= NUM_MOVES,
+                "POLICY_SHAPE spatial block must fit within the action space");
 };
 
 // ============================================================================
@@ -749,6 +758,16 @@ class StarGambitUnifiedGS : public GameState {
 
   static constexpr std::array<int, 3> CANONICAL_SHAPE_ARRAY = {
       UNIFIED_CHANNELS, UNIFIED_BOARD_DIM, UNIFIED_BOARD_DIM};
+
+  // Spatial policy layout: the unified state always presents the 13x13 action
+  // space (small variants are remapped into it), so the spatial block is
+  // ACTIONS_PER_POSITION channels over the 13x13 grid; deploy + end_turn are
+  // appended as global actions.
+  static constexpr std::array<int, 3> POLICY_SHAPE = {
+      ACTIONS_PER_POSITION, UNIFIED_BOARD_DIM, UNIFIED_BOARD_DIM};
+  static_assert(
+      POLICY_SHAPE[0] * POLICY_SHAPE[1] * POLICY_SHAPE[2] <= UNIFIED_NUM_MOVES,
+      "POLICY_SHAPE spatial block must fit within the action space");
 
   // ---- Constructor ----
   // pinned_variant = -1  →  random, sample from probs each randomize_start()

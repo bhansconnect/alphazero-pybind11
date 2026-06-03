@@ -18,6 +18,7 @@ from torch.utils.data import TensorDataset, ConcatDataset, DataLoader
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import alphazero
+import game_runner
 from neural_net import NNWrapper, NNArgs, get_storage_dtype
 from game_runner import (
     save_compressed, load_compressed, _glob_hist_files,
@@ -916,8 +917,8 @@ def test_streaming_dataset_trains_nn(tmp_path):
 # ============================================================
 
 
-def test_train_index_then_extract(tmp_path):
-    """train() uses index-then-extract and produces valid loss."""
+def test_train_streaming_small_window(tmp_path):
+    """train() streams a small window (passes >= 1) and produces valid loss."""
     config = TrainConfig(train_batch_size=64)
     exp_dir = str(tmp_path / "experiment")
     paths = config.resolve_paths(exp_dir)
@@ -957,8 +958,9 @@ def test_train_index_then_extract(tmp_path):
     assert os.path.exists(os.path.join(paths["checkpoint"], f"0003-{experiment_name}.pt"))
 
 
-def test_train_subsamples_when_window_large(tmp_path):
-    """When window has many more samples than needed, train() subsamples."""
+def test_train_streaming_large_window(tmp_path):
+    """When the window has many more samples than needed, train() streams a subset
+    (passes == 1, stops early) without materializing the whole window."""
     config = TrainConfig(train_batch_size=64)
     exp_dir = str(tmp_path / "experiment")
     paths = config.resolve_paths(exp_dir)
@@ -988,12 +990,119 @@ def test_train_subsamples_when_window_large(tmp_path):
             pass
 
     # hist_size=4, iteration=4 → window spans iters 0..4
-    # average_generation = 1000/5 = 200, steps = ceil(200/64) = 4, samples_needed = 256
-    # 256 < 1000, so subsampling should happen
+    # samples_needed < total_size, so the stream stops partway through one pass.
     v_loss, pi_loss, total = train(config, paths, experiment_name, 4, 4, DummyRun(), 0)
     assert math.isfinite(v_loss)
     assert math.isfinite(pi_loss)
     assert total > 0
+
+
+def _write_history(history_dir, n_files, n, cs):
+    """Write `n_files` history triples of `n` samples each; return total sample count."""
+    for i in range(n_files):
+        c = torch.randn(n, cs[0], cs[1], cs[2])
+        v = torch.softmax(torch.randn(n, Game.NUM_PLAYERS() + 1), dim=1)
+        p = torch.softmax(torch.randn(n, Game.NUM_MOVES()), dim=1)
+        save_compressed(c, os.path.join(history_dir, f"{i:04d}-0000-canonical-{n}.ptz"))
+        save_compressed(v, os.path.join(history_dir, f"{i:04d}-0000-v-{n}.ptz"))
+        save_compressed(p, os.path.join(history_dir, f"{i:04d}-0000-pi-{n}.ptz"))
+    return n_files * n
+
+
+def test_train_streaming_bounded_active_files(tmp_path, monkeypatch):
+    """train() never loads more than `active_files` (+ prefetch margin) files at once,
+    even when the window is far larger than active_files. This is the OOM guarantee."""
+    active_files = 2
+    config = TrainConfig(train_batch_size=32, streaming_active_files=active_files)
+    exp_dir = str(tmp_path / "experiment")
+    paths = config.resolve_paths(exp_dir)
+    for key in ("checkpoint", "history"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    cs = Game.CANONICAL_SHAPE()
+    experiment_name = "test"
+
+    nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
+    nn = NNWrapper(Game, nnargs)
+    nn.save_checkpoint(paths["checkpoint"], f"0011-{experiment_name}.pt")
+    del nn
+
+    # 12 files >> active_files=2 → if train() bulk-loaded, peak would be ~12.
+    _write_history(paths["history"], n_files=12, n=50, cs=cs)
+
+    # Track peak concurrent in-flight loads. The streaming pool throttles loading to
+    # `active_files` slots with at most n_workers (<= 4) prefetch threads, so concurrent
+    # decompressions stay bounded -- unlike the old bulk ThreadPoolExecutor load.
+    import threading
+    real_load = game_runner._load_and_shuffle
+    lock = threading.Lock()
+    state = {"inflight": 0, "peak": 0, "calls": 0}
+
+    def tracking_load(*args, **kwargs):
+        with lock:
+            state["inflight"] += 1
+            state["calls"] += 1
+            state["peak"] = max(state["peak"], state["inflight"])
+        try:
+            return real_load(*args, **kwargs)
+        finally:
+            with lock:
+                state["inflight"] -= 1
+
+    monkeypatch.setattr(game_runner, "_load_and_shuffle", tracking_load)
+
+    class DummyRun:
+        def track(*a, **kw):
+            pass
+
+    # hist_size=11, iteration=11 → window spans all 12 files.
+    v_loss, pi_loss, total = train(config, paths, experiment_name, 11, 11, DummyRun(), 0)
+    assert math.isfinite(v_loss)
+    assert math.isfinite(pi_loss)
+    assert total > 0
+
+    assert state["calls"] >= 1, "expected files to be streamed"
+    # Bound: active_files slots + prefetch threads (n_workers <= 4).
+    assert state["peak"] <= active_files + 4, (
+        f"peak concurrent loads {state['peak']} exceeds bound "
+        f"{active_files + 4}; train() may be bulk-loading the window"
+    )
+
+
+def test_train_streaming_honors_step_budget(tmp_path):
+    """The exact training step budget is enforced regardless of the streaming data
+    source / number of passes."""
+    bs = 64
+    config = TrainConfig(train_batch_size=bs, train_sample_rate=4)
+    exp_dir = str(tmp_path / "experiment")
+    paths = config.resolve_paths(exp_dir)
+    for key in ("checkpoint", "history"):
+        os.makedirs(paths[key], exist_ok=True)
+
+    cs = Game.CANONICAL_SHAPE()
+    experiment_name = "test"
+
+    nnargs = NNArgs(num_channels=8, depth=2, kernel_size=3, dense_net=True)
+    nn = NNWrapper(Game, nnargs)
+    nn.save_checkpoint(paths["checkpoint"], f"0004-{experiment_name}.pt")
+    del nn
+
+    n_files, n = 5, 200
+    total_size = _write_history(paths["history"], n_files=n_files, n=n, cs=cs)
+
+    class DummyRun:
+        def track(*a, **kw):
+            pass
+
+    iteration, hist_size = 4, 4
+    num_iters = min(hist_size, iteration + 1)
+    average_generation = total_size / num_iters
+    expected_steps = math.ceil(average_generation / bs * config.train_sample_rate)
+
+    v_loss, pi_loss, total = train(config, paths, experiment_name, iteration, hist_size, DummyRun(), 0)
+    assert math.isfinite(v_loss)
+    assert math.isfinite(pi_loss)
+    assert total == expected_steps
 
 
 # ============================================================

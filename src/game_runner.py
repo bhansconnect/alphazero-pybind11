@@ -48,6 +48,18 @@ def _is_unified_game(config):
     return config.game in _UNIFIED_GAME_NAMES
 
 
+# Tafl games get square-board, quartile-phased distribution figures (see
+# generate_tafl_visualizations). Explicit allowlist rather than a structural
+# predicate so connect4/onitama (no POLICY_SHAPE) and Star Gambit per-variant
+# configs never trigger it. New tafl-like games (pieces in canonical channels
+# 0/1/2, spatial policy with no global actions) opt in here consciously.
+_TAFL_GAME_NAMES = {"brandubh", "open_tafl", "tawlbwrdd"}
+
+
+def _is_tafl_game(config):
+    return config.game in _TAFL_GAME_NAMES
+
+
 def _compute_unified_probs(config, prev_sample_counts=None):
     """Variant selection probabilities [skirmish, showdown, clash, battle].
 
@@ -2645,34 +2657,11 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         return
 
     try:
-        hist_location = paths["history"]
-        file_triples = glob_file_triples(hist_location, f"{iteration:04d}-*-canonical-*.ptz")
-        if not file_triples:
+        from game_viz import load_history_samples
+        loaded = load_history_samples(paths, iteration, max_samples=32_000)
+        if loaded is None:
             return
-
-        MAX_SAMPLES = 32_000
-        all_c, all_pi = [], []
-        total = 0
-        per_file = max(1, MAX_SAMPLES // len(file_triples))
-        for c_path, v_path, pi_path, size in file_triples:
-            take = min(per_file, size, MAX_SAMPLES - total)
-            if take <= 0:
-                continue
-            c = load_compressed(c_path).float()
-            pi = load_compressed(pi_path).float()
-            if take < size:
-                idx = torch.randperm(size)[:take]
-                all_c.append(c[idx]); all_pi.append(pi[idx])
-            else:
-                all_c.append(c); all_pi.append(pi)
-            total += take
-
-        if not all_c:
-            return
-
-        c_data = torch.cat(all_c)
-        pi_np = torch.cat(all_pi).numpy()
-        del all_c, all_pi
+        c_data, pi_np = loaded
 
         # Variant id per sample: channels 32-35 one-hot at grid center (6,6)
         variant_ids = c_data[:, 32:36, 6, 6].numpy().argmax(axis=1)
@@ -2862,101 +2851,12 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
             mass_per_unit = (total / denom) if denom > 0 else 0.0
             return (dist / total if total > 0 else dist), mass_per_unit
 
-        def _draw_na(ax, label="N/A"):
-            """Render a grey 'N/A' / insufficient-data placeholder panel."""
-            ax.set_facecolor("#dddddd")
-            ax.text(0.5, 0.5, label, transform=ax.transAxes,
-                    ha="center", va="center", fontsize=10, color="#888888")
-            ax.set_xticks([])
-            ax.set_yticks([])
-
-        # ---- Hex-canvas rendering ---------------------------------------------------
-        # The 13×13 grid is indexed [q+6, r+6]. The game's actual hex layout
-        # (matching StarGambitGS::dump and play.py) places P0 deploy at the
-        # bottom-right corner and P1 deploy at the top-left. We render heatmaps
-        # using axial→pixel coords so peaks land at the corners a player expects.
-        from matplotlib.collections import PolyCollection
-
-        _HEX_DY = math.sqrt(3) / 2
-        _hex_unit_verts = np.array([
-            (math.cos(math.radians(60 * k + 30)),
-             math.sin(math.radians(60 * k + 30)))
-            for k in range(6)
-        ])  # pointy-top hexagon, circumradius=1
-
-        def _axial_to_xy(q, r):
-            """Axial (q, r) → screen (x, y) for pointy-top hexes, +y points down."""
-            x = q + r * 0.5
-            y = r * _HEX_DY
-            return x, y
-
-        def _hex_in_bounds(q, r, side=6):
-            return abs(q) <= side and abs(r) <= side and abs(-q - r) <= side
-
-        def _draw_hex_heatmap(ax, grid, cmap="YlOrRd", vmin=0, vmax=None,
-                              board_side_hint=None, show_colorbar=True,
-                              show_compass=True):
-            """Render a 13×13 grid (indexed [q+6, r+6]) as a hex polygon collection.
-
-            board_side_hint: int marks the P0 deploy hex for that inner board
-                size AND clips the rendered hexes to that variant's board
-                (so the outer empty ring is hidden for board_side=5 variants).
-                None renders all hexes within the unified board_side=6 hull
-                and marks both 5- and 6-side spawn hexes.
-            """
-            side = board_side_hint if board_side_hint is not None else 6
-            polys = []
-            values = []
-            for q in range(-side, side + 1):
-                for r in range(-side, side + 1):
-                    if not _hex_in_bounds(q, r, side):
-                        continue
-                    val = grid[q + 6, r + 6]
-                    if np.isnan(val):
-                        continue
-                    cx, cy = _axial_to_xy(q, r)
-                    polys.append(_hex_unit_verts * 0.95 + (cx, cy))
-                    values.append(val)
-            if not polys:
-                _draw_na(ax)
-                return None
-            if vmax is None:
-                vmax = max(values) if values else 1.0
-            if vmax <= 0:
-                vmax = 1.0
-            coll = PolyCollection(polys, array=np.asarray(values),
-                                  cmap=cmap, edgecolors="white", linewidths=0.3)
-            coll.set_clim(vmin, vmax)
-            ax.add_collection(coll)
-
-            # Spawn markers.
-            spawn_sides = [board_side_hint] if board_side_hint is not None else [5, 6]
-            for s in spawn_sides:
-                cx, cy = _axial_to_xy(0, s)
-                ax.plot(cx, cy, marker="x", markersize=8, mew=1.5,
-                        color="#222222", linestyle="none")
-            # Axis cosmetics: equal aspect, +y down, no ticks; small compass.
-            x_min = -side - 0.5 * side - 1
-            x_max =  side + 0.5 * side + 1
-            y_min = -side * _HEX_DY - 1
-            y_max =  side * _HEX_DY + 1
-            ax.set_xlim(x_min, x_max)
-            ax.set_ylim(y_max, y_min)  # invert y so +y is down (matches dump())
-            ax.set_aspect("equal")
-            ax.set_xticks([]); ax.set_yticks([])
-            if show_compass:
-                ax.text(x_max - 0.4, 0, "E", ha="right", va="center",
-                        fontsize=7, color="#888888")
-                ax.text(x_min + 0.4, 0, "W", ha="left",  va="center",
-                        fontsize=7, color="#888888")
-                ax.text(0, y_min + 0.4, "↑P1", ha="center", va="top",
-                        fontsize=7, color="#888888")
-                ax.text(0, y_max - 0.4, "P0↓", ha="center", va="bottom",
-                        fontsize=7, color="#888888")
-            if show_colorbar:
-                import matplotlib.pyplot as _plt
-                _plt.colorbar(coll, ax=ax, fraction=0.046, pad=0.04)
-            return coll
+        # Board renderer + N/A placeholder are shared via game_viz (the hex
+        # heatmap and its axial-geometry helpers were lifted there unchanged).
+        from game_viz import (
+            draw_hex_heatmap as _draw_hex_heatmap,
+            draw_na as _draw_na,
+        )
 
         unit_names  = ["Fighter", "Cruiser", "Dreadnought"]
         unit_colors = ["#4e79a7", "#f28e2b", "#59a14f"]
@@ -3283,48 +3183,9 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
             plt.tight_layout()
             fig6_list.append((f, pname))
 
-        # --- Figure 7: value calibration curves per variant ---
-        fig7 = None
-        if variant_stats:
-            n_variants = len(variant_stats)
-            fig7, axes7 = plt.subplots(1, n_variants, figsize=(4 * n_variants, 4))
-            if n_variants == 1:
-                axes7 = [axes7]
-            fig7.suptitle(f"Iteration {iteration} — Value Calibration", fontsize=12)
-            bins = np.linspace(0, 1, 11)
-            bin_centers = (bins[:-1] + bins[1:]) / 2
-            MIN_BIN_COUNT = 10
-            for ax, (vname, stats) in zip(axes7, variant_stats.items()):
-                vp = stats["v_pred"]
-                va = stats["v_actual"]
-                bin_idx = np.digitize(vp, bins) - 1
-                bin_idx = np.clip(bin_idx, 0, 9)
-                counts = np.array([(bin_idx == b).sum() for b in range(10)])
-                # Only plot bins with enough support to be informative.
-                actual_means = np.array([
-                    va[bin_idx == b].mean() if counts[b] >= MIN_BIN_COUNT else np.nan
-                    for b in range(10)
-                ])
-                ax.plot([0, 1], [0, 1], "k--", alpha=0.4, label="Perfect")
-                valid = ~np.isnan(actual_means)
-                sc = ax.scatter(bin_centers[valid], actual_means[valid],
-                                c=counts[valid], cmap="YlOrRd", s=60, zorder=3)
-                ax.plot(bin_centers[valid], actual_means[valid], alpha=0.7)
-                # Annotate per-bin n below the curve.
-                for b in range(10):
-                    if counts[b] > 0:
-                        ax.text(bin_centers[b], 0.02, f"{counts[b]}",
-                                ha="center", va="bottom", fontsize=6,
-                                color="#666666",
-                                alpha=1.0 if counts[b] >= MIN_BIN_COUNT else 0.4)
-                plt.colorbar(sc, ax=ax, label="n samples")
-                ax.set_xlim(0, 1); ax.set_ylim(0, 1)
-                ax.set_xlabel("Predicted win prob"); ax.set_ylabel("Actual win rate")
-                ax.set_title(f"{vname.capitalize()}\n(n={len(vp)}, "
-                             f"bins≥{MIN_BIN_COUNT}: {int(valid.sum())})",
-                             fontsize=9)
-                ax.legend(fontsize=7)
-            plt.tight_layout()
+        # --- Figure 7: value calibration curves per variant (shared helper) ---
+        from game_viz import value_calibration_figure
+        fig7 = value_calibration_figure(variant_stats, iteration)
 
         run.track(aim_lib.Image(fig1), name="action_heatmap",
                   epoch=iteration, step=total_train_steps)
@@ -3339,6 +3200,201 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                       epoch=iteration, step=total_train_steps, context={"phase": pname})
         if fig7 is not None:
             run.track(aim_lib.Image(fig7), name="value_calibration",
+                      epoch=iteration, step=total_train_steps)
+    except Exception:
+        pass
+    finally:
+        plt.close("all")
+
+
+# Starting on-board piece totals (1 king + defenders + attackers) per board size,
+# used to derive a capture-progress signal when no turn channel is present.
+_TAFL_STARTING_TOTAL = {(7, 7): 13, (11, 11): 37}
+
+
+def generate_tafl_visualizations(config, paths, experiment_name, iteration, run,
+                                 total_train_steps):
+    """Quartile-phased distribution figures for tafl games (square boards).
+
+    Tafl `pi` reshapes to (N, H, W, W+H): per from-square the first W channels
+    are row-slides and the next H are column-slides (matches
+    tafl_helper.h::policyLocation). Canonical channels 0/1/2 are the
+    King/Defender/Attacker planes (absolute, not perspective-swapped). Phases are
+    quartiles of a game-progress signal — open_tafl carries a turn fraction in
+    channel 7; brandubh/tawlbwrdd derive progress from captured-piece fraction.
+    All errors are caught silently so visualization never interrupts training.
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import aim as aim_lib
+    except ImportError:
+        return
+
+    try:
+        from game_viz import (load_history_samples, quartile_masks,
+                              draw_square_heatmap, draw_na,
+                              value_calibration_figure)
+
+        Game = config.Game
+        C, H, W = Game.CANONICAL_SHAPE()
+        PW = W + H
+        MIN_SAMPLES = 50
+
+        loaded = load_history_samples(paths, iteration, max_samples=32_000,
+                                      want_v=True)
+        if loaded is None:
+            return
+        c_data, pi_np, v_np = loaded
+        N = pi_np.shape[0]
+        if N == 0:
+            return
+
+        pi = pi_np.reshape(N, H, W, PW)             # (N, H, W, W+H)
+        king = c_data[:, 0].numpy()
+        deff = c_data[:, 1].numpy()
+        atk  = c_data[:, 2].numpy()
+
+        on_board = (king + deff + atk).sum(axis=(1, 2))
+        if C >= 8:
+            progress = c_data[:, 7, 0, 0].numpy()   # open_tafl turn fraction
+        else:
+            start_total = _TAFL_STARTING_TOTAL.get(
+                (H, W), float(on_board.max()) or 1.0)
+            progress = np.clip(1.0 - on_board / start_total, 0.0, 1.0)
+        phases = quartile_masks(progress)
+        nph = len(phases)
+
+        # Corners + throne are the tafl special squares.
+        special = [(0, 0), (0, W - 1), (H - 1, 0), (H - 1, W - 1),
+                   (H // 2, W // 2)]
+
+        # Per-sample "move-from" mass at each source square (sum over all
+        # destination channels): (N, H, W).
+        from_mass = pi.sum(axis=3)
+
+        # --- Figure (a): policy move-from heatmap by quartile ---
+        figa, axa = plt.subplots(1, nph, figsize=(4 * nph, 4))
+        if nph == 1:
+            axa = [axa]
+        figa.suptitle(f"Iteration {iteration} — policy move-from by phase",
+                      fontsize=12)
+        for ax, (label, m) in zip(axa, phases):
+            if m.sum() < MIN_SAMPLES:
+                draw_na(ax, label=f"n={int(m.sum())}\n(insufficient)")
+                ax.set_title(label, fontsize=9)
+                continue
+            draw_square_heatmap(ax, from_mass[m].mean(axis=0), special=special,
+                                title=label)
+        figa.tight_layout()
+
+        # --- Figure (b): per-piece move-from (3 pieces × quartiles) ---
+        # Normalize by occupied-sample count per square so the heatmap shows
+        # behavioral preference, not piece attrition.
+        piece_planes = [("King", king), ("Defender", deff), ("Attacker", atk)]
+        figb, axb = plt.subplots(3, nph, figsize=(4 * nph, 11), squeeze=False)
+        figb.suptitle(f"Iteration {iteration} — move-from by piece × phase",
+                      fontsize=12)
+        for pr, (pname, plane) in enumerate(piece_planes):
+            occ = plane > 0.5
+            for pc, (label, m) in enumerate(phases):
+                ax = axb[pr, pc]
+                if m.sum() < MIN_SAMPLES:
+                    draw_na(ax, label=f"n={int(m.sum())}")
+                else:
+                    occ_sel = occ[m]
+                    denom = occ_sel.sum(axis=0)
+                    num = (from_mass[m] * occ_sel).sum(axis=0)
+                    grid = np.where(denom > 0, num / np.maximum(denom, 1), np.nan)
+                    draw_square_heatmap(ax, grid, special=special)
+                if pr == 0:
+                    ax.set_title(label, fontsize=9)
+                if pc == 0:
+                    ax.set_ylabel(pname, fontsize=11)
+        figb.tight_layout()
+
+        # --- Figure (c): piece-count distribution by quartile ---
+        labels = [lab for lab, _ in phases]
+        def_means = [deff[m].sum(axis=(1, 2)).mean() if m.any() else 0.0
+                     for _, m in phases]
+        atk_means = [atk[m].sum(axis=(1, 2)).mean() if m.any() else 0.0
+                     for _, m in phases]
+        king_alive = [(king[m].sum(axis=(1, 2)) > 0.5).mean() if m.any() else 0.0
+                      for _, m in phases]
+        figc, axc = plt.subplots(figsize=(8, 4))
+        x = np.arange(nph)
+        wbar = 0.35
+        axc.bar(x - wbar / 2, def_means, wbar, label="Defenders", color="#4477aa")
+        axc.bar(x + wbar / 2, atk_means, wbar, label="Attackers", color="#cc6677")
+        axc.set_xticks(x)
+        axc.set_xticklabels(labels, fontsize=8)
+        axc.set_ylabel("mean piece count")
+        axc.legend(loc="upper right", fontsize=8)
+        ax2 = axc.twinx()
+        ax2.plot(x, king_alive, "k-o", label="King-alive rate")
+        ax2.set_ylim(0, 1.05)
+        ax2.set_ylabel("king-alive rate")
+        figc.suptitle(f"Iteration {iteration} — piece counts by phase", fontsize=12)
+        figc.tight_layout()
+
+        # --- Figure (d): move geometry (row vs column slides) by quartile ---
+        row_mass = pi[..., :W].sum(axis=(1, 2, 3))   # (N,)
+        col_mass = pi[..., W:].sum(axis=(1, 2, 3))
+        figd, axd = plt.subplots(1, nph, figsize=(4 * nph, 4), sharey=True)
+        if nph == 1:
+            axd = [axd]
+        figd.suptitle(f"Iteration {iteration} — move geometry by phase",
+                      fontsize=12)
+        for ax, (label, m) in zip(axd, phases):
+            if m.sum() < MIN_SAMPLES:
+                draw_na(ax, label=f"n={int(m.sum())}")
+                ax.set_title(label, fontsize=9)
+                continue
+            r = float(row_mass[m].mean())
+            c = float(col_mass[m].mean())
+            tot = (r + c) or 1.0
+            ax.bar(["row-slide", "col-slide"], [r / tot, c / tot],
+                   color=["#4477aa", "#cc6677"])
+            ax.set_ylim(0, 1)
+            ax.set_title(label, fontsize=9)
+        figd.tight_layout()
+
+        # --- Figure (e): value calibration (bounded inference pass) ---
+        fig_e = None
+        try:
+            import neural_net
+            ckpt = f"{iteration + 1:04d}-{experiment_name}.pt"
+            if os.path.exists(os.path.join(paths["checkpoint"], ckpt)):
+                nn = neural_net.NNWrapper.load_checkpoint(
+                    Game, paths["checkpoint"], ckpt)
+                nn.nnet.eval()
+                device = nn.device
+                bs = config.train_batch_size
+                v_pred_parts = []
+                with torch.no_grad():
+                    for s in range(0, N, bs):
+                        cb = c_data[s:s + bs].to(device, non_blocking=True)
+                        out_v, _ = nn.nnet(cb)
+                        v_pred_parts.append(torch.exp(out_v)[:, 0].cpu().numpy())
+                fig_e = value_calibration_figure(
+                    {"overall": {"v_pred": np.concatenate(v_pred_parts),
+                                 "v_actual": v_np[:, 0]}},
+                    iteration)
+                del nn
+        except Exception:
+            fig_e = None
+
+        run.track(aim_lib.Image(figa), name="tafl_move_from_by_phase",
+                  epoch=iteration, step=total_train_steps)
+        run.track(aim_lib.Image(figb), name="tafl_move_from_by_piece",
+                  epoch=iteration, step=total_train_steps)
+        run.track(aim_lib.Image(figc), name="tafl_piece_counts_by_phase",
+                  epoch=iteration, step=total_train_steps)
+        run.track(aim_lib.Image(figd), name="tafl_move_geometry_by_phase",
+                  epoch=iteration, step=total_train_steps)
+        if fig_e is not None:
+            run.track(aim_lib.Image(fig_e), name="value_calibration",
                       epoch=iteration, step=total_train_steps)
     except Exception:
         pass
@@ -4281,6 +4337,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             _log_win_rate_matrix(paths, i, run, total_train_steps)
             if _is_unified_game(config):
                 _generate_visualizations(config, paths, i, run, total_train_steps, variant_stats)
+            elif _is_tafl_game(config):
+                generate_tafl_visualizations(config, paths, experiment_name, i, run, total_train_steps)
             stage_times["visualizations"] = time.time() - stage_start
 
             total_time = time.time() - iteration_start

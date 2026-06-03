@@ -117,10 +117,22 @@ def _register_star_gambit_uis():
         pass
 
 
+def _register_tafl_uis():
+    """Register tafl UIs lazily."""
+    try:
+        from tafl_ui import TaflUI
+        GAME_UI_REGISTRY["brandubh"] = lambda: TaflUI(7, 7)
+        GAME_UI_REGISTRY["open_tafl"] = lambda: TaflUI(11, 11)
+        GAME_UI_REGISTRY["tawlbwrdd"] = lambda: TaflUI(11, 11)
+    except ImportError:
+        pass
+
+
 def get_game_ui(game_name: str) -> GameUI:
     """Get the appropriate GameUI for a game name."""
     if not GAME_UI_REGISTRY:
         _register_star_gambit_uis()
+        _register_tafl_uis()
     if game_name in GAME_UI_REGISTRY:
         return GAME_UI_REGISTRY[game_name]()
     return GameUI()

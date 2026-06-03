@@ -154,3 +154,43 @@ def test_generate_tafl_visualizations_smoke(tmp_path):
     for expected in ("tafl_move_from_by_phase", "tafl_move_from_by_piece",
                      "tafl_piece_counts_by_phase", "tafl_move_geometry_by_phase"):
         assert expected in run.names
+
+
+def test_analyze_iteration_overall_bucket_for_non_unified(tmp_path):
+    """_analyze_iteration_variants returns a single 'overall' bucket (with
+    per-sample arrays) for non-unified games like brandubh."""
+    import torch
+    from game_runner import save_compressed, _analyze_iteration_variants
+    from config import TrainConfig
+    import neural_net
+
+    N, H, W, C = 64, 7, 7, 7
+    M = H * W * (W + H)
+    rng = np.random.default_rng(1)
+    c = (rng.random((N, C, H, W)) < 0.2).astype(np.float32)
+    pi = rng.random((N, M)).astype(np.float32)
+    pi /= pi.sum(axis=1, keepdims=True)
+    v = rng.random((N, 3)).astype(np.float32)
+    v /= v.sum(axis=1, keepdims=True)
+
+    hist = tmp_path / "history"; hist.mkdir()
+    ckpt = tmp_path / "ckpt"; ckpt.mkdir()
+    save_compressed(torch.tensor(c), str(hist / f"0000-exp-canonical-{N}.ptz"))
+    save_compressed(torch.tensor(v), str(hist / f"0000-exp-v-{N}.ptz"))
+    save_compressed(torch.tensor(pi), str(hist / f"0000-exp-pi-{N}.ptz"))
+
+    config = TrainConfig(game="brandubh")
+    config.validate()
+    # Trained checkpoint for iteration 0 is named 0001-<exp>.pt.
+    net = neural_net.NNWrapper(
+        config.Game,
+        neural_net.NNArgs(num_channels=8, depth=1, kernel_size=3,
+                          dense_net=False, head_channels=8))
+    net.save_checkpoint(str(ckpt), "0001-exp.pt")
+
+    paths = {"history": str(hist), "checkpoint": str(ckpt)}
+    result = _analyze_iteration_variants(config, paths, "exp", 0)
+    assert set(result.keys()) == {"overall"}
+    ov = result["overall"]
+    for key in ("pi_loss", "v_loss", "entropy", "top1", "v_pred", "v_actual"):
+        assert ov[key].shape == (N,)

@@ -333,18 +333,6 @@ def _parallel_load_triples(triples, num_workers, desc="Loading Data"):
     return results
 
 
-def _load_and_select(args):
-    """Load a file triple and select subset by indices. Keeps only selected rows in memory."""
-    c_path, v_path, pi_path, indices = args
-    c = _load_hist_tensor(c_path)
-    v = _load_hist_tensor(v_path)
-    pi = _load_hist_tensor(pi_path)
-    idx = torch.tensor(indices, dtype=torch.long)
-    result = (c[idx], v[idx], pi[idx])
-    del c, v, pi
-    return result
-
-
 
 GRArgs = namedtuple(
     "GRArgs",
@@ -1261,9 +1249,11 @@ def iteration_loss(config, paths, experiment_name, iteration):
 
 @tracy_zone
 def train(config, paths, experiment_name, iteration, hist_size, run, total_train_steps, lr=None):
-    """Index-then-extract training: pre-select samples, load one file at a time.
+    """Stream the training window through a bounded file pool.
 
-    Memory bounded at ~1.5 GB regardless of window size.
+    Peak RAM is bounded by ``config.streaming_active_files`` resident file triples
+    (plus a small prefetch margin), independent of window size, generation size, or
+    ``train_sample_rate``. Self-play samples are never all held in RAM at once.
     """
     import neural_net
 
@@ -1288,63 +1278,18 @@ def train(config, paths, experiment_name, iteration, hist_size, run, total_train
     steps_to_train = int(math.ceil(average_generation / bs * config.train_sample_rate))
     samples_needed = steps_to_train * bs
 
-    # Phase 2: Pre-select sample indices
-    if samples_needed >= total_size:
-        # Use all samples (early iterations)
-        selected_per_file = [list(range(s)) for s in sizes]
-    else:
-        # Generate sorted random indices, map to (file_idx, local_offset)
-        all_indices = sorted(random.sample(range(total_size), samples_needed))
-        cum_sizes = []
-        cum = 0
-        for s in sizes:
-            cum_sizes.append(cum)
-            cum += s
-        selected_per_file = [[] for _ in range(len(file_triples))]
-        fi = 0
-        for idx in all_indices:
-            while fi < len(cum_sizes) - 1 and idx >= cum_sizes[fi + 1]:
-                fi += 1
-            selected_per_file[fi].append(idx - cum_sizes[fi])
-
-    # Phase 3: Load files and extract selected indices (parallel)
-    work_items = [
-        (c_path, v_path, pi_path, selected_per_file[i])
-        for i, (c_path, v_path, pi_path, _) in enumerate(file_triples)
-        if selected_per_file[i]
-    ]
-
-    num_workers = config.resolved_loader_threads
-    acc_c, acc_v, acc_pi = [], [], []
-    if num_workers <= 1:
-        for item in tqdm.tqdm(work_items, desc="Extracting Training Samples", leave=False):
-            c, v, pi = _load_and_select(item)
-            acc_c.append(c); acc_v.append(v); acc_pi.append(pi)
-    else:
-        results = [None] * len(work_items)
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            future_to_idx = {executor.submit(_load_and_select, item): i for i, item in enumerate(work_items)}
-            for future in tqdm.tqdm(
-                as_completed(future_to_idx), total=len(future_to_idx),
-                desc="Extracting Training Samples", leave=False,
-            ):
-                results[future_to_idx[future]] = future.result()
-        for c, v, pi in results:
-            acc_c.append(c); acc_v.append(v); acc_pi.append(pi)
-
-    c_data = torch.cat(acc_c)
-    v_data = torch.cat(acc_v)
-    pi_data = torch.cat(acc_pi)
-    del acc_c, acc_v, acc_pi
-
-    # Phase 4: Train
-    dataset = TensorDataset(c_data, v_data, pi_data)
-    # num_workers=0: dataset is already in RAM, so workers add no I/O parallelism
-    # but each forked worker COWs the parent's tensors and Python refcount bumps
-    # dirty every page on read → real-RAM blowup proportional to cpu_count().
-    dataloader = DataLoader(dataset, batch_size=bs, shuffle=True, pin_memory=torch.cuda.is_available(),
-                            num_workers=0)
-    del c_data, v_data, pi_data
+    # Phase 2: Stream the window. nn.train() enforces the exact step budget by
+    # re-iterating the dataloader until steps_to_train; we size `passes` so a single
+    # __iter__ already yields >= steps_to_train batches and the iterator is not
+    # restarted (which would re-read files from disk). When samples_needed < total_size
+    # (steady state) passes==1 and the stream stops partway through a shuffled,
+    # cross-file-mixed pass -- an approximate uniform subsample with bounded RAM.
+    passes = max(1, math.ceil(samples_needed / total_size)) if total_size else 1
+    dataset = StreamingCompressedDataset(
+        file_triples, bs, passes=passes, active_files=config.streaming_active_files,
+    )
+    # batch_size=None: the dataset already yields full (canonical, v, pi) batches.
+    dataloader = DataLoader(dataset, batch_size=None, num_workers=0)
 
     nn = neural_net.NNWrapper.load_checkpoint(
         Game, paths["checkpoint"], f"{iteration:04d}-{experiment_name}.pt"

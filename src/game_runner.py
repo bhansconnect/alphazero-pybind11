@@ -2439,51 +2439,32 @@ def _bootstrap_retrain(nn, reservoir_files, window_files, config, run, source_n,
 
 
 def _analyze_iteration_variants(config, paths, experiment_name, iteration):
-    """Compute per-variant pi-loss, v-loss, and target entropy after training.
+    """Post-training per-sample policy/value-loss, target entropy, top-1 mass.
 
-    Loads up to 4096 samples from the current iteration's history files, runs
-    inference with the newly-trained checkpoint, and returns per-variant mean losses.
+    Loads up to 32k samples from the current iteration's history, runs inference
+    with the newly-trained checkpoint, and returns per-sample arrays grouped into
+    buckets. Unified games split by variant; every other game returns a single
+    "overall" bucket so all games get these metrics.
 
-    Returns dict: {variant_name: {"pi_loss": float, "v_loss": float, "entropy": float}}
-    Returns {} for non-unified games or if history files are missing.
+    Returns dict: {bucket: {"pi_loss", "v_loss", "entropy", "top1", "v_pred",
+    "v_actual"}} (each a numpy array). Returns {} if history/checkpoint missing.
     """
     import neural_net
+    from game_viz import load_history_samples
 
     Game = config.Game
-    hist_location = paths["history"]
-
-    file_triples = glob_file_triples(hist_location, f"{iteration:04d}-*-canonical-*.ptz")
-    if not file_triples:
+    loaded = load_history_samples(paths, iteration, max_samples=32_000, want_v=True)
+    if loaded is None:
         return {}
+    c_data, pi_np, v_np = loaded
+    pi_data = torch.from_numpy(pi_np)
+    v_data = torch.from_numpy(v_np)
 
-    MAX_SAMPLES = 32_000
-    all_c, all_v, all_pi = [], [], []
-    total = 0
-    per_file = max(1, MAX_SAMPLES // len(file_triples))
-    for c_path, v_path, pi_path, size in file_triples:
-        take = min(per_file, size, MAX_SAMPLES - total)
-        if take <= 0:
-            continue
-        c = load_compressed(c_path).float()
-        v = load_compressed(v_path).float()
-        pi = load_compressed(pi_path).float()
-        if take < size:
-            idx = torch.randperm(size)[:take]
-            all_c.append(c[idx]); all_v.append(v[idx]); all_pi.append(pi[idx])
-        else:
-            all_c.append(c); all_v.append(v); all_pi.append(pi)
-        total += take
-
-    if not all_c:
-        return {}
-
-    c_data = torch.cat(all_c)
-    v_data = torch.cat(all_v)
-    pi_data = torch.cat(all_pi)
-    del all_c, all_v, all_pi
-
-    # Variant membership: channels 32-35 one-hot, sampled at center of 13×13 grid
-    variant_ids = c_data[:, 32:36, 6, 6].argmax(dim=1).numpy()
+    unified = _is_unified_game(config)
+    # Variant membership only exists for the unified 13×13 encoding (channels
+    # 32-35 one-hot at grid center). Other games are analyzed as one bucket.
+    variant_ids = (c_data[:, 32:36, 6, 6].argmax(dim=1).numpy()
+                   if unified else None)
 
     try:
         nn = neural_net.NNWrapper.load_checkpoint(
@@ -2524,17 +2505,27 @@ def _analyze_iteration_variants(config, paths, experiment_name, iteration):
     gc.collect()
 
     result = {}
-    for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
-        mask = variant_ids == vid
-        if mask.sum() == 0:
-            continue
-        result[vname] = {
-            "pi_loss":  pi_losses[mask],
-            "v_loss":   v_losses[mask],
-            "entropy":  entropies[mask],
-            "top1":     top1[mask],
-            "v_pred":   v_pred[mask],
-            "v_actual": v_actual[mask],
+    if unified:
+        for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
+            mask = variant_ids == vid
+            if mask.sum() == 0:
+                continue
+            result[vname] = {
+                "pi_loss":  pi_losses[mask],
+                "v_loss":   v_losses[mask],
+                "entropy":  entropies[mask],
+                "top1":     top1[mask],
+                "v_pred":   v_pred[mask],
+                "v_actual": v_actual[mask],
+            }
+    else:
+        result["overall"] = {
+            "pi_loss":  pi_losses,
+            "v_loss":   v_losses,
+            "entropy":  entropies,
+            "top1":     top1,
+            "v_pred":   v_pred,
+            "v_actual": v_actual,
         }
     return result
 
@@ -3158,7 +3149,7 @@ _TAFL_STARTING_TOTAL = {(7, 7): 13, (11, 11): 37}
 
 
 def generate_tafl_visualizations(config, paths, experiment_name, iteration, run,
-                                 total_train_steps):
+                                 total_train_steps, variant_stats=None):
     """Quartile-phased distribution figures for tafl games (square boards).
 
     Tafl `pi` reshapes to (N, H, W, W+H): per from-square the first W channels
@@ -3305,28 +3296,38 @@ def generate_tafl_visualizations(config, paths, experiment_name, iteration, run,
             ax.set_title(label, fontsize=9)
         figd.tight_layout()
 
-        # --- Figure (e): value calibration (bounded inference pass) ---
+        # --- Figure (e): value calibration ---
+        # Reuse the post-training analysis pass (_analyze_iteration_variants)
+        # when its "overall" bucket is available, so we don't run inference
+        # twice; otherwise fall back to a bounded local inference pass.
         fig_e = None
         try:
-            import neural_net
-            ckpt = f"{iteration + 1:04d}-{experiment_name}.pt"
-            if os.path.exists(os.path.join(paths["checkpoint"], ckpt)):
-                nn = neural_net.NNWrapper.load_checkpoint(
-                    Game, paths["checkpoint"], ckpt)
-                nn.nnet.eval()
-                device = nn.device
-                bs = config.train_batch_size
-                v_pred_parts = []
-                with torch.no_grad():
-                    for s in range(0, N, bs):
-                        cb = c_data[s:s + bs].to(device, non_blocking=True)
-                        out_v, _ = nn.nnet(cb)
-                        v_pred_parts.append(torch.exp(out_v)[:, 0].cpu().numpy())
+            if variant_stats and "overall" in variant_stats:
+                ov = variant_stats["overall"]
                 fig_e = value_calibration_figure(
-                    {"overall": {"v_pred": np.concatenate(v_pred_parts),
-                                 "v_actual": v_np[:, 0]}},
+                    {"overall": {"v_pred": ov["v_pred"],
+                                 "v_actual": ov["v_actual"]}},
                     iteration)
-                del nn
+            else:
+                import neural_net
+                ckpt = f"{iteration + 1:04d}-{experiment_name}.pt"
+                if os.path.exists(os.path.join(paths["checkpoint"], ckpt)):
+                    nn = neural_net.NNWrapper.load_checkpoint(
+                        Game, paths["checkpoint"], ckpt)
+                    nn.nnet.eval()
+                    device = nn.device
+                    bs = config.train_batch_size
+                    v_pred_parts = []
+                    with torch.no_grad():
+                        for s in range(0, N, bs):
+                            cb = c_data[s:s + bs].to(device, non_blocking=True)
+                            out_v, _ = nn.nnet(cb)
+                            v_pred_parts.append(torch.exp(out_v)[:, 0].cpu().numpy())
+                    fig_e = value_calibration_figure(
+                        {"overall": {"v_pred": np.concatenate(v_pred_parts),
+                                     "v_actual": v_np[:, 0]}},
+                        iteration)
+                    del nn
         except Exception:
             fig_e = None
 
@@ -4033,47 +4034,52 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
 
             stage_start = time.time()
             with TracyZone("stage_variant_analysis"):
-                variant_stats = {}
-                if _is_unified_game(config):
-                    variant_stats = _analyze_iteration_variants(config, paths, experiment_name, i)
-                    for vname, stats in variant_stats.items():
-                        # Mean scalars for time-series trend lines
-                        run.track(float(stats["pi_loss"].mean()), name="loss", epoch=i,
-                                  step=total_train_steps,
-                                  context={"type": "policy", "variant": vname})
-                        run.track(float(stats["v_loss"].mean()), name="loss", epoch=i,
-                                  step=total_train_steps,
-                                  context={"type": "value", "variant": vname})
-                        run.track(float(stats["entropy"].mean()), name="loss", epoch=i,
-                                  step=total_train_steps,
-                                  context={"type": "target_entropy", "variant": vname})
-                        run.track(float(stats["top1"].mean()), name="policy_top1_mass", epoch=i,
-                                  step=total_train_steps, context={"variant": vname})
-                        # Distributions for spread/skew visibility
-                        try:
-                            import aim as _aim
-                            run.track(_aim.Distribution(stats["pi_loss"]), name="pi_loss_dist",
-                                      epoch=i, step=total_train_steps, context={"variant": vname})
-                            run.track(_aim.Distribution(stats["v_loss"]), name="v_loss_dist",
-                                      epoch=i, step=total_train_steps, context={"variant": vname})
-                            run.track(_aim.Distribution(stats["entropy"]), name="entropy_dist",
-                                      epoch=i, step=total_train_steps, context={"variant": vname})
-                            run.track(_aim.Distribution(stats["top1"]), name="pi_top1_dist",
-                                      epoch=i, step=total_train_steps, context={"variant": vname})
-                        except Exception:
-                            pass
-                    if variant_stats:
-                        try:
-                            import aim as _aim
-                            for key, dist_name in (("pi_loss", "pi_loss_dist"),
-                                                   ("v_loss", "v_loss_dist"),
-                                                   ("entropy", "entropy_dist"),
-                                                   ("top1", "pi_top1_dist")):
-                                agg = np.concatenate([s[key] for s in variant_stats.values()])
-                                run.track(_aim.Distribution(agg), name=dist_name,
-                                          epoch=i, step=total_train_steps)
-                        except Exception:
-                            pass
+                # Post-training per-sample loss / target-entropy / top-1 analysis
+                # for ALL games. Unified games split by variant; every other game
+                # reports a single "overall" bucket. The "variant" context key
+                # (incl. value "overall") keeps these series distinct from the
+                # per-step training "loss" series tracked during training.
+                variant_stats = _analyze_iteration_variants(config, paths, experiment_name, i)
+                for vname, stats in variant_stats.items():
+                    # Mean scalars for time-series trend lines
+                    run.track(float(stats["pi_loss"].mean()), name="loss", epoch=i,
+                              step=total_train_steps,
+                              context={"type": "policy", "variant": vname})
+                    run.track(float(stats["v_loss"].mean()), name="loss", epoch=i,
+                              step=total_train_steps,
+                              context={"type": "value", "variant": vname})
+                    run.track(float(stats["entropy"].mean()), name="loss", epoch=i,
+                              step=total_train_steps,
+                              context={"type": "target_entropy", "variant": vname})
+                    run.track(float(stats["top1"].mean()), name="policy_top1_mass", epoch=i,
+                              step=total_train_steps, context={"variant": vname})
+                    # Distributions for spread/skew visibility
+                    try:
+                        import aim as _aim
+                        run.track(_aim.Distribution(stats["pi_loss"]), name="pi_loss_dist",
+                                  epoch=i, step=total_train_steps, context={"variant": vname})
+                        run.track(_aim.Distribution(stats["v_loss"]), name="v_loss_dist",
+                                  epoch=i, step=total_train_steps, context={"variant": vname})
+                        run.track(_aim.Distribution(stats["entropy"]), name="entropy_dist",
+                                  epoch=i, step=total_train_steps, context={"variant": vname})
+                        run.track(_aim.Distribution(stats["top1"]), name="pi_top1_dist",
+                                  epoch=i, step=total_train_steps, context={"variant": vname})
+                    except Exception:
+                        pass
+                # Across-variant aggregate distributions (no variant context),
+                # only meaningful when split into more than one bucket.
+                if len(variant_stats) > 1:
+                    try:
+                        import aim as _aim
+                        for key, dist_name in (("pi_loss", "pi_loss_dist"),
+                                               ("v_loss", "v_loss_dist"),
+                                               ("entropy", "entropy_dist"),
+                                               ("top1", "pi_top1_dist")):
+                            agg = np.concatenate([s[key] for s in variant_stats.values()])
+                            run.track(_aim.Distribution(agg), name=dist_name,
+                                      epoch=i, step=total_train_steps)
+                    except Exception:
+                        pass
             stage_times["variant_analysis"] = time.time() - stage_start
 
             stage_start = time.time()
@@ -4283,7 +4289,8 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
             if _is_unified_game(config):
                 _generate_visualizations(config, paths, i, run, total_train_steps, variant_stats)
             elif _is_tafl_game(config):
-                generate_tafl_visualizations(config, paths, experiment_name, i, run, total_train_steps)
+                generate_tafl_visualizations(config, paths, experiment_name, i, run, total_train_steps,
+                                             variant_stats=variant_stats)
             stage_times["visualizations"] = time.time() - stage_start
 
             total_time = time.time() - iteration_start

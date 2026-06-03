@@ -2,7 +2,7 @@ game: star_gambit_unified
 
 # This is a solid small-ish network.
 # A bit bigger than the defaults.
-star_gambit_spatial: true
+spatial_policy: "on"
 dense_net: false
 depth: 4
 channels: 64

@@ -4,7 +4,7 @@ depth: 4
 channels: 16
 kernel_size: 3
 
-star_gambit_spatial: true
+spatial_policy: "on"
 temp_decay_half_life: 8
 selfplay_mcts_visits: 120
 fast_mcts_visits: 30

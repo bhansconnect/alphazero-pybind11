@@ -36,6 +36,13 @@ constexpr const std::array<int, 3> BOARD_SHAPE = {3, HEIGHT, WIDTH};
 // 1 for turn/max_turns.
 // May want to add some historical positions.
 constexpr const std::array<int, 3> CANONICAL_SHAPE = {8, HEIGHT, WIDTH};
+// Spatial policy layout: each board square owns (WIDTH + HEIGHT) action
+// channels (a slide along its row or column), matching the move index
+// encoding in tafl_helper.h::policyLocation. There are no global actions.
+constexpr const std::array<int, 3> POLICY_SHAPE = {WIDTH + HEIGHT, HEIGHT,
+                                                   WIDTH};
+static_assert(POLICY_SHAPE[0] * POLICY_SHAPE[1] * POLICY_SHAPE[2] == NUM_MOVES,
+              "POLICY_SHAPE must tile the full action space (no globals)");
 
 using BoardTensor =
     SizedTensor<int8_t,

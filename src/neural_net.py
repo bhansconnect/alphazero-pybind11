@@ -45,6 +45,13 @@ class NNArgs:
     dense_net: bool = False
     lr: float = 0.01
     cv: float = 1.5
+    # Policy head selection. "auto" (default) uses the spatial conv policy head
+    # whenever the game exposes a POLICY_SHAPE (tafl, star gambit), otherwise a
+    # flat FC head. "on" forces the spatial head (errors if unsupported), "off"
+    # forces the flat head.
+    spatial_policy: str = "auto"
+    # Deprecated alias for spatial_policy, kept so older serialized checkpoints
+    # (which stored this bool) still reconstruct. True folds into "on".
     star_gambit_spatial: bool = False
     head_channels: int = 32
     head_pool: bool = True
@@ -74,6 +81,14 @@ class NNArgs:
     orth_reg_lambda: float = 0.0
 
     def __post_init__(self):
+        # Fold the deprecated star_gambit_spatial bool into spatial_policy when
+        # the new field was left at its default.
+        if self.star_gambit_spatial and self.spatial_policy == "auto":
+            self.spatial_policy = "on"
+        if self.spatial_policy not in ("auto", "on", "off"):
+            raise ValueError(
+                f"spatial_policy must be 'auto'/'on'/'off', got {self.spatial_policy!r}"
+            )
         if self.v_fc_hidden == -1:
             self.v_fc_hidden = self.head_channels * 8
         if self.pi_fc_hidden == -1:
@@ -89,7 +104,7 @@ def nnargs_from_config(config):
         dense_net=config.dense_net,
         lr=config.lr,
         cv=config.cv,
-        star_gambit_spatial=config.star_gambit_spatial,
+        spatial_policy=config.spatial_policy,
         head_channels=config.head_channels,
         head_pool=config.head_pool,
         v_head_convs=config.v_head_convs,
@@ -238,13 +253,32 @@ class NNArch(nn.Module):
         # game params
         in_channels, in_x, in_y = game.CANONICAL_SHAPE()
         self.dense_net = args.dense_net
-        self.star_gambit_spatial = args.star_gambit_spatial
         self.head_pool = args.head_pool
         self.pi_fc_layers = args.pi_fc_layers
         HC = args.head_channels
 
-        if args.pi_fc_layers > 0 and args.star_gambit_spatial:
-            raise ValueError("pi_fc_layers not supported with star_gambit_spatial policy head")
+        # Resolve the tri-state spatial_policy against what the game supports.
+        # A game advertises a spatially-structured action space via a static
+        # POLICY_SHAPE = (channels_per_cell, H, W); the spatial block tiles the
+        # board row-major and any remaining moves are global actions appended
+        # after it (num_global = NUM_MOVES - channels_per_cell * H * W).
+        game_supports_spatial = hasattr(game, "POLICY_SHAPE")
+        spatial_policy = args.spatial_policy
+        if spatial_policy == "on" and not game_supports_spatial:
+            raise ValueError(
+                f"spatial_policy='on' but {game.__name__} does not expose POLICY_SHAPE"
+            )
+        if spatial_policy == "auto" and game_supports_spatial and args.pi_fc_layers > 0:
+            # The spatial head has no FC stack; honor an explicit pi_fc_layers
+            # request by falling back to the flat head instead of erroring.
+            logging.warning(
+                "spatial_policy='auto' with pi_fc_layers>0; using the flat policy head"
+            )
+            self.spatial_policy = False
+        else:
+            self.spatial_policy = spatial_policy != "off" and game_supports_spatial
+        if self.spatial_policy and args.pi_fc_layers > 0:
+            raise ValueError("pi_fc_layers not supported with the spatial policy head")
 
         norm_type = getattr(args, "trunk_norm", "batch")
         act_type = getattr(args, "trunk_act", "relu")
@@ -337,31 +371,43 @@ class NNArch(nn.Module):
                 ])
             self.pi_extra_convs = nn.Sequential(*pi_conv_layers)
 
-        if self.star_gambit_spatial:
-            # Star Gambit spatial policy head:
-            # - Spatial actions: BOARD_DIM x BOARD_DIM x 10 action types per position
-            # - Global actions: 18 deploy + 1 end_turn = 19
-            self.sg_board_dim = in_x  # 11 for Skirmish/Clash, 13 for Battle
-            self.sg_spatial_actions = in_x * in_y * 10
-            self.sg_global_actions = 19  # deploy (18) + end_turn (1)
-
-            # Spatial policy: conv output (B, 10, H, W) -> (B, H*W*10)
-            self.pi_conv2 = conv1x1(HC, 10)
-            self.pi_bn2 = nn.BatchNorm2d(10)
-
-            # Global policy: for deploy and end_turn actions
-            self.pi_flatten = nn.Flatten()
-            if args.head_pool:
-                self.pi_pool = nn.AdaptiveAvgPool2d(1)
-                pi_global_in = HC
-            else:
-                pi_global_in = HC * in_x * in_y
-            self.pi_global = nn.Sequential(
-                nn.Linear(pi_global_in, args.pi_fc_hidden),
-                nn.ReLU(inplace=True),
-                nn.Linear(args.pi_fc_hidden, self.sg_global_actions),
-                nn.LayerNorm(self.sg_global_actions)
+        if self.spatial_policy:
+            # Spatial policy head. The game's POLICY_SHAPE = (C, H, W) declares
+            # C action channels per board cell laid out row-major (h, w, c); any
+            # remaining moves are global (non-spatial) actions appended after the
+            # spatial block:
+            #   tafl:        C = WIDTH + HEIGHT, num_global = 0
+            #   star gambit: C = 10,             num_global = 19 (deploy + end_turn)
+            policy_channels, ph, pw = game.POLICY_SHAPE()
+            assert (ph, pw) == (in_x, in_y), (
+                f"POLICY_SHAPE board {(ph, pw)} != CANONICAL_SHAPE board {(in_x, in_y)}"
             )
+            self.policy_channels = policy_channels
+            spatial_actions = policy_channels * in_x * in_y
+            self.num_global_actions = game.NUM_MOVES() - spatial_actions
+            assert self.num_global_actions >= 0, (
+                f"POLICY_SHAPE spatial block {spatial_actions} exceeds "
+                f"NUM_MOVES {game.NUM_MOVES()}"
+            )
+
+            # Spatial policy: conv output (B, C, H, W) -> (B, H*W*C)
+            self.pi_conv2 = conv1x1(HC, policy_channels)
+            self.pi_bn2 = nn.BatchNorm2d(policy_channels)
+
+            # Global policy head, only when the game has non-spatial actions.
+            if self.num_global_actions > 0:
+                self.pi_flatten = nn.Flatten()
+                if args.head_pool:
+                    self.pi_pool = nn.AdaptiveAvgPool2d(1)
+                    pi_global_in = HC
+                else:
+                    pi_global_in = HC * in_x * in_y
+                self.pi_global = nn.Sequential(
+                    nn.Linear(pi_global_in, args.pi_fc_hidden),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(args.pi_fc_hidden, self.num_global_actions),
+                    nn.LayerNorm(self.num_global_actions)
+                )
             self.pi_softmax = nn.LogSoftmax(1)
         else:
             # Standard fully-connected policy head
@@ -411,26 +457,26 @@ class NNArch(nn.Module):
         if hasattr(self, 'pi_extra_convs'):
             pi = self.pi_extra_convs(pi)
 
-        if self.star_gambit_spatial:
-            # Spatial policy head for Star Gambit
-            # s_flat for global actions, pi for spatial
-            if self.head_pool:
-                s_flat = self.pi_flatten(self.pi_pool(pi))
-            else:
-                s_flat = self.pi_flatten(pi)
-
-            # Spatial actions: (B, HC, H, W) -> (B, 10, H, W) -> (B, H, W, 10) -> (B, H*W*10)
+        if self.spatial_policy:
+            # Spatial actions: (B, HC, H, W) -> (B, C, H, W) -> (B, H, W, C)
+            # -> (B, H*W*C), row-major so the index matches the game's move
+            # encoding (h, w, channel).
             pi_spatial = self.pi_conv2(pi)
             pi_spatial = self.pi_bn2(pi_spatial)
-            pi_spatial = pi_spatial.permute(0, 2, 3, 1)  # (B, H, W, 10)
+            pi_spatial = pi_spatial.permute(0, 2, 3, 1)  # (B, H, W, C)
             batch_size = pi_spatial.shape[0]
-            pi_spatial = pi_spatial.reshape(batch_size, -1)  # (B, H*W*10)
+            pi_spatial = pi_spatial.reshape(batch_size, -1)  # (B, H*W*C)
 
-            # Global actions: deploy + end_turn
-            pi_global = self.pi_global(s_flat)  # (B, 19)
-
-            # Concatenate: spatial + global
-            pi = torch.cat([pi_spatial, pi_global], dim=1)  # (B, H*W*10 + 19)
+            if self.num_global_actions > 0:
+                # Global (non-spatial) actions appended after the spatial block.
+                if self.head_pool:
+                    s_flat = self.pi_flatten(self.pi_pool(pi))
+                else:
+                    s_flat = self.pi_flatten(pi)
+                pi_global = self.pi_global(s_flat)  # (B, num_global)
+                pi = torch.cat([pi_spatial, pi_global], dim=1)
+            else:
+                pi = pi_spatial
             pi = self.pi_softmax(pi)
         elif self.pi_fc_layers > 0:
             pi = self.pi_flatten(pi)
@@ -925,6 +971,15 @@ class NNWrapper:
         args_dict.setdefault("pi_head_convs", 0)
         args_dict.setdefault("v_fc_layers", 1)
         args_dict.setdefault("pi_fc_layers", 0)
+
+        # Pre-spatial_policy checkpoints have no "spatial_policy" key. Reproduce
+        # their exact head: the old code used the spatial head iff the legacy
+        # star_gambit_spatial bool was True, so map it to "on"/"off" (never
+        # "auto", which would wrongly turn an old flat-head tafl net spatial).
+        if "spatial_policy" not in args_dict:
+            args_dict["spatial_policy"] = (
+                "on" if args_dict.get("star_gambit_spatial") else "off"
+            )
 
         args = NNArgs(**args_dict)
 

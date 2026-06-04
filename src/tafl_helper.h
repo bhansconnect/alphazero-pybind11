@@ -100,8 +100,8 @@ PlayHistory rot90Clockwise(const PlayHistory& base) noexcept {
                                    true, width - 1 - w));
         out.pi(policyLocation(width, height, base_w, height - 1 - base_h, false,
                               w)) =
-            base.pi(policyLocation(width, base_h, base_w, height - 1 - base_w,
-                                   true, width - 1 - w));
+            base.pi(policyLocation(width, height, base_h, base_w, true,
+                                   width - 1 - w));
       }
       for (int h = 0; h < height; ++h) {
         out.pi(policyLocation(width, height, base_h, base_w, true, h)) =
@@ -117,8 +117,7 @@ PlayHistory rot90Clockwise(const PlayHistory& base) noexcept {
                                    false, h));
         out.pi(policyLocation(width, height, base_w, height - 1 - base_h, true,
                               h)) =
-            base.pi(policyLocation(width, base_h, base_w, height - 1 - base_w,
-                                   false, h));
+            base.pi(policyLocation(width, height, base_h, base_w, false, h));
       }
     }
   }

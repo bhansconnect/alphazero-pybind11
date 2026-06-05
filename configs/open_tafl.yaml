@@ -29,6 +29,9 @@ self_play_temp: 1.2
 final_temp: 0.2
 
 # Training
+train_sample_rate: 2
 lr_schedule: step
 lr_steps: [[0, 0.01], [60, 0.003], [150, 0.001], [300, 0.0003]]
 iterations: 800
+
+# resign_playthrough_percent: 0.99

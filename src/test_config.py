@@ -784,3 +784,76 @@ def test_load_experiment_gumbel_unparseable_yaml_falls_back(tmp_path):
     g = load_experiment_gumbel(ckpt)
     assert g["gumbel_enabled"] is False
     assert g["gumbel_m"] == EXPERIMENT_DEFAULT_GUMBEL_M
+
+
+# --- Asymmetric self-play search budget (selfplay_visit_multipliers) -----------
+
+def test_selfplay_visit_multipliers_default_empty(tmp_path):
+    """Disabled by default (empty schedule)."""
+    yaml_path = str(tmp_path / "c.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\n")
+    assert load_config(yaml_path, {}).selfplay_visit_multipliers == []
+
+
+def test_selfplay_visit_multipliers_valid(tmp_path):
+    """A well-formed per-player multiplier schedule loads and validates."""
+    yaml_path = str(tmp_path / "c.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\n"
+                "selfplay_visit_multipliers: [[0, [3.0, 1.0]], [10, [1.0, 1.0]]]\n")
+    assert load_config(yaml_path, {}).selfplay_visit_multipliers == \
+        [[0, [3.0, 1.0]], [10, [1.0, 1.0]]]
+
+
+def test_selfplay_visit_multipliers_wrong_length(tmp_path):
+    """Inner list must have NUM_PLAYERS multipliers."""
+    yaml_path = str(tmp_path / "c.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\nselfplay_visit_multipliers: [[0, [3.0]]]\n")
+    with pytest.raises(ValueError, match="multipliers per"):
+        load_config(yaml_path, {})
+
+
+def test_selfplay_visit_multipliers_non_increasing(tmp_path):
+    """Step iters must be strictly increasing."""
+    yaml_path = str(tmp_path / "c.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\n"
+                "selfplay_visit_multipliers: [[0, [2.0, 1.0]], [0, [1.0, 1.0]]]\n")
+    with pytest.raises(ValueError, match="strictly increasing"):
+        load_config(yaml_path, {})
+
+
+def test_selfplay_visit_multipliers_non_positive(tmp_path):
+    """Multipliers must be positive."""
+    yaml_path = str(tmp_path / "c.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\nselfplay_visit_multipliers: [[0, [2.0, 0.0]]]\n")
+    with pytest.raises(ValueError, match="positive numbers"):
+        load_config(yaml_path, {})
+
+
+def test_get_visit_multipliers_schedule_walk(tmp_path):
+    """Walks the schedule; symmetric (all-1.0) and out-of-range return None."""
+    import game_runner
+    yaml_path = str(tmp_path / "c.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\n"
+                "selfplay_visit_multipliers: "
+                "[[0, [3.0, 1.0]], [10, [2.0, 1.0]], [20, [1.0, 1.0]]]\n")
+    config = load_config(yaml_path, {})
+    assert game_runner.get_visit_multipliers(config, 0) == [3.0, 1.0]
+    assert game_runner.get_visit_multipliers(config, 9) == [3.0, 1.0]
+    assert game_runner.get_visit_multipliers(config, 10) == [2.0, 1.0]
+    assert game_runner.get_visit_multipliers(config, 20) is None  # symmetric -> disabled
+    assert game_runner.get_visit_multipliers(config, 999) is None
+
+
+def test_get_visit_multipliers_disabled(tmp_path):
+    """Empty schedule -> None (byte-identical default path)."""
+    import game_runner
+    yaml_path = str(tmp_path / "c.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("game: connect4\n")
+    assert game_runner.get_visit_multipliers(load_config(yaml_path, {}), 0) is None

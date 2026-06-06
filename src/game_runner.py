@@ -106,10 +106,17 @@ def _compute_gating_probs(config):
 
 
 def _make_game_instance(config, probs=None):
-    """Create a game instance; for star_gambit_unified injects variant probs."""
+    """Create a game instance; for star_gambit_unified injects variant probs.
+
+    ``config.max_turns`` (when > 0) overrides the game's built-in turn cap for
+    games exposing a ``Game(max_turns)`` constructor (e.g. the tafl games).
+    """
     Game = config.Game
     if config.game == "star_gambit_unified" and probs is not None:
         return Game(probs=probs)
+    max_turns = getattr(config, "max_turns", 0)
+    if max_turns and max_turns > 0:
+        return Game(int(max_turns))
     return Game()
 
 
@@ -1983,6 +1990,13 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
     params = base_params(config, config.self_play_temp, bs, cb)
     params.games_to_play = n
     params.mcts_visits = [depth] * Game.NUM_PLAYERS()
+    # Asymmetric self-play search budget (self-play only; eval/gating stay
+    # symmetric). When active, give each player a per-seat full + fast budget
+    # scaled by the annealed multiplier so it searches deeper on every move.
+    visit_mults = get_visit_multipliers(config, iteration)
+    if visit_mults is not None:
+        params.seat_visits = [[max(1, int(round(depth * m))) for m in visit_mults]]
+        params.seat_cap_visits = [[max(1, int(round(fast_depth * m))) for m in visit_mults]]
     params.history_enabled = True
     params.epsilon = 0.25
     params.playout_cap_randomization = config.playout_cap_percent > 0.0
@@ -2316,6 +2330,27 @@ def get_lr(config, iteration, lr_state):
         lr *= warmup_factor
 
     return lr
+
+
+def get_visit_multipliers(config, iteration):
+    """Per-player self-play visit multipliers for this iteration, or None.
+
+    Walks ``config.selfplay_visit_multipliers`` (format ``[[iter, [m_p0, ...]],
+    ...]``) like ``get_lr``: returns the multiplier list of the last step whose
+    iter is <= ``iteration``. Returns None when the feature is disabled, when no
+    step applies yet, or when the active step is all-1.0 (symmetric) -- so a None
+    result means "leave the budget symmetric / byte-identical to default".
+    """
+    schedule = config.selfplay_visit_multipliers
+    if not schedule:
+        return None
+    mults = None
+    for step_iter, step_mults in schedule:
+        if iteration >= step_iter:
+            mults = list(step_mults)
+    if mults is None or all(float(m) == 1.0 for m in mults):
+        return None
+    return mults
 
 
 def _default_lr_state(config):
@@ -3940,6 +3975,17 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                     variant_probs=unified_probs,
                     fallback_checkpoint_dir=fallback_checkpoint_dir,
                 )
+                # Active per-player self-play search budget (so the asymmetric
+                # multiplier anneal is observable alongside per-player win_rate).
+                _visit_mults = get_visit_multipliers(config, i)
+                for j in range(config.Game.NUM_PLAYERS()):
+                    _m = _visit_mults[j] if _visit_mults is not None else 1.0
+                    run.track(max(1, int(round(config.selfplay_mcts_visits * _m))),
+                              name="selfplay_visits", epoch=i, step=total_train_steps,
+                              context={"player": j + 1, "search": "full"})
+                    run.track(max(1, int(round(config.fast_mcts_visits * _m))),
+                              name="selfplay_visits", epoch=i, step=total_train_steps,
+                              context={"player": j + 1, "search": "fast"})
                 for j in range(len(sp.win_rates) - 1):
                     run.track(sp.win_rates[j], name="win_rate", epoch=i, step=total_train_steps, context={"vs": "self", "player": j + 1, "from": "all_games"})
                 for j in range(len(sp.resign_win_rates) - 1):

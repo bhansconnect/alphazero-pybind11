@@ -77,6 +77,16 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     seat_visits_ = params_.seat_visits;
   }
 
+  if (params_.seat_cap_visits.empty()) {
+    seat_cap_visits_.resize(num_perms);
+    for (size_t p = 0; p < num_perms; ++p) {
+      seat_cap_visits_[p].assign(np, params_.playout_cap_depth);
+    }
+  } else {
+    validate_2d(params_.seat_cap_visits, "seat_cap_visits");
+    seat_cap_visits_ = params_.seat_cap_visits;
+  }
+
   if (params_.seat_epsilon.empty()) {
     seat_epsilon_.resize(num_perms, std::vector<float>(np, params_.epsilon));
   } else {
@@ -247,7 +257,7 @@ void PlayManager::play() {
       auto& mcts = game.mcts[cp];
       mcts.process_result(*game.gs, game.v, game.pi,
                           seat_epsilon_[game.perm_index][cp] > 0 && !game.capped);
-      auto goal_depth = game.capped ? params_.playout_cap_depth
+      auto goal_depth = game.capped ? seat_cap_visits_[game.perm_index][cp]
                                     : seat_visits_[game.perm_index][cp];
       if (mcts.depth() >= goal_depth) {
         // Actually play a move.
@@ -498,7 +508,7 @@ void PlayManager::play() {
           const auto next_cp_g = game.gs->current_player();
           const auto sims_target = game.capped
               ? (params_.fast_search_uses_gumbel
-                     ? params_.playout_cap_depth
+                     ? seat_cap_visits_[game.perm_index][next_cp_g]
                      : 0u)
               : seat_visits_[game.perm_index][next_cp_g];
           game.mcts[next_cp_g].set_gumbel_num_sims(sims_target);
@@ -529,7 +539,7 @@ void PlayManager::play() {
         const auto first_cp = game.gs->current_player();
         const auto sims_target = game.capped
             ? (params_.fast_search_uses_gumbel
-                   ? params_.playout_cap_depth
+                   ? seat_cap_visits_[game.perm_index][first_cp]
                    : 0u)
             : seat_visits_[game.perm_index][first_cp];
         game.mcts[first_cp].set_gumbel_num_sims(sims_target);

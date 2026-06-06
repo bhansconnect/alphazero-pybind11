@@ -5,6 +5,7 @@ game registry, experiment directory resolution, and path management.
 """
 
 import glob
+import logging
 import os
 import re
 from dataclasses import dataclass, field, asdict, fields as dc_fields
@@ -84,6 +85,14 @@ class TrainConfig:
     selfplay_mcts_visits: int = 100
     fast_mcts_visits: int = 25
     compare_mcts_visits: int = 50
+    # Asymmetric self-play search budget. Per-player visit MULTIPLIER schedule,
+    # applied to BOTH the full and the fast/capped budgets, for self-play only
+    # (eval/gating stay symmetric). Format: [[iter, [m_p0, m_p1, ...]], ...],
+    # picking the last step with iter <= current iteration (like lr_steps).
+    # Empty = disabled (symmetric, identical to before). Anneal the final step
+    # to all 1.0 so the trained agent is unbiased. Example (tafl attacker boost):
+    #   [[0, [3.0, 1.0]], [10, [2.0, 1.0]], [80, [1.5, 1.0]], [160, [1.0, 1.0]]]
+    selfplay_visit_multipliers: list = field(default_factory=list)
     # Playout cap randomization (KataGo). Fraction of self-play moves that
     # use fast_mcts_visits instead of selfplay_mcts_visits. Capped moves
     # don't enter training data. Set 0 to disable (every move is full search
@@ -133,6 +142,9 @@ class TrainConfig:
     self_play_batch_size: int = 1024
     self_play_concurrent_batch_mult: int = 2
     self_play_chunks: int = 1
+    # Override the game's built-in turn cap (0 = use the game default). Only
+    # games with a Game(max_turns) constructor honor this (e.g. the tafl games).
+    max_turns: int = 0
 
     # Training
     train_batch_size: int = 1024
@@ -334,6 +346,40 @@ class TrainConfig:
                 f"temp_decay_half_life must be a number or a dict keyed by variant, "
                 f"got {type(self.temp_decay_half_life).__name__}"
             )
+        if self.selfplay_visit_multipliers:
+            num_players = self.Game.NUM_PLAYERS()
+            prev_iter = -1
+            saw_symmetric = False
+            for entry in self.selfplay_visit_multipliers:
+                if (not isinstance(entry, (list, tuple)) or len(entry) != 2
+                        or not isinstance(entry[1], (list, tuple))):
+                    raise ValueError(
+                        f"selfplay_visit_multipliers entries must be [iter, [m_p0, ...]], "
+                        f"got {entry!r}")
+                step_iter, mults = entry
+                if not isinstance(step_iter, int) or step_iter < 0:
+                    raise ValueError(
+                        f"selfplay_visit_multipliers iter must be a non-negative int, "
+                        f"got {step_iter!r}")
+                if step_iter <= prev_iter:
+                    raise ValueError(
+                        f"selfplay_visit_multipliers iters must be strictly increasing, "
+                        f"got {step_iter} after {prev_iter}")
+                prev_iter = step_iter
+                if len(mults) != num_players:
+                    raise ValueError(
+                        f"selfplay_visit_multipliers expects {num_players} multipliers per "
+                        f"step (NUM_PLAYERS), got {len(mults)}: {mults!r}")
+                if any((not isinstance(m, (int, float))) or m <= 0 for m in mults):
+                    raise ValueError(
+                        f"selfplay_visit_multipliers values must be positive numbers, "
+                        f"got {mults!r}")
+                if all(float(m) == 1.0 for m in mults):
+                    saw_symmetric = True
+            if not saw_symmetric:
+                logging.warning(
+                    "selfplay_visit_multipliers never anneals to all-1.0; the trained "
+                    "agent will keep an asymmetric self-play search budget.")
 
     @property
     def network_name(self) -> str:

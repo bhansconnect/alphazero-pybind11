@@ -103,6 +103,11 @@ struct PlayParams {
   std::vector<uint8_t> model_groups{};  // player → model_group_index (empty = identity)
   std::vector<std::vector<uint8_t>> seat_perms{};  // list of permutations (empty = no rotation)
   std::vector<std::vector<uint32_t>> seat_visits{};  // per-perm, per-seat visit overrides
+  // Per-perm, per-seat capped/fast-search visit overrides (empty = use the
+  // global playout_cap_depth for every seat). Lets self-play give one side a
+  // deeper fast search; capped moves are never recorded as training targets,
+  // so this only affects play strength, not target quality.
+  std::vector<std::vector<uint32_t>> seat_cap_visits{};
   std::vector<std::vector<float>> seat_epsilon{};          // per-perm, per-seat (empty = use global)
   std::vector<std::vector<float>> seat_mcts_root_temp{};   // per-perm, per-seat (empty = use global)
   std::vector<std::vector<uint8_t>> seat_root_fpu_zero{};  // per-perm, per-seat (empty = use global)
@@ -372,6 +377,7 @@ class DLLEXPORT PlayManager {
   std::vector<EvalType> eval_types_;        // per-model-group
   std::vector<std::vector<uint8_t>> seat_perms_;  // computed from params (never empty)
   std::vector<std::vector<uint32_t>> seat_visits_;   // per-perm, per-seat (never empty after init)
+  std::vector<std::vector<uint32_t>> seat_cap_visits_;  // per-perm, per-seat capped budget (never empty after init)
   std::vector<std::vector<float>> seat_epsilon_;     // per-perm, per-seat (never empty after init)
   std::vector<std::vector<float>> seat_mcts_root_temp_;  // per-perm, per-seat (never empty after init)
   std::vector<std::vector<uint8_t>> seat_root_fpu_zero_; // per-perm, per-seat (never empty after init)

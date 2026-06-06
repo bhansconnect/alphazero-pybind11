@@ -332,6 +332,7 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("model_groups", &PlayParams::model_groups)
       .def_readwrite("seat_perms", &PlayParams::seat_perms)
       .def_readwrite("seat_visits", &PlayParams::seat_visits)
+      .def_readwrite("seat_cap_visits", &PlayParams::seat_cap_visits)
       .def_readwrite("seat_epsilon", &PlayParams::seat_epsilon)
       .def_readwrite("seat_mcts_root_temp", &PlayParams::seat_mcts_root_temp)
       .def_readwrite("seat_root_fpu_zero", &PlayParams::seat_root_fpu_zero)

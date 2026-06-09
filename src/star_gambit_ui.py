@@ -20,9 +20,6 @@ RESET = '\033[0m'
 # Action space constants
 # ---------------------------------------------------------------------------
 
-# Slot mapping for P1 canonicalization (self-inverse: swaps left/right)
-SLOT_MAP = [0, 2, 1, 4, 3, 5, 7, 6, 9, 8]
-
 ACTIONS_PER_POSITION = 10
 
 # Slot meanings (shared across unit types, but not all units use all slots)
@@ -128,9 +125,13 @@ class GameConfig:
         return row - bs, col - bs
 
     def canonicalize_spatial(self, row, col, slot):
-        """Canonicalize (row, col, slot) for P1 (180-degree rotation + slot swap)."""
+        """Canonicalize (row, col, slot) for P1 (180-degree rotation).
+
+        The slot is a facing-relative action and is invariant under a pure
+        rotation, so it is not remapped (matches the C++ engine canon).
+        """
         bd = self.board_dim
-        return bd - 1 - row, bd - 1 - col, SLOT_MAP[slot]
+        return bd - 1 - row, bd - 1 - col, slot
 
     def decanon_spatial(self, row, col, slot):
         """De-canonicalize (row, col, slot) for P1 (same operation - self-inverse)."""

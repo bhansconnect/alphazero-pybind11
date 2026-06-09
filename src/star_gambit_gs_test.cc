@@ -71,12 +71,13 @@ std::optional<int> parse_move(const std::string& move_str, const GameType& game)
 
   const bool is_p1 = (game.current_player() == 1);
 
-  // Helper to encode spatial action with canonicalization
+  // Helper to encode spatial action with canonicalization (pure 180° rotation
+  // for P1; the facing-relative slot is rotation-invariant and not remapped,
+  // matching the engine's per-player canon).
   auto encode_action = [&](int row, int col, int slot) {
     if (is_p1) {
       row = BOARD_DIM - 1 - row;
       col = BOARD_DIM - 1 - col;
-      slot = SLOT_MAP[slot];
     }
     return AS::encode_spatial_action(row, col, slot);
   };
@@ -849,7 +850,7 @@ TEST(P1Canonicalization, ObservationShowsP1Perspective) {
 
 TEST(P1Canonicalization, ValidMovesAreRotated) {
   // When P1 has a unit, valid_moves should return canonicalized action indices
-  // where the position is rotated 180° and L/R slots are swapped
+  // where the position is rotated 180° (the facing-relative slot is unchanged).
   TestGame game;
 
   // P0 deploys fighter facing NE at deploy hex

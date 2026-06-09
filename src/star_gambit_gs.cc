@@ -798,11 +798,14 @@ Vector<uint8_t> StarGambitGS<Config>::valid_moves() const noexcept {
   // Helper to encode action with canonicalization
   auto encode_action = [&](int row, int col, int slot) {
     if (is_p1) {
-      // 180° rotation: (row, col) → (BOARD_DIM-1-row, BOARD_DIM-1-col)
+      // 180° rotation: (row, col) → (BOARD_DIM-1-row, BOARD_DIM-1-col).
+      // The slot is a facing-relative action, which is invariant under a pure
+      // rotation, so it is NOT remapped — matching the observation canon
+      // (canonicalized() rotates by 180° only) and the deploy facing canon
+      // (facing+3). Do NOT apply the L/R SLOT_MAP here; that is a reflection
+      // and belongs only to symmetries() augmentation.
       row = BOARD_DIM - 1 - row;
       col = BOARD_DIM - 1 - col;
-      // Swap left/right slots
-      slot = SLOT_MAP[slot];
     }
     return AS::encode_spatial_action(row, col, slot);
   };
@@ -1098,11 +1101,11 @@ void StarGambitGS<Config>::play_move(uint32_t move) {
     const bool is_p1 = (current_player_ == 1);
     constexpr int BOARD_DIM = AS::BOARD_DIM;
     if (is_p1) {
-      // Reverse 180° rotation
+      // Reverse 180° rotation. The slot is facing-relative and rotation-
+      // invariant, so it is not remapped (consistent with the observation /
+      // valid_moves canon). No L/R SLOT_MAP here.
       row = BOARD_DIM - 1 - row;
       col = BOARD_DIM - 1 - col;
-      // Reverse slot swap (SLOT_MAP is self-inverse)
-      action_type = SLOT_MAP[action_type];
     }
 
     // Convert (row, col) to hex coordinates
@@ -2128,13 +2131,13 @@ FireInfo StarGambitGS<Config>::get_fire_info(uint32_t move) const {
   int row, col, action_type;
   AS::decode_spatial_action(static_cast<int>(move), row, col, action_type);
 
-  // De-canonicalize for P1
+  // De-canonicalize for P1: pure 180° rotation, no L/R slot remap (the slot is
+  // facing-relative and rotation-invariant; matches valid_moves / play_move).
   const bool is_p1 = (current_player_ == 1);
   constexpr int BOARD_DIM = AS::BOARD_DIM;
   if (is_p1) {
     row = BOARD_DIM - 1 - row;
     col = BOARD_DIM - 1 - col;
-    action_type = SLOT_MAP[action_type];
   }
 
   SpatialAction action = static_cast<SpatialAction>(action_type);

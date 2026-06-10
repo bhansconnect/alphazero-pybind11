@@ -2481,8 +2481,9 @@ def _analyze_iteration_variants(config, paths, experiment_name, iteration):
     buckets. Unified games split by variant; every other game returns a single
     "overall" bucket so all games get these metrics.
 
-    Returns dict: {bucket: {"pi_loss", "v_loss", "entropy", "top1", "v_pred",
-    "v_actual"}} (each a numpy array). Returns {} if history/checkpoint missing.
+    Returns dict: {bucket: {"pi_loss", "v_loss", "entropy", "top1", "net_top1",
+    "net_at_mcts", "top1_gap", "top1_agree", "v_pred", "v_actual"}} (each a numpy
+    array). Returns {} if history/checkpoint missing.
     """
     import neural_net
     from game_viz import load_history_samples
@@ -2513,6 +2514,7 @@ def _analyze_iteration_variants(config, paths, experiment_name, iteration):
     nn.nnet.eval()
 
     all_pi_loss, all_v_loss, all_entropy, all_top1, all_v_pred, all_v_actual = [], [], [], [], [], []
+    all_net_top1, all_net_at_mcts, all_top1_gap, all_top1_agree = [], [], [], []
     bs = config.train_batch_size
     n_samples = len(c_data)
     with torch.no_grad():
@@ -2525,17 +2527,36 @@ def _analyze_iteration_variants(config, paths, experiment_name, iteration):
             all_pi_loss.append(nn.sample_loss_pi(pib, out_pi).cpu().numpy())
             all_v_loss.append(nn.sample_loss_v(vb, out_v).cpu().numpy())
             all_entropy.append((-(pib * (pib + 1e-9).log()).sum(dim=1)).cpu().numpy())
-            all_top1.append(pib.max(dim=1).values.cpu().numpy())
+            # Policy top-1 decomposition. out_pi is log-softmax over all moves;
+            # exp() -> probabilities. MCTS argmax is always a legal move, so
+            # indexing the net there (net_at_mcts) and the resulting gap are
+            # immune to any mass the net leaks onto illegal moves. net_top1
+            # (the net's own max) is unmasked => measures confidence, not agreement.
+            mcts_top1, mcts_argmax = pib.max(dim=1)
+            net_pi = torch.exp(out_pi)
+            net_top1, net_argmax = net_pi.max(dim=1)
+            net_at_mcts = net_pi.gather(1, mcts_argmax.unsqueeze(1)).squeeze(1)
+            all_top1.append(mcts_top1.cpu().numpy())
+            all_net_top1.append(net_top1.cpu().numpy())
+            all_net_at_mcts.append(net_at_mcts.cpu().numpy())
+            # Signed calibration gap on MCTS's best move (>0 => net under-weights it).
+            all_top1_gap.append((mcts_top1 - net_at_mcts).cpu().numpy())
+            # Per-sample agreement (1.0 if net and MCTS pick the same best move).
+            all_top1_agree.append((net_argmax == mcts_argmax).float().cpu().numpy())
             # Value calibration: predicted vs actual current-player win prob (index 0)
             all_v_pred.append(torch.exp(out_v)[:, 0].cpu().numpy())
             all_v_actual.append(vb[:, 0].cpu().numpy())
 
-    pi_losses  = np.concatenate(all_pi_loss)
-    v_losses   = np.concatenate(all_v_loss)
-    entropies  = np.concatenate(all_entropy)
-    top1       = np.concatenate(all_top1)
-    v_pred     = np.concatenate(all_v_pred)
-    v_actual   = np.concatenate(all_v_actual)
+    pi_losses    = np.concatenate(all_pi_loss)
+    v_losses     = np.concatenate(all_v_loss)
+    entropies    = np.concatenate(all_entropy)
+    top1         = np.concatenate(all_top1)
+    net_top1     = np.concatenate(all_net_top1)
+    net_at_mcts  = np.concatenate(all_net_at_mcts)
+    top1_gap     = np.concatenate(all_top1_gap)
+    top1_agree   = np.concatenate(all_top1_agree)
+    v_pred       = np.concatenate(all_v_pred)
+    v_actual     = np.concatenate(all_v_actual)
     del nn, c_data, v_data, pi_data
     gc.collect()
 
@@ -2546,21 +2567,29 @@ def _analyze_iteration_variants(config, paths, experiment_name, iteration):
             if mask.sum() == 0:
                 continue
             result[vname] = {
-                "pi_loss":  pi_losses[mask],
-                "v_loss":   v_losses[mask],
-                "entropy":  entropies[mask],
-                "top1":     top1[mask],
-                "v_pred":   v_pred[mask],
-                "v_actual": v_actual[mask],
+                "pi_loss":     pi_losses[mask],
+                "v_loss":      v_losses[mask],
+                "entropy":     entropies[mask],
+                "top1":        top1[mask],
+                "net_top1":    net_top1[mask],
+                "net_at_mcts": net_at_mcts[mask],
+                "top1_gap":    top1_gap[mask],
+                "top1_agree":  top1_agree[mask],
+                "v_pred":      v_pred[mask],
+                "v_actual":    v_actual[mask],
             }
     else:
         result["overall"] = {
-            "pi_loss":  pi_losses,
-            "v_loss":   v_losses,
-            "entropy":  entropies,
-            "top1":     top1,
-            "v_pred":   v_pred,
-            "v_actual": v_actual,
+            "pi_loss":     pi_losses,
+            "v_loss":      v_losses,
+            "entropy":     entropies,
+            "top1":        top1,
+            "net_top1":    net_top1,
+            "net_at_mcts": net_at_mcts,
+            "top1_gap":    top1_gap,
+            "top1_agree":  top1_agree,
+            "v_pred":      v_pred,
+            "v_actual":    v_actual,
         }
     return result
 
@@ -2611,6 +2640,83 @@ def _log_win_rate_matrix(paths, iteration, run, total_train_steps):
         pass
     finally:
         plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# Star Gambit line-of-fire geometry (port of star_gambit_gs.cc), used by the
+# unified 13×13 action heatmaps to place fire-slot policy mass at the hex a shot
+# actually hits rather than at the firing unit. Canonicalization is a pure 180°
+# rotation (player-agnostic), so one facing-relative geometry serves all samples.
+# Module-level (not closure-local) so it can be unit-tested against get_fire_info.
+# ---------------------------------------------------------------------------
+_SG_HEX_DIRS_G = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)]  # (drow,dcol)
+_SG_OPPOSITE = [3, 4, 5, 0, 1, 2]
+# (unit_type, fire slot 5-9) -> (direction_offset, source_hex_idx)
+_SG_FIRE_CANNON = {
+    (0, 5): (0, 0),
+    (1, 5): (0, 0), (1, 6): (1, 0), (1, 7): (-1, 0),
+    (2, 6): (1, 0), (2, 7): (0, 0), (2, 8): (1, 2), (2, 9): (0, 1),
+}
+
+
+def _sg_src_off(src_idx, f):
+    """Anchor -> cannon-source-hex offset (drow,dcol) for a unit facing f."""
+    if src_idx == 0:
+        return (0, 0)
+    if src_idx == 1:                       # dread rear_sw = rotate(opp(f),1)
+        return _SG_HEX_DIRS_G[(_SG_OPPOSITE[f] + 1) % 6]
+    return _SG_HEX_DIRS_G[_SG_OPPOSITE[f]]  # dread rear_w = opp(f)
+
+
+def _sg_gather(g, dq, dr):
+    """g shifted so out[...,r,c] = g[...,r+dq,c+dr], zero-filled at edges (13×13)."""
+    out = np.zeros_like(g)
+    rs = slice(max(0, dq), 13 + min(0, dq)); rd = slice(max(0, -dq), 13 + min(0, -dq))
+    cs = slice(max(0, dr), 13 + min(0, dr)); cd = slice(max(0, -dr), 13 + min(0, -dr))
+    out[..., rd, cd] = g[..., rs, cs]
+    return out
+
+
+def _sg_fire_target_grid(u, sp, up, face, occ, enemy, valid, fire_slots):
+    """(13,13) damage-weighted fire mass deposited at the impacted hex.
+
+    For each fire slot legal for unit type u, trace the cannon ray (range 1 then
+    2) from the cannon source hex; the first occupied *enemy* hex is the impact
+    (a unit at range 1 blocks range 2). Mass lands there weighted by damage
+    (2 at range 1, 1 at range 2), summed over the sample axis.
+
+    Args (all canonical-frame, sample axis first where noted):
+      u           unit type index 0/1/2 (Fighter/Cruiser/Dreadnought)
+      sp          (n,13,13,10) policy mass; fire mass sits at the firing anchor
+      up          (n,13,13) bool, hexes occupied by my unit type u
+      face        (n,13,13) int facing 0-5 (-1 where no unit)
+      occ/enemy   (n,13,13) bool occupancy / opponent occupancy
+      valid       (n,13,13) bool valid-hex mask
+      fire_slots  (10,) bool, which fire slots to include
+    """
+    out = np.zeros((13, 13))
+    for s in range(5, 10):
+        if not fire_slots[s] or (u, s) not in _SG_FIRE_CANNON:
+            continue
+        dir_off, src_idx = _SG_FIRE_CANNON[(u, s)]
+        mass_s = sp[:, :, :, s] * up                  # nonzero only at anchors
+        if not mass_s.any():
+            continue
+        for f in range(6):
+            m = mass_s * (up & (face == f))           # this facing only
+            if not m.any():
+                continue
+            sq, sr = _sg_src_off(src_idx, f)
+            dq, dr = _SG_HEX_DIRS_G[(f + dir_off) % 6]
+            o1 = (sq + dq, sr + dr); o2 = (sq + 2 * dq, sr + 2 * dr)
+            in1, occ1, en1 = _sg_gather(valid, *o1), _sg_gather(occ, *o1), _sg_gather(enemy, *o1)
+            in2, occ2, en2 = _sg_gather(valid, *o2), _sg_gather(occ, *o2), _sg_gather(enemy, *o2)
+            hit1 = in1 & occ1 & en1                   # enemy at range 1 -> 2 dmg
+            hit2 = (in1 & ~occ1) & in2 & occ2 & en2   # clear @1, enemy @2 -> 1 dmg
+            # deposit source-keyed mass at the target hex (shift by -offset)
+            out += _sg_gather(m * 2.0 * hit1, -o1[0], -o1[1]).sum(axis=0)
+            out += _sg_gather(m * 1.0 * hit2, -o2[0], -o2[1]).sum(axis=0)
+    return out
 
 
 def _generate_visualizations(config, paths, iteration, run, total_train_steps, variant_stats=None):
@@ -2698,6 +2804,17 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         # Per-unit-type presence at each hex: channels 1=Fighter, 2=Cruiser, 3=Dreadnought
         unit_presence = [c_data[:, ch, :, :].numpy() > 0.5 for ch in [1, 2, 3]]
 
+        # Canonical-board fields needed to trace each fire action to the hex it
+        # actually hits (see _fire_target_grid). Precomputed here because c_data
+        # is freed below. Channels: 0 valid-hex mask, 1-8 unit presence (mine
+        # 1-4 / opp 5-8), 9-14 facing one-hot on every unit hex.
+        valid_all = c_data[:, 0, :, :].numpy() > 0.5                       # (N,13,13)
+        occ_all = (c_data[:, 1:9, :, :].numpy() > 0.5).any(axis=1)         # any unit
+        enemy_all = (c_data[:, 5:9, :, :].numpy() > 0.5).any(axis=1)       # opponent unit
+        _face_oh = c_data[:, 9:15, :, :].numpy()                          # (N,6,13,13)
+        facing_all = np.where(_face_oh.max(axis=1) > 0.5,
+                              _face_oh.argmax(axis=1), -1).astype(np.int8)  # (N,13,13)
+
         # Valid spatial action slots per unit type (10 slots, 0..9).
         # Fighter: move f/fl/fr (0,1,2), fire forward (5)
         # Cruiser: move f/fl/fr/l/r (0..4), fire f/fl/fr (5,6,7)
@@ -2757,24 +2874,25 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         _KIND_MASKS = {"all": ALL_KIND_MASK, "move": MOVE_KIND_MASK, "fire": FIRE_KIND_MASK}
 
         def _spatial_heatmap(sample_mask, unit_idx=None, action_kind="all"):
-            """(13,13) heatmap of π mass per unit-instance at each source hex.
+            """(13,13) heatmap of π mass per unit-instance.
 
-            Mass is restricted to (hex, slot) pairs whose slot is type-legal
-            for a unit type present at that hex. action_kind in
-            {"all","move","fire"} further restricts which slots contribute.
+            Move-slot mass is deposited at each unit's *source* hex. Fire-slot
+            mass is deposited at the hex the shot actually *hits* (traced along
+            the cannon's line of fire) and weighted by damage (2 at range 1, 1
+            at range 2) — see _fire_target_grid. Mass is restricted to (hex,
+            slot) pairs whose slot is type-legal for a unit present at that hex;
+            action_kind in {"all","move","fire"} selects which slots contribute.
 
-            The grid is normalized by total unit-instance count of the
-            relevant type(s) across the samples — so attrition (fewer units
-            alive in later phases) doesn't artificially shrink the heatmap;
-            you see "what each remaining unit does," not "how many units
-            there are doing it."
+            The grid is normalized by total unit-instance count of the relevant
+            type(s) across the samples — so attrition (fewer units alive in later
+            phases) doesn't artificially shrink the heatmap; you see "what each
+            remaining unit does," not "how many units there are doing it."
 
             Returns (grid, mass_per_unit):
-              grid[r,c]      = avg π mass at hex (r,c) per unit-instance,
-                               NaN outside the hex hull. Cross-panel
-                               comparable.
-              mass_per_unit  = total π mass per unit-instance for this
-                               unit/kind selection. Equal to nansum(grid).
+              grid[r,c]      = avg (damage-weighted, for fire) π mass at hex
+                               (r,c) per unit-instance, NaN outside the hex hull.
+              mass_per_unit  = total per unit-instance for this selection
+                               (== nansum(grid)).
             """
             n = int(sample_mask.sum())
             if n == 0:
@@ -2783,12 +2901,20 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
             grid = np.zeros((13, 13))
             units = [unit_idx] if unit_idx is not None else [0, 1, 2]
             kind_mask = _KIND_MASKS[action_kind]
+            occ = occ_all[sample_mask]; enemy = enemy_all[sample_mask]
+            face = facing_all[sample_mask]; valid = valid_all[sample_mask]
             denom = 0.0
             for u in units:
                 up = unit_presence[u][sample_mask]                    # (n, 13, 13)
                 slot_mask = VALID_SLOTS_BY_UNIT[u] & kind_mask        # (10,)
-                grid += (sp * up[:, :, :, np.newaxis] * slot_mask
-                         ).sum(axis=(0, 3))                           # (13, 13)
+                move_slots = slot_mask & MOVE_KIND_MASK
+                if move_slots.any():                                  # source-hex mass
+                    grid += (sp * up[:, :, :, np.newaxis] * move_slots
+                             ).sum(axis=(0, 3))                       # (13, 13)
+                fire_slots = slot_mask & FIRE_KIND_MASK
+                if fire_slots.any():                                  # impact-hex mass
+                    grid += _sg_fire_target_grid(u, sp, up, face, occ, enemy, valid,
+                                                 fire_slots)
                 denom += float(unit_counts_my[u][sample_mask].sum())
             if denom <= 0:
                 return np.full((13, 13), np.nan), 0.0
@@ -2855,8 +2981,8 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         fig1, axes = plt.subplots(4, 7, figsize=(34, 20))
         fig1.suptitle(
             f"Iteration {iteration} — Action Frequency by Variant × Phase "
-            "(π mass per unit-instance; Move slots 0-4 vs Fire slots 5-9; "
-            "vmax shared per variant row)",
+            "(π mass per unit-instance; Move at source hex, Fire→hit at "
+            "damage-weighted impact hex; vmax shared per variant row)",
             fontsize=13)
         deploy_valid_mask = np.concatenate(
             [VALID_DEPLOY_FACINGS[ui] for ui in range(3)]).astype(bool)  # (18,)
@@ -2934,7 +3060,7 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                     col_idx = 1 + phase_idx * 2 + kind_idx
                     ax = axes[vid, col_idx]
                     grid, mass, n = spatial_cache[(vid, phase_idx, kind)]
-                    label = "Move" if kind == "move" else "Fire"
+                    label = "Move" if kind == "move" else "Fire→hit"
                     if n < MIN_SAMPLES_FOR_PLOT or grid is None:
                         _draw_na(ax, label=f"n={n}\n(insufficient)")
                         ax.set_title(f"{vname.capitalize()} — {title}\n{label} (n={n})",
@@ -2943,7 +3069,7 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                     _draw_hex_heatmap(ax, grid, board_side_hint=side, vmax=vmax)
                     ax.set_title(
                         f"{vname.capitalize()} — {title}\n"
-                        f"{label} (n={n}, Σπ/unit={mass:.3f})",
+                        f"{label} (n={n}, {'Σπ/u' if kind == 'move' else 'Σdmg·π/u'}={mass:.3f})",
                         fontsize=9)
         plt.tight_layout()
 
@@ -2989,7 +3115,8 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
         fig4, axes4 = plt.subplots(3, 8, figsize=(28, 12))
         fig4.suptitle(
             f"Iteration {iteration} — Unit × Variant Action Heatmaps "
-            "(All Positions; π mass per unit-instance; "
+            "(All Positions; π mass per unit-instance; Move at source hex, "
+            "Fire→hit at damage-weighted impact hex; "
             "vmax shared per (unit, variant) pair)",
             fontsize=13)
         for ui, uname in enumerate(unit_names):
@@ -3012,7 +3139,7 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                 for kind_idx, kind in enumerate(("move", "fire")):
                     col_idx = vid * 2 + kind_idx
                     ax = axes4[ui, col_idx]
-                    label = "Move" if kind == "move" else "Fire"
+                    label = "Move" if kind == "move" else "Fire→hit"
                     grid, mass = kind_data[kind]
                     if not UNIT_VALID_IN_VARIANT[ui, vid]:
                         _draw_na(ax)
@@ -3029,7 +3156,7 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                             vmax=pair_vmax)
                         ax.set_title(
                             f"{uname} — {label}\n"
-                            f"{vname.capitalize()} (n={n}, Σπ/unit={mass:.3f})",
+                            f"{vname.capitalize()} (n={n}, {'Σπ/u' if kind == 'move' else 'Σdmg·π/u'}={mass:.3f})",
                             fontsize=8)
         plt.tight_layout()
 
@@ -3109,7 +3236,8 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
             f, axs = plt.subplots(3, 8, figsize=(28, 12))
             f.suptitle(
                 f"Iteration {iteration} — Unit × Variant Heatmap: {pname} "
-                "(π mass per unit-instance; vmax shared per (unit, variant) pair)",
+                "(π mass per unit-instance; Move at source hex, Fire→hit at "
+                "damage-weighted impact hex; vmax shared per (unit, variant) pair)",
                 fontsize=13)
             for ui, uname in enumerate(unit_names):
                 for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
@@ -3130,7 +3258,7 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                     for kind_idx, kind in enumerate(("move", "fire")):
                         col_idx = vid * 2 + kind_idx
                         ax = axs[ui, col_idx]
-                        label = "Move" if kind == "move" else "Fire"
+                        label = "Move" if kind == "move" else "Fire→hit"
                         grid, mass = kind_data[kind]
                         if not UNIT_VALID_IN_VARIANT[ui, vid]:
                             _draw_na(ax)
@@ -3149,7 +3277,7 @@ def _generate_visualizations(config, paths, iteration, run, total_train_steps, v
                                 vmax=pair_vmax)
                             ax.set_title(
                                 f"{uname} — {label}\n"
-                                f"{vname.capitalize()} (n={n}, Σπ/unit={mass:.3f})",
+                                f"{vname.capitalize()} (n={n}, {'Σπ/u' if kind == 'move' else 'Σdmg·π/u'}={mass:.3f})",
                                 fontsize=8)
             plt.tight_layout()
             fig6_list.append((f, pname))
@@ -4099,6 +4227,15 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                               context={"type": "target_entropy", "variant": vname})
                     run.track(float(stats["top1"].mean()), name="policy_top1_mass", epoch=i,
                               step=total_train_steps, context={"variant": vname})
+                    # Net's view of MCTS's best move, the signed gap, and how
+                    # often the two agree on the best move (disambiguates the gap:
+                    # high gap + low agreement => ranking errors, not just under-confidence).
+                    run.track(float(stats["net_at_mcts"].mean()), name="net_top1_mass", epoch=i,
+                              step=total_train_steps, context={"variant": vname})
+                    run.track(float(stats["top1_gap"].mean()), name="policy_top1_gap", epoch=i,
+                              step=total_train_steps, context={"variant": vname})
+                    run.track(float(stats["top1_agree"].mean()), name="policy_top1_agreement",
+                              epoch=i, step=total_train_steps, context={"variant": vname})
                     # Distributions for spread/skew visibility
                     try:
                         import aim as _aim
@@ -4110,6 +4247,12 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                                   epoch=i, step=total_train_steps, context={"variant": vname})
                         run.track(_aim.Distribution(stats["top1"]), name="pi_top1_dist",
                                   epoch=i, step=total_train_steps, context={"variant": vname})
+                        run.track(_aim.Distribution(stats["net_at_mcts"]), name="net_at_mcts_top1_dist",
+                                  epoch=i, step=total_train_steps, context={"variant": vname})
+                        run.track(_aim.Distribution(stats["net_top1"]), name="net_top1_dist",
+                                  epoch=i, step=total_train_steps, context={"variant": vname})
+                        run.track(_aim.Distribution(stats["top1_gap"]), name="pi_top1_gap_dist",
+                                  epoch=i, step=total_train_steps, context={"variant": vname})
                     except Exception:
                         pass
                 # Across-variant aggregate distributions (no variant context),
@@ -4120,7 +4263,10 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         for key, dist_name in (("pi_loss", "pi_loss_dist"),
                                                ("v_loss", "v_loss_dist"),
                                                ("entropy", "entropy_dist"),
-                                               ("top1", "pi_top1_dist")):
+                                               ("top1", "pi_top1_dist"),
+                                               ("net_at_mcts", "net_at_mcts_top1_dist"),
+                                               ("net_top1", "net_top1_dist"),
+                                               ("top1_gap", "pi_top1_gap_dist")):
                             agg = np.concatenate([s[key] for s in variant_stats.values()])
                             run.track(_aim.Distribution(agg), name=dist_name,
                                       epoch=i, step=total_train_steps)

@@ -59,7 +59,7 @@ def _extract_experiment_name(checkpoint_filename: str) -> str:
     return m.group(1)
 
 
-def _resume_aim_run(experiment_dir: str):
+def _resume_aim_run(experiment_dir: str, game: str = None):
     """Resume the aim Run for this experiment, or return a Dummy that no-ops."""
     try:
         import aim
@@ -73,8 +73,13 @@ def _resume_aim_run(experiment_dir: str):
     hash_ = aim_hash_for_experiment(experiment_dir)
     if not hash_:
         print("  Warning: no .aim_run_hash in experiment dir; creating a new run.")
-        return aim.Run(experiment=os.path.basename(experiment_dir))
-    return aim.Run(run_hash=hash_)
+        # Match the training loop's convention: group by game, name by config dir.
+        run = aim.Run(experiment=game or os.path.basename(experiment_dir))
+        run.name = os.path.basename(experiment_dir)
+        return run
+    # Reattach to the existing training run by hash; force_resume reattaches even
+    # if that run was never finalized (e.g. training crashed).
+    return aim.Run(run_hash=hash_, force_resume=True)
 
 
 def main():
@@ -155,7 +160,7 @@ def main():
 
     upload_to_aim = prompt_yes_no("Upload metrics to aim?", default=True)
     if upload_to_aim:
-        run = _resume_aim_run(experiment_dir)
+        run = _resume_aim_run(experiment_dir, config.game)
     else:
         class _Dummy:
             def track(self, *a, **kw):

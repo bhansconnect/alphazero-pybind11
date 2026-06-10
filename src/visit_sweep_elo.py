@@ -268,7 +268,7 @@ def _print_summary(summaries: list, training_k: int) -> None:
         print("    Mixed: trajectory unclear. Collect more iters.")
 
 
-def _resume_aim_run(experiment_dir: str):
+def _resume_aim_run(experiment_dir: str, game: str = None):
     try:
         import aim
     except ImportError:
@@ -280,8 +280,13 @@ def _resume_aim_run(experiment_dir: str):
     hash_ = aim_hash_for_experiment(experiment_dir)
     if not hash_:
         print("  Warning: no .aim_run_hash in experiment dir; creating a new run.")
-        return aim.Run(experiment=os.path.basename(experiment_dir))
-    return aim.Run(run_hash=hash_)
+        # Match the training loop's convention: group by game, name by config dir.
+        run = aim.Run(experiment=game or os.path.basename(experiment_dir))
+        run.name = os.path.basename(experiment_dir)
+        return run
+    # Reattach to the existing training run by hash; force_resume reattaches even
+    # if that run was never finalized (e.g. training crashed).
+    return aim.Run(run_hash=hash_, force_resume=True)
 
 
 def _run_sweep_one_iter(config, Game, paths, experiment_name,
@@ -421,7 +426,7 @@ def main():
     )
 
     log_aim = prompt_yes_no("Log to aim run?", default=False)
-    run = _resume_aim_run(experiment_dir) if log_aim else None
+    run = _resume_aim_run(experiment_dir, config.game) if log_aim else None
 
     test_iters = [it for it in iters
                   if test_start <= it <= test_end and (it - test_start) % interval == 0]

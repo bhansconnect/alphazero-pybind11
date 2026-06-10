@@ -3545,10 +3545,19 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
         import aim
         aim_hash_path = os.path.join(experiment_dir, ".aim_run_hash")
         if start > 0 and os.path.exists(aim_hash_path):
-            run = aim.Run(run_hash=open(aim_hash_path).read().strip(), repo=aim_repo)
+            # Reopen the existing run by hash so resumed training appends to one
+            # continuous metric history. force_resume lets us reattach even when
+            # the prior process crashed / was killed without finalizing (the
+            # usual resume case); otherwise the run's lock is still held and the
+            # reopen fails with a lock-acquire timeout.
+            run = aim.Run(run_hash=open(aim_hash_path).read().strip(), repo=aim_repo,
+                          force_resume=True)
         else:
-            run = aim.Run(experiment=experiment_name, repo=aim_repo)
-            run.name = config.game
+            # Group runs by game (the aim "experiment") and name each run after
+            # its config dir, so all variants of one game line up side-by-side
+            # in the UI when grouping by experiment.
+            run = aim.Run(experiment=config.game, repo=aim_repo)
+            run.name = experiment_name
             run["hparams"] = {
                 "network": config.network_name,
                 "panel_size": config.gating_panel_size,

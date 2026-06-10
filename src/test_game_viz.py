@@ -192,5 +192,10 @@ def test_analyze_iteration_overall_bucket_for_non_unified(tmp_path):
     result = _analyze_iteration_variants(config, paths, "exp", 0)
     assert set(result.keys()) == {"overall"}
     ov = result["overall"]
-    for key in ("pi_loss", "v_loss", "entropy", "top1", "v_pred", "v_actual"):
+    for key in ("pi_loss", "v_loss", "entropy", "top1", "net_top1", "net_at_mcts",
+                "top1_gap", "top1_agree", "v_pred", "v_actual"):
         assert ov[key].shape == (N,)
+    # top1_gap is the signed identity top1 - net_at_mcts.
+    np.testing.assert_allclose(ov["top1_gap"], ov["top1"] - ov["net_at_mcts"], rtol=1e-5, atol=1e-6)
+    # Agreement is a 0/1 indicator.
+    assert set(np.unique(ov["top1_agree"])).issubset({0.0, 1.0})

@@ -3,6 +3,7 @@
 .aim
 .venv
 .cache
+.claude
 
 .envrc
 .DS_Store

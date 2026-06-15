@@ -3652,10 +3652,27 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                 wr[:copy_size, :copy_size] = source_wr[:copy_size, :copy_size]
                 elo[:copy_size] = source_elo[:copy_size]
 
-            # Copy per-variant elo/wr from source so variant elo stays anchored
-            # across bootstrap (otherwise elo_v starts at 0 for all source slots
-            # and the post-bootstrap variant elo collapses ~hundreds of points
-            # below regular elo).
+            # Copy the raw W/L/D count matrices from source. WHR is a *global*
+            # Bradley-Terry refit recomputed from scratch over these matrices
+            # every iter, so without the source's game record every source iter
+            # would have zero games and collapse to the WHR anchor (~0),
+            # corrupting the whole curve. (ELO is unaffected -- it is copied
+            # verbatim above and extended online by get_elo -- but WHR needs the
+            # evidence.) Restrict to [:source_n, :source_n]: slot source_n is the
+            # freshly bootstrapped net (a *new* agent whose games are added by the
+            # Calibrate ELO phase below), so we must not overwrite its row/col
+            # with source's stale/empty slot source_n.
+            copy_n = min(source_n, total_agents)
+            src_wins, src_draws = _load_counts(
+                source_dir, "", total_agents, wr,
+                assumed_batch=int(config.past_compare_batch_size))
+            wins[:copy_n, :copy_n] = src_wins[:copy_n, :copy_n]
+            draws[:copy_n, :copy_n] = src_draws[:copy_n, :copy_n]
+
+            # Copy per-variant elo/wr/counts from source so variant elo stays
+            # anchored across bootstrap (otherwise elo_v starts at 0 for all
+            # source slots and the post-bootstrap variant elo collapses ~hundreds
+            # of points below regular elo) and per-variant WHR keeps its history.
             if _is_unified_game(config):
                 for vid, vname in enumerate(UNIFIED_VARIANT_NAMES):
                     src_velo = os.path.join(source_dir, f"elo_{vname}.csv")
@@ -3666,6 +3683,11 @@ def main(config, experiment_dir, start=0, aim_repo=None, bootstrap_from=""):
                         copy_size = min(len(s_velo), total_agents)
                         wr_v[vid][:copy_size, :copy_size] = s_vwr[:copy_size, :copy_size]
                         elo_v[vid][:copy_size] = s_velo[:copy_size]
+                    sv_wins, sv_draws = _load_counts(
+                        source_dir, vname, total_agents, wr_v[vid],
+                        assumed_batch=int(config.past_compare_batch_size))
+                    wins_v[vid][:copy_n, :copy_n] = sv_wins[:copy_n, :copy_n]
+                    draws_v[vid][:copy_n, :copy_n] = sv_draws[:copy_n, :copy_n]
 
             # Detect architecture match before phase loop
             same_arch = True

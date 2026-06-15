@@ -140,6 +140,36 @@ def test_bootstrap_same_arch(tmp_path):
     new_elo = tmp_path / "data" / "connect4" / "bootstrapped" / "elo.csv"
     assert new_elo.exists()
 
+    # The source's raw W/L/D game record must be carried into the new run so
+    # WHR (a global refit over the count matrices) keeps the source history
+    # instead of collapsing every source iter to the anchor. Regression guard
+    # for the bootstrap-drops-counts bug.
+    import numpy as np
+    from game_runner import find_latest_checkpoint, whr_refit
+    source_n = find_latest_checkpoint(str(source_ckpt))
+    src_wins = np.loadtxt(str(tmp_path / "data" / "connect4" / "source" / "wins.csv"),
+                          delimiter=",").astype(np.int64)
+    new_wins = np.loadtxt(
+        str(tmp_path / "data" / "connect4" / "bootstrapped" / "wins.csv"),
+        delimiter=",").astype(np.int64)
+    src_draws = np.loadtxt(str(tmp_path / "data" / "connect4" / "source" / "draws.csv"),
+                           delimiter=",").astype(np.int64)
+    new_draws = np.loadtxt(
+        str(tmp_path / "data" / "connect4" / "bootstrapped" / "draws.csv"),
+        delimiter=",").astype(np.int64)
+    block_games = (src_wins[:source_n, :source_n] + src_draws[:source_n, :source_n]).sum()
+    assert block_games > 0, "Source should have games among its own iters to carry over"
+    np.testing.assert_array_equal(
+        new_wins[:source_n, :source_n], src_wins[:source_n, :source_n],
+        err_msg="Bootstrap must copy source wins counts (WHR evidence)")
+    np.testing.assert_array_equal(
+        new_draws[:source_n, :source_n], src_draws[:source_n, :source_n],
+        err_msg="Bootstrap must copy source draws counts (WHR evidence)")
+    # WHR over the merged counts must not collapse the source iters to the anchor.
+    new_whr = whr_refit(new_wins, new_draws, max_sweeps=200, tol=0.1)
+    assert np.any(new_whr[:source_n + 1] != 0), \
+        "WHR collapsed all source iters to the anchor -- counts were not carried over"
+
 
 def test_bootstrap_diff_arch(tmp_path):
     """Bootstrap from existing experiment with different architecture.

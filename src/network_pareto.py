@@ -35,7 +35,7 @@ from game_runner import (
     _parallel_load_triples,
 )
 from lr_scheduler import PlateauLRScheduler, ema_update
-from neural_net import NNArgs, NNWrapper, NNArch, get_device
+from neural_net import NNArgs, NNWrapper, NNArch, get_device, get_amp_dtype
 
 
 @dataclass
@@ -553,7 +553,7 @@ def eval_loss(nn_wrapper, all_c, all_v, all_pi, batch_size, device):
             bs = end - start
 
             if use_amp:
-                with torch.amp.autocast(device.type, dtype=torch.float16):
+                with torch.amp.autocast(device.type, dtype=get_amp_dtype(device)):
                     out_v, out_pi = nn_wrapper.nnet(c)
                 out_v = out_v.float()
                 out_pi = out_pi.float()
@@ -694,7 +694,7 @@ def _accumulate_eval_metrics(nn_wrapper, batch_iter, device, eff_rank_probe=None
             bs = c.shape[0]
 
             if use_amp:
-                with torch.amp.autocast(device.type, dtype=torch.float16):
+                with torch.amp.autocast(device.type, dtype=get_amp_dtype(device)):
                     out_v, out_pi = nn_wrapper.nnet(c)
                 out_v = out_v.float()
                 out_pi = out_pi.float()

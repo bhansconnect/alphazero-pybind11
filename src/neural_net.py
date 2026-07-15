@@ -128,6 +128,22 @@ def get_device():
         return torch.device("cpu")
 
 
+def get_amp_dtype(device):
+    """Autocast dtype for mixed-precision inference/eval.
+
+    bfloat16 on GPUs with real hardware bf16 tensor cores (compute capability
+    >= 8, Ampere+); float16 everywhere else. Pascal/Volta/Turing (cc < 8)
+    lack bf16 tensor cores, and torch.cuda.is_bf16_supported()'s default
+    emulation fallback would report True there anyway (it only checks that a
+    bf16 tensor can be allocated, not that conv/matmul kernels run it), so we
+    gate on compute capability directly rather than trust that flag. MPS
+    keeps the existing float16 path.
+    """
+    if device.type == 'cuda' and torch.cuda.get_device_capability(device)[0] >= 8:
+        return torch.bfloat16
+    return torch.float16
+
+
 def conv(in_channels, out_channels, stride=1, kernel_size=3):
     return nn.Conv2d(
         in_channels,
@@ -565,6 +581,7 @@ class NNWrapper:
         self.cv = args.cv
         self.nnet.to(self.device)
         self._amp_enabled = False
+        self._amp_dtype = get_amp_dtype(self.device)
         self._graph_inference = None
         # non_blocking transfers are only safe on CUDA with pinned memory;
         # on MPS, intermediate tensors from .float().contiguous() can be GC'd
@@ -792,7 +809,7 @@ class NNWrapper:
         self.nnet.eval()
         with torch.no_grad():
             if self._amp_enabled:
-                with torch.amp.autocast(self.device.type, dtype=torch.float16):
+                with torch.amp.autocast(self.device.type, dtype=self._amp_dtype):
                     v, pi = self.nnet(batch)
             else:
                 v, pi = self.nnet(batch)

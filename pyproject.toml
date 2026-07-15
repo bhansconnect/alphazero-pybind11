@@ -7,7 +7,7 @@ name = "alphazero"
 version = "0.1.0"
 requires-python = "==3.11.*"
 dependencies = [
-    "torch>=2.0",
+    "torch>=2.9",
     "numpy>=1.24",
     "zstandard>=0.19.0",
     "pyyaml>=6.0",
@@ -30,11 +30,11 @@ markers = [
 default-groups = ["build", "dev"]
 
 [[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cu124", marker = "platform_system == 'Linux'" },
+    { index = "pytorch-cu130", marker = "platform_system == 'Linux'" },
 ]

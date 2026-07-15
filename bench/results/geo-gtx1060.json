@@ -1,0 +1,229 @@
+{
+  "env": {
+    "hostname": "geo",
+    "platform": "Linux-6.9.8-amd64-x86_64-with-glibc2.42",
+    "cpu_model": "Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz",
+    "cpu_physical_cores": 6,
+    "cpu_logical_threads": 12,
+    "ram_gb": 31.2,
+    "torch": "2.6.0+cu124",
+    "torch_cuda": "12.4",
+    "cudnn": 90100,
+    "cuda_available": true,
+    "gpu": "NVIDIA GeForce GTX 1060",
+    "gpu_capability": "6.1",
+    "torch_arch_list": [
+      "sm_50",
+      "sm_60",
+      "sm_70",
+      "sm_75",
+      "sm_80",
+      "sm_86",
+      "sm_90"
+    ],
+    "nvidia_driver": "550.163.01"
+  },
+  "game": "star_gambit_unified",
+  "input_shape": [
+    36,
+    13,
+    13
+  ],
+  "timestamp_note": "stamp externally",
+  "gemm": {
+    "fp32_tflops": 3.3,
+    "fp16_tflops": 2.8,
+    "bf16_tflops": 1.9
+  },
+  "inference_precision": {
+    "net": "4d64c",
+    "batch": 256,
+    "fp32_ms": 15.703,
+    "fp16_ms": 16.239,
+    "fp16_speedup_vs_fp32": 0.97,
+    "bf16_ms": 190.912,
+    "bf16_speedup_vs_fp32": 0.08
+  },
+  "gpu_netsize": [
+    {
+      "net": "4d64c",
+      "params": 477776,
+      "peak_kpos_s": 17.4,
+      "at_batch": 64
+    },
+    {
+      "net": "6d96c",
+      "params": 1380944,
+      "peak_kpos_s": 7.2,
+      "at_batch": 1024
+    },
+    {
+      "net": "8d128c",
+      "params": 3021904,
+      "peak_kpos_s": 4.2,
+      "at_batch": 1024
+    },
+    {
+      "net": "10d192c",
+      "params": 7338960,
+      "peak_kpos_s": 2.0,
+      "at_batch": 1024
+    },
+    {
+      "net": "12d256c",
+      "params": 14901072,
+      "peak_kpos_s": 1.1,
+      "at_batch": 1024
+    }
+  ],
+  "batch_saturation": {
+    "net": "4d64c",
+    "params": 477776,
+    "curve": [
+      {
+        "batch": 1,
+        "ms": 0.358,
+        "kpos_s": 2.8
+      },
+      {
+        "batch": 2,
+        "ms": 0.355,
+        "kpos_s": 5.6
+      },
+      {
+        "batch": 4,
+        "ms": 0.434,
+        "kpos_s": 9.2
+      },
+      {
+        "batch": 8,
+        "ms": 0.602,
+        "kpos_s": 13.3
+      },
+      {
+        "batch": 16,
+        "ms": 0.966,
+        "kpos_s": 16.6
+      },
+      {
+        "batch": 32,
+        "ms": 1.925,
+        "kpos_s": 16.6
+      },
+      {
+        "batch": 64,
+        "ms": 3.757,
+        "kpos_s": 17.0
+      },
+      {
+        "batch": 128,
+        "ms": 8.353,
+        "kpos_s": 15.3
+      },
+      {
+        "batch": 256,
+        "ms": 15.854,
+        "kpos_s": 16.1
+      },
+      {
+        "batch": 512,
+        "ms": 30.466,
+        "kpos_s": 16.8
+      },
+      {
+        "batch": 1024,
+        "ms": 59.891,
+        "kpos_s": 17.1
+      },
+      {
+        "batch": 2048,
+        "ms": 118.338,
+        "kpos_s": 17.3
+      }
+    ],
+    "peak_kpos_s": 17.3,
+    "saturates_at_batch": 16
+  },
+  "cpu_scaling": {
+    "net": "4d64c",
+    "params": 477776,
+    "by_workers": [
+      {
+        "workers": 1,
+        "ksims_s": 21.0,
+        "kevals_s": 2.3,
+        "hit": 0.888,
+        "scaling": 1.0,
+        "converged": true
+      },
+      {
+        "workers": 2,
+        "ksims_s": 26.6,
+        "kevals_s": 5.0,
+        "hit": 0.81,
+        "scaling": 1.27,
+        "converged": true
+      },
+      {
+        "workers": 4,
+        "ksims_s": 42.4,
+        "kevals_s": 15.4,
+        "hit": 0.603,
+        "scaling": 2.03,
+        "converged": false
+      },
+      {
+        "workers": 8,
+        "ksims_s": 52.8,
+        "kevals_s": 8.8,
+        "hit": 0.834,
+        "scaling": 2.52,
+        "converged": true
+      },
+      {
+        "workers": 11,
+        "ksims_s": 54.9,
+        "kevals_s": 10.8,
+        "hit": 0.803,
+        "scaling": 2.62,
+        "converged": true
+      },
+      {
+        "workers": 12,
+        "ksims_s": 52.8,
+        "kevals_s": 10.0,
+        "hit": 0.809,
+        "scaling": 2.52,
+        "converged": true
+      }
+    ]
+  },
+  "selfplay_netsize": [
+    {
+      "net": "4d64c",
+      "params": 477776,
+      "ksims_s": 51.7,
+      "kevals_s": 6.6,
+      "hit": 0.871,
+      "converged": true
+    },
+    {
+      "net": "6d96c",
+      "params": 1380944,
+      "ksims_s": 30.7,
+      "kevals_s": 6.9,
+      "hit": 0.774,
+      "converged": true
+    },
+    {
+      "net": "8d128c",
+      "params": 3021904,
+      "ksims_s": 22.1,
+      "kevals_s": 4.1,
+      "hit": 0.813,
+      "converged": false
+    }
+  ],
+  "peak_selfplay_ksims_s": 54.9,
+  "selfplay_note": "self-play throughput = real MCTS simulations/s, but measured with an UNTRAINED net (search is bushier & cache hit-rate differs from a trained net), so the ABSOLUTE rate is not the production rate \u2014 use the cross-machine RATIO. For the true trained-net rate, run `network_pareto --sp` on an experiment dir that has a checkpoint."
+}

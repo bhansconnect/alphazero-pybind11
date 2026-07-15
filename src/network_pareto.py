@@ -27,12 +27,21 @@ import tqdm as tqdm_module
 import numpy as np
 from torch.utils.data import DataLoader
 
+import alphazero
 from config import load_config, find_latest_checkpoint
 from game_runner import (
     glob_file_triples,
     calc_hist_size,
     StreamingCompressedDataset,
     _parallel_load_triples,
+    base_params,
+    set_model_groups,
+    set_eval_types,
+    _make_game_instance,
+    prepare_inference_model,
+    GameRunner,
+    GRArgs,
+    UNIFIED_VARIANT_NAMES,
 )
 from lr_scheduler import PlateauLRScheduler, ema_update
 from neural_net import NNArgs, NNWrapper, NNArch, get_device, get_amp_dtype
@@ -61,6 +70,14 @@ class BenchResult:
     # probe batch every log_interval during training. Lets us see whether
     # rank collapses, stays flat, or improves under a given config.
     eff_rank_log: list = field(default_factory=list)
+    # Measured real self-play throughput with this net's trained weights
+    # (--selfplay-throughput). sp_ksims_s = MCTS simulations/s (core work rate,
+    # the honest Pareto cost axis); the rest are diagnostics.
+    sp_ksims_s: Optional[float] = None
+    sp_ksims_sd: Optional[float] = None
+    sp_games_s: Optional[float] = None
+    sp_kevals_s: Optional[float] = None
+    sp_hit: Optional[float] = None
 
 
 def parse_config_string(s):
@@ -317,6 +334,113 @@ def expand_config_string(s):
 
 def count_params(model):
     return sum(p.numel() for p in model.parameters())
+
+
+def measure_selfplay_throughput(nn_wrapper, config, iteration, device,
+                                max_seconds=60.0, workers=None):
+    """Measure REAL self-play throughput for a (trained) net, robustly.
+
+    Runs actual self-play and samples throughput in short sub-windows, dropping
+    an initial warmup then continuing until the rate STABILIZES (the trailing
+    sub-windows agree within tolerance) or a hard time cap (max_seconds) is hit.
+    Reports the steady-state mean and its spread — robust to the cache-fill
+    transient and run-to-run noise without hand-tuned warmup/window knobs.
+
+    Throughput = MCTS simulations/s (the core self-play work rate). This is the
+    honest Pareto cost axis: it captures the full CPU<->GPU pipeline coupling, so
+    a bigger net whose GPU load the CPU-side search hides reads the SAME as a
+    smaller one ("free"), while an over-large net shows a real drop. The net must
+    already be inference-ready (network_pareto's eval pass calls
+    enable_inference_optimizations()).
+
+    Returns {ksims_s, ksims_sd, games_s, kevals_s, hit, converged, elapsed} or None.
+    """
+    Game = config.Game
+    bs = config.self_play_batch_size
+    cb = Game.NUM_PLAYERS() * config.self_play_concurrent_batch_mult
+    p = base_params(config, config.self_play_temp, bs, cb)
+    p.games_to_play = 10 ** 9
+    p.mcts_visits = [config.selfplay_mcts_visits] * Game.NUM_PLAYERS()
+    p.history_enabled = False
+    p.epsilon = 0.25
+    p.playout_cap_randomization = config.playout_cap_percent > 0.0
+    p.playout_cap_depth = config.fast_mcts_visits
+    p.playout_cap_percent = config.playout_cap_percent
+    p.resign_percent = config.resign_percent
+    p.resign_playthrough_percent = config.resign_playthrough_percent
+    p.mcts_root_temp = config.mcts_root_temp
+    p.root_fpu_zero = config.root_fpu_zero
+    p.shaped_dirichlet = config.shaped_dirichlet
+    p.policy_target_pruning = config.policy_target_pruning
+    players = [nn_wrapper] * Game.NUM_PLAYERS()
+    set_model_groups(p, players)
+    set_eval_types(p, players)
+
+    probs = None
+    if config.game == "star_gambit_unified":
+        vf = config.variant_fractions or {}
+        probs = [float(vf.get(v, 0.0)) for v in UNIFIED_VARIANT_NAMES]
+        if sum(probs) <= 0:
+            probs = [1.0 / len(UNIFIED_VARIANT_NAMES)] * len(UNIFIED_VARIANT_NAMES)
+
+    pm = alphazero.PlayManager(_make_game_instance(config, probs), p)
+    if workers is None:
+        workers = max(1, (os.cpu_count() or 2) - 1)
+    gr = GameRunner(players, pm, GRArgs(
+        title="SP throughput", game=Game, iteration=iteration,
+        max_batch_size=bs, mcts_workers=workers, record_batch_metrics=False,
+        data_folder=None))
+
+    # Adaptive sampling — fixed constants (no user tuning) + a hard time cap.
+    SUB = 3.0        # sub-window length (s)
+    SKIP = 2         # drop the first N sub-windows (cold cache / pipeline warmup)
+    KEEP = 3         # trailing sub-windows to average / test for convergence
+    TOL = 0.04       # converged once their coefficient of variation < 4%
+    res = {}
+
+    def _timer():
+        t_start = time.perf_counter()
+        prev = (pm.cache_hits(), pm.cache_misses(), pm.games_completed(), t_start)
+        sims_r, eval_r, game_r, hit_r = [], [], [], []
+        converged = False
+        while time.perf_counter() - t_start < max_seconds:
+            time.sleep(SUB)
+            h, m, g, t = (pm.cache_hits(), pm.cache_misses(),
+                          pm.games_completed(), time.perf_counter())
+            dt = t - prev[3]
+            sims = (h + m) - (prev[0] + prev[1])
+            sims_r.append(sims / dt / 1000.0)
+            eval_r.append((m - prev[1]) / dt / 1000.0)
+            game_r.append((g - prev[2]) / dt)
+            hit_r.append(((h - prev[0]) / sims) if sims else 0.0)
+            prev = (h, m, g, t)
+            if len(sims_r) >= SKIP + KEEP:
+                tail = sims_r[-KEEP:]
+                mean = float(np.mean(tail))
+                if mean and float(np.std(tail)) / mean < TOL:
+                    converged = True
+                    break
+        pm.stop()
+        if not sims_r:
+            return
+        total = len(sims_r)
+        start_i = max(SKIP, total - KEEP)      # trailing (most-warmed) windows, past SKIP
+        if start_i >= total:                    # too few windows — use whatever we have
+            start_i = 0
+        avg = lambda a: float(np.mean(a[start_i:]))
+        res["ksims_s"] = avg(sims_r)
+        res["ksims_sd"] = float(np.std(sims_r[start_i:]))
+        res["kevals_s"] = avg(eval_r)
+        res["games_s"] = avg(game_r)
+        res["hit"] = avg(hit_r)
+        res["converged"] = converged
+        res["elapsed"] = time.perf_counter() - t_start
+
+    tt = threading.Thread(target=_timer)
+    tt.start()
+    gr.run()          # blocks on main thread until _timer calls pm.stop()
+    tt.join()
+    return res or None
 
 
 def load_config_only(source_dir):
@@ -952,14 +1076,22 @@ def print_results_table(results):
     print(f"RESULTS (sorted by total loss)")
     print(f"{'='*60}")
 
+    # When self-play throughput was measured, it is the honest cost axis and
+    # REPLACES raw inference-ms in the Pareto (higher throughput is better, so we
+    # feed its negation to the lower-is-better frontier test).
+    show_sp = any(r.sp_ksims_s is not None for _, r in valid)
+
     # Pareto frontier (valid entries only)
     if valid:
-        valid_points = np.array([[r.mem_mb, r.infer_ms, r.total_loss] for _, r in valid])
+        cost = (lambda r: -r.sp_ksims_s if (show_sp and r.sp_ksims_s is not None)
+                else r.infer_ms)
+        valid_points = np.array([[r.mem_mb, cost(r), r.total_loss] for _, r in valid])
         valid_pareto = is_pareto_optimal(valid_points)
     else:
         valid_pareto = np.array([], dtype=bool)
 
-    header = (f"{'Config':<22} {'Params':>10} {'Mem MB':>8} {'Infer ms':>9} "
+    sp_h = f"{'SP ksim/s':>10} " if show_sp else ""
+    header = (f"{'Config':<22} {'Params':>10} {'Mem MB':>8} {'Infer ms':>9} {sp_h}"
               f"{'V Raw':>8} {'Pi Loss':>9} {'Total':>8} "
               f"{'Top1%':>7} {'Top3%':>7} {'KL':>8} "
               f"{'TgtEnt':>8} {'KLGap':>8} {'EffRank':>8} "
@@ -969,8 +1101,12 @@ def print_results_table(results):
 
     vi = 0
     for orig_i, r in ordered:
+        sp_c = ""
+        if show_sp:
+            sp_c = (f"{r.sp_ksims_s:>10.1f} " if r.sp_ksims_s is not None
+                    else f"{'N/A':>10s} ")
         if r.total_loss == float('inf'):
-            line = (f"{r.label:<22} {r.params:>10,} {'OOM':>8s} {r.infer_ms:>9.1f} "
+            line = (f"{r.label:<22} {r.params:>10,} {'OOM':>8s} {r.infer_ms:>9.1f} {sp_c}"
                     f"{'OOM':>8s} {'OOM':>9s} {'OOM':>8s} "
                     f"{'':>7s} {'':>7s} {'':>8s} "
                     f"{'':>8s} {'':>8s} {'':>8s} "
@@ -984,7 +1120,7 @@ def print_results_table(results):
             te = f"{r.target_entropy:>8.4f}" if r.target_entropy is not None else f"{'N/A':>8s}"
             kg = f"{r.kl_gap:>8.4f}" if r.kl_gap is not None else f"{'N/A':>8s}"
             er = f"{r.eff_rank:>8.2f}" if r.eff_rank is not None else f"{'N/A':>8s}"
-            line = (f"{r.label:<22} {r.params:>10,} {r.mem_mb:>8.1f} {r.infer_ms:>9.1f} "
+            line = (f"{r.label:<22} {r.params:>10,} {r.mem_mb:>8.1f} {r.infer_ms:>9.1f} {sp_c}"
                     f"{r.v_loss_raw:>8.4f} {r.pi_loss:>9.4f} {r.total_loss:>8.4f} "
                     f"{top1} {top3} {kl} "
                     f"{te} {kg} {er} "
@@ -993,7 +1129,17 @@ def print_results_table(results):
             vi += 1
 
     if any(valid_pareto):
-        print(f"\n*** = Pareto-optimal (memory vs inference vs loss)")
+        axis = "self-play throughput" if show_sp else "inference"
+        print(f"\n*** = Pareto-optimal (memory vs {axis} vs loss)")
+        if show_sp:
+            best_sp = max((r.sp_ksims_s for _, r in valid if r.sp_ksims_s is not None),
+                          default=None)
+            if best_sp:
+                # "free" nets: within 5% of the best measured throughput
+                free = [r.label for _, r in sorted(valid, key=lambda x: -x[1].params)
+                        if r.sp_ksims_s is not None and r.sp_ksims_s >= 0.95 * best_sp]
+                if free:
+                    print(f"    Largest ~free net (>=95% of best {best_sp:.1f} ksims/s): {free[0]}")
 
     # Learning curves (valid entries only)
     valid_results = [r for _, r in valid]
@@ -1184,7 +1330,8 @@ def save_results_npz(results, save_dir):
     data["time_min"] = np.array([r.time_min for r in results])
 
     for key in ["top1_agree", "top3_agree", "kl_div",
-                "target_entropy", "kl_gap", "eff_rank"]:
+                "target_entropy", "kl_gap", "eff_rank",
+                "sp_ksims_s", "sp_ksims_sd", "sp_games_s", "sp_kevals_s", "sp_hit"]:
         data[key] = np.array([getattr(r, key) if getattr(r, key) is not None else np.nan
                               for r in results])
 
@@ -1328,6 +1475,24 @@ def main():
                              "Set to 0 to disable. Default: 1024.")
     parser.add_argument("--yes", "-y", action="store_true",
                         help="Auto-accept all networks; skip the interactive subselect prompt.")
+    parser.add_argument("--selfplay-throughput", "--sp", action="store_true",
+                        help="Pre-answer YES to the interactive self-play-throughput prompt "
+                             "(for non-interactive/scripted runs). Interactively you're asked "
+                             "at runtime instead. When on, after each candidate trains+evals it "
+                             "runs a short REAL self-play with the trained weights and uses the "
+                             "measured throughput (MCTS sims/s) as the Pareto cost axis — "
+                             "capturing the CPU<->GPU coupling, so a bigger net whose GPU load "
+                             "the CPU search hides reads the SAME as a smaller one ('free') "
+                             "while an over-large net shows a real throughput drop.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Fixed train+eval seed. Makes runs reproducible AND comparable "
+                             "across invocations (use the same --seed for every layer of a "
+                             "study so losses are directly comparable; vary it to measure the "
+                             "noise floor). Default: random per run.")
+    parser.add_argument("--sp-max-seconds", type=float, default=60.0,
+                        help="Hard time cap per net for the (adaptive, self-converging) "
+                             "self-play throughput measurement (default 60). It normally "
+                             "stops earlier once the rate stabilizes.")
     args = parser.parse_args()
 
     if not os.path.isdir(args.source_dir):
@@ -1380,12 +1545,43 @@ def main():
         print("No configs selected. Exiting.")
         sys.exit(0)
 
+    # 3d. Self-play throughput is an interactive opt-in — prompt here (the --sp
+    # flag only pre-answers it for non-interactive / scripted runs). When on, it
+    # measures each trained net's real self-play throughput and uses it as the
+    # Pareto cost axis (replacing raw inference ms).
+    sp_enabled = args.selfplay_throughput
+    sp_max = args.sp_max_seconds
+    if not sp_enabled and sys.stdin.isatty():
+        try:
+            ans = input(
+                f"\nMeasure REAL self-play throughput per net? "
+                f"(adaptive, self-converging, up to {sp_max:.0f}s each; makes self-play "
+                f"throughput the Pareto cost axis instead of inference ms) [y/N]: "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = ""
+        sp_enabled = ans in ("y", "yes")
+    sp_iteration = 0
+    if sp_enabled:
+        try:
+            sp_iteration = find_latest_checkpoint(
+                config.resolve_paths(args.source_dir)["checkpoint"])
+        except Exception:
+            sp_iteration = 0
+        print(f"Self-play throughput: ON (adaptive, <= {sp_max:.0f}s per net).")
+
     # 4. Train + eval each config (with OOM recovery)
-    train_seed = int(np.random.SeedSequence().entropy & 0xFFFFFFFF)
+    # --seed fixes both train and eval seeds so runs are reproducible AND
+    # comparable across invocations (essential for a layered study); vary it to
+    # get the noise floor. Default: random per run.
+    if args.seed is not None:
+        train_seed = int(args.seed) & 0xFFFFFFFF
+    else:
+        train_seed = int(np.random.SeedSequence().entropy & 0xFFFFFFFF)
     print(f"Train shuffle seed: {train_seed} (shared across configs this run)")
     eval_seed = None
     if args.eval_samples is not None:
-        eval_seed = np.random.SeedSequence().entropy
+        eval_seed = int(args.seed) if args.seed is not None else np.random.SeedSequence().entropy
         print(f"Eval sample seed: {eval_seed} (shared across configs this run)")
 
     # Pre-load a fixed probe batch once, reused across every config to give
@@ -1465,6 +1661,21 @@ def main():
                   f"Top1: {metrics['top1_agree']*100:.1f}%  KL: {metrics['kl_div']:.4f}  "
                   f"TE: {metrics['target_entropy']:.4f}  KL gap: {metrics['kl_gap']:.4f}{er_str}")
 
+            # Opt-in (interactive): measure REAL self-play throughput w/ trained weights.
+            sp = None
+            if sp_enabled:
+                print(f"  Measuring self-play throughput (adaptive, <= {sp_max:.0f}s)...")
+                try:
+                    sp = measure_selfplay_throughput(
+                        nn_train, config, sp_iteration, device, max_seconds=sp_max)
+                except Exception as e:
+                    print(f"  self-play throughput measurement failed: {e}")
+                if sp:
+                    tag = "converged" if sp["converged"] else f"capped {sp['elapsed']:.0f}s"
+                    print(f"  Self-play: {sp['ksims_s']:.1f} ± {sp['ksims_sd']:.1f} ksims/s "
+                          f"({tag})  {sp['games_s']:.2f} games/s  "
+                          f"{sp['kevals_s']:.1f} kevals/s GPU  {sp['hit']*100:.0f}% hit")
+
             br = BenchResult(
                 label=label, params=params, mem_mb=mem_mb, infer_ms=infer_ms,
                 v_loss=metrics['v_loss'], v_loss_raw=metrics['v_loss_raw'],
@@ -1476,6 +1687,11 @@ def main():
                 target_entropy=metrics['target_entropy'], kl_gap=metrics['kl_gap'],
                 eff_rank=metrics.get("eff_rank"),
                 eff_rank_log=eff_rank_log,
+                sp_ksims_s=(sp['ksims_s'] if sp else None),
+                sp_ksims_sd=(sp['ksims_sd'] if sp else None),
+                sp_games_s=(sp['games_s'] if sp else None),
+                sp_kevals_s=(sp['kevals_s'] if sp else None),
+                sp_hit=(sp['hit'] if sp else None),
             )
             results.append(br)
         except RuntimeError as e:

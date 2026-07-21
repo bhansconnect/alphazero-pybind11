@@ -456,7 +456,7 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
       !root_.children.empty()) {
     init_gumbel_state();
   }
-  while (current_->n > 0 && !current_->scores.has_value()) {
+  while (current_->n > 0 && current_->scores == nullptr) {
     path_.push_back(current_);
 
     if (gumbel_enabled_ && gumbel_initialized_ && current_ == &root_) {
@@ -475,7 +475,9 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
   total_leaf_depth_ += path_.size();
   if (current_->n == 0) {
     current_->player = leaf->current_player();
-    current_->scores = leaf->scores();
+    if (auto s = leaf->scores()) {
+      current_->scores = std::make_unique<Vector<float>>(std::move(*s));
+    }
     current_->add_children(leaf->valid_moves());
   }
   return leaf;
@@ -483,8 +485,8 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
 
 void MCTS::process_result(const GameState& gs, Vector<float>& value,
                           Vector<float>& pi, bool root_noise_enabled) {
-  if (current_->scores.has_value()) {
-    value = current_->scores.value();
+  if (current_->scores != nullptr) {
+    value = *current_->scores;
   } else {
     // Rescale pi based on valid moves.
     auto valids = Vector<float>(gs.num_moves());
@@ -745,7 +747,7 @@ std::unique_ptr<GameState> MCTS::find_leaf_batched(const GameState& gs) {
   // in-flight call but not yet backpropagated. children.empty() check
   // prevents best_child on unexpanded nodes.
   while ((cur->n > 0 || cur->n_in_flight > 0) && !cur->children.empty() &&
-         !cur->scores.has_value()) {
+         cur->scores == nullptr) {
     ifl.path.push_back(cur);
     float fpu = (cur == &root_ && root_fpu_zero_) ? 0.0f : fpu_reduction_;
     auto* selected = cur->best_child(cpuct_, fpu);
@@ -761,7 +763,9 @@ std::unique_ptr<GameState> MCTS::find_leaf_batched(const GameState& gs) {
   // Only expand if not already expanded by prior in-flight call
   if (cur->n == 0 && cur->children.empty()) {
     cur->player = leaf->current_player();
-    cur->scores = leaf->scores();
+    if (auto s = leaf->scores()) {
+      cur->scores = std::make_unique<Vector<float>>(std::move(*s));
+    }
     cur->add_children(leaf->valid_moves());
   }
 
@@ -777,8 +781,8 @@ void MCTS::process_result_batched(const GameState& gs, uint32_t leaf_index,
   current_ = ifl.leaf;
   --current_->n_in_flight;
 
-  if (current_->scores.has_value()) {
-    value = current_->scores.value();
+  if (current_->scores != nullptr) {
+    value = *current_->scores;
   } else {
     // Rescale pi based on valid moves.
     auto valids = Vector<float>(gs.num_moves());

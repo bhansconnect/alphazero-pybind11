@@ -23,7 +23,13 @@ struct DLLEXPORT Node {
   uint32_t n = 0;
   uint32_t n_in_flight = 0;  // WU-UCT: pending evaluations through this node
   int8_t player = 0;
-  std::optional<Vector<float>> scores = std::nullopt;
+  // Terminal game result cached at terminal nodes (nullptr = non-terminal).
+  // A unique_ptr (8B) rather than std::optional<Vector<float>> (24B) keeps the
+  // Node small: the children arrays (~branching-factor wide) are the dominant
+  // DRAM consumer in best_child/add_children/~Node, so every byte shaved off
+  // Node reduces steady-state memory bandwidth. Terminal nodes are a minority,
+  // so the extra indirection for them is a good trade.
+  std::unique_ptr<Vector<float>> scores = nullptr;
   std::vector<Node> children{};
 
   void add_children(const Vector<uint8_t>& valids) noexcept;

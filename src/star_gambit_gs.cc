@@ -85,8 +85,8 @@ int compute_num_hexes(int board_side) {
 // Unit Shape Functions
 // =============================================================================
 
-std::vector<Hex> get_unit_hexes(UnitType type, const Hex& anchor, int facing) {
-  std::vector<Hex> hexes;
+SmallHexVec get_unit_hexes(UnitType type, const Hex& anchor, int facing) {
+  SmallHexVec hexes;
   hexes.push_back(anchor);
 
   switch (type) {
@@ -119,8 +119,8 @@ std::vector<Hex> get_unit_hexes(UnitType type, const Hex& anchor, int facing) {
   return hexes;
 }
 
-std::vector<Hex> get_portal_hexes(int player, int board_side) {
-  std::vector<Hex> hexes;
+SmallHexVec get_portal_hexes(int player, int board_side) {
+  SmallHexVec hexes;
   int max_coord = board_side;
 
   if (player == 0) {
@@ -231,7 +231,7 @@ std::vector<CannonInfo> get_cannon_info(UnitType type) {
 }
 
 bool has_line_of_sight(const Hex& from, int direction, int distance,
-                       const std::vector<Hex>& occupied_hexes) {
+                       const SmallHexVec& occupied_hexes) {
   Hex current = from;
   for (int i = 1; i < distance; ++i) {
     current = hex_neighbor(current, direction);
@@ -369,8 +369,8 @@ int StarGambitGS<Config>::get_next_slot(uint8_t player, UnitType type) const {
 }
 
 template<typename Config>
-std::vector<Hex> StarGambitGS<Config>::get_all_occupied_hexes() const {
-  std::vector<Hex> occupied;
+SmallHexVec StarGambitGS<Config>::get_all_occupied_hexes() const {
+  SmallHexVec occupied;
   for (const auto& unit : units_) {
     if (!unit.is_alive()) continue;
 
@@ -396,7 +396,7 @@ bool StarGambitGS<Config>::is_hex_occupied(const Hex& h, int exclude_unit_idx) c
     const auto& unit = units_[i];
     if (!unit.is_alive()) continue;
 
-    std::vector<Hex> hexes;
+    SmallHexVec hexes;
     if (unit.type == UnitType::PORTAL) {
       hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
     } else {
@@ -416,7 +416,7 @@ int StarGambitGS<Config>::find_unit_at_hex(const Hex& h) const {
     const auto& unit = units_[i];
     if (!unit.is_alive()) continue;
 
-    std::vector<Hex> unit_hexes;
+    SmallHexVec unit_hexes;
     if (unit.type == UnitType::PORTAL) {
       unit_hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
     } else {
@@ -433,7 +433,7 @@ int StarGambitGS<Config>::find_unit_at_hex(const Hex& h) const {
 }
 
 template<typename Config>
-bool StarGambitGS<Config>::would_collide(const std::vector<Hex>& new_hexes, int exclude_unit_idx) const {
+bool StarGambitGS<Config>::would_collide(const SmallHexVec& new_hexes, int exclude_unit_idx) const {
   for (const auto& h : new_hexes) {
     if (!hex_in_bounds(h, Config::BOARD_SIDE)) return true;
     if (is_hex_occupied(h, exclude_unit_idx)) return true;
@@ -620,7 +620,7 @@ bool StarGambitGS<Config>::is_fighter_move_valid(const Unit& unit, int direction
   }
 
   // Check collision
-  std::vector<Hex> new_hexes = {move.new_anchor};
+  SmallHexVec new_hexes = {move.new_anchor};
   return !would_collide(new_hexes, unit_idx);
 }
 
@@ -673,7 +673,7 @@ bool StarGambitGS<Config>::has_target_in_range(const Unit& unit, int cannon_idx)
 
   const auto& cannon = cannons[cannon_idx];
 
-  std::vector<Hex> unit_hexes;
+  SmallHexVec unit_hexes;
   if (unit.type == UnitType::PORTAL) {
     unit_hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
   } else {
@@ -741,7 +741,7 @@ bool StarGambitGS<Config>::is_deploy_valid(UnitType type, int facing) const {
 
   Hex deploy_hex = get_deploy_hex(current_player_, Config::BOARD_SIDE);
 
-  std::vector<Hex> new_unit_hexes;
+  SmallHexVec new_unit_hexes;
   if (type == UnitType::DREADNOUGHT) {
     // For dreadnoughts, one rear hex goes at deploy position, anchor is offset
     int anchor_dir = get_dreadnought_anchor_dir(current_player_, facing);
@@ -1000,7 +1000,7 @@ typename StarGambitGS<Config>::FireResult StarGambitGS<Config>::execute_fire(
 
   const auto& cannon = cannons[cannon_idx];
 
-  std::vector<Hex> unit_hexes;
+  SmallHexVec unit_hexes;
   if (unit.type == UnitType::PORTAL) {
     unit_hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
   } else {
@@ -1450,7 +1450,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
     bool is_my_unit = (unit.player == my_player);
     int presence_ch = ch + (is_my_unit ? 0 : 4) + type_idx;
 
-    std::vector<Hex> hexes;
+    SmallHexVec hexes;
     if (unit.type == UnitType::PORTAL) {
       hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
     } else {
@@ -1475,7 +1475,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
     int heading_ch = ch + rotated_facing;
 
     // Get all hexes for this unit and set heading on each
-    std::vector<Hex> hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
+    SmallHexVec hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
     for (const auto& h : hexes) {
       set_hex(heading_ch, h, 1.0f);
     }
@@ -1493,7 +1493,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
     float norm_hp = static_cast<float>(unit.hp) / max_hp;
 
     // Get all hexes for this unit
-    std::vector<Hex> hexes;
+    SmallHexVec hexes;
     if (unit.type == UnitType::PORTAL) {
       hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
     } else {
@@ -1519,7 +1519,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
     float norm_moves = (max_moves > 0) ? static_cast<float>(unit.moves_left) / max_moves : 0.0f;
 
     // Get all hexes for this unit and set moves on each
-    std::vector<Hex> hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
+    SmallHexVec hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
     for (const auto& h : hexes) {
       set_hex(ch, h, norm_moves);
     }
@@ -1536,7 +1536,7 @@ Tensor<float, 3> StarGambitGS<Config>::canonicalized() const noexcept {
     if (unit.type == UnitType::PORTAL) continue;
 
     // Get all hexes for this unit
-    std::vector<Hex> unit_hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
+    SmallHexVec unit_hexes = get_unit_hexes(unit.type, {unit.anchor_q, unit.anchor_r}, unit.facing);
     auto cannons = get_cannon_info(unit.type);
 
     for (size_t cannon_idx = 0; cannon_idx < cannons.size(); ++cannon_idx) {
@@ -1852,7 +1852,7 @@ std::string StarGambitGS<Config>::dump() const noexcept {
     std::string piece_id = std::string(1, type_char) + std::to_string(unit.slot + 1);
 
     // Get all hexes occupied by this unit
-    std::vector<Hex> hexes;
+    SmallHexVec hexes;
     if (unit.type == UnitType::PORTAL) {
       hexes = get_portal_hexes(unit.player, Config::BOARD_SIDE);
     } else {
@@ -1885,7 +1885,7 @@ std::string StarGambitGS<Config>::dump() const noexcept {
 
   // === Helper to get valid hexes for a row ===
   auto get_row_hexes = [](int r, int board_side) {
-    std::vector<Hex> row_hexes;
+    SmallHexVec row_hexes;
     for (int q = -board_side; q <= board_side; ++q) {
       int s = -q - r;
       if (std::abs(q) <= board_side && std::abs(r) <= board_side &&
@@ -1898,7 +1898,7 @@ std::string StarGambitGS<Config>::dump() const noexcept {
 
   // === Render hex content line ===
   auto render_hex_line = [&](int r) {
-    std::vector<Hex> row_hexes = get_row_hexes(r, Config::BOARD_SIDE);
+    SmallHexVec row_hexes = get_row_hexes(r, Config::BOARD_SIDE);
     if (row_hexes.empty()) return;
 
     int indent = std::abs(r) * ROW_INDENT_SCALE;
@@ -1974,8 +1974,8 @@ std::string StarGambitGS<Config>::dump() const noexcept {
 
   // === Render diagonal edge line between rows r_above and r_below ===
   auto render_diagonal_line = [&](int r_above, int r_below) {
-    std::vector<Hex> hexes_above = get_row_hexes(r_above, Config::BOARD_SIDE);
-    std::vector<Hex> hexes_below = get_row_hexes(r_below, Config::BOARD_SIDE);
+    SmallHexVec hexes_above = get_row_hexes(r_above, Config::BOARD_SIDE);
+    SmallHexVec hexes_below = get_row_hexes(r_below, Config::BOARD_SIDE);
 
     if (hexes_above.empty() && hexes_below.empty()) return;
 
@@ -2201,7 +2201,7 @@ FireInfo StarGambitGS<Config>::get_fire_info(uint32_t move) const {
   if (cannon_idx >= static_cast<int>(cannons.size())) return result;
 
   const auto& cannon = cannons[cannon_idx];
-  std::vector<Hex> unit_hexes = get_unit_hexes(unit->type,
+  SmallHexVec unit_hexes = get_unit_hexes(unit->type,
       {unit->anchor_q, unit->anchor_r}, unit->facing);
 
   if (cannon.source_hex_idx >= static_cast<int>(unit_hexes.size())) return result;

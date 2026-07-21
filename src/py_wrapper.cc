@@ -299,6 +299,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def_readwrite("max_batch_size", &PlayParams::max_batch_size)
       .def_readwrite("max_cache_size", &PlayParams::max_cache_size)
       .def_readwrite("cache_shards", &PlayParams::cache_shards)
+      .def_readwrite("queue_shards", &PlayParams::queue_shards)
+      .def_readwrite("eval_pipelines", &PlayParams::eval_pipelines)
       .def_readwrite("mcts_visits", &PlayParams::mcts_visits)
       .def_readwrite("cpuct", &PlayParams::cpuct)
       .def_readwrite("playout_cap_randomization",
@@ -446,7 +448,8 @@ PYBIND11_MODULE(alphazero, m) {
       .def("cache_size", &PlayManager::cache_size)
       .def(
           "build_batch",
-          [](PlayManager& pm, uint32_t group, py::array_t<float>& batch) {
+          [](PlayManager& pm, uint32_t group, py::array_t<float>& batch,
+             uint32_t shard) {
             const auto mbs = pm.params().max_batch_size;
             auto out = std::vector<uint32_t>{};
             out.reserve(mbs);
@@ -487,7 +490,7 @@ PYBIND11_MODULE(alphazero, m) {
               if (pm.remaining_games() == 0) break;
 
               auto indices = pm.pop_games_upto_timed(
-                  group, max_bs() - current, SUB_TIMEOUT);
+                  group, shard, max_bs() - current, SUB_TIMEOUT);
               if (indices.empty()) {
                 if (++empty_count >= MAX_EMPTY) break;
                 continue;
@@ -497,6 +500,7 @@ PYBIND11_MODULE(alphazero, m) {
             }
             return out;
           },
+          py::arg("group"), py::arg("batch"), py::arg("shard") = 0,
           py::call_guard<py::gil_scoped_release>());
 
   py::class_<onitama_gs::Card>(m, "OnitamaCard")

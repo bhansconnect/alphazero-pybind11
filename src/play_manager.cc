@@ -12,7 +12,10 @@ namespace alphazero {
 PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     : base_gs_(std::move(gs)),
       params_(p),
-      games_started_(params_.concurrent_games) {
+      games_started_(params_.concurrent_games),
+      awaiting_mcts_(std::max<uint32_t>(
+          1, std::min<uint32_t>(params_.queue_shards,
+                                std::max<uint32_t>(1, params_.concurrent_games)))) {
   games_.reserve(params_.concurrent_games);
   if (params_.mcts_visits.size() != base_gs_->num_players()) {
     throw std::runtime_error{"You must specify MCTS visits for each player"};
@@ -173,9 +176,21 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
   }
 
   // 6. Create per-model-group queues and caches
+  //
+  // Unlike awaiting_mcts_, the eval queue is deliberately kept as a SINGLE
+  // shard (per model group) rather than sharded by params_.eval_pipelines.
+  // Sharding it would split the ready-for-eval backlog into N independent
+  // pools, and each of the N Python batcher threads (see GameRunner) can
+  // then only ever see 1/N of it -- fragmenting what should be one large,
+  // GPU-efficient batch into several smaller ones. Push frequency here is
+  // also far lower than awaiting_mcts_ (only on a cache miss, not every
+  // sim step), so this queue's single mutex was never the bottleneck.
+  // eval_pipelines instead controls how many *consumer* threads compete for
+  // this one queue (each still able to assemble a full-size batch from the
+  // whole backlog), parallelizing the CPU-side batch construction without
+  // shrinking batches.
   for (auto i = 0U; i < num_model_groups_; ++i) {
-    awaiting_inference_.push_back(
-        std::make_unique<ConcurrentQueue<uint32_t>>());
+    awaiting_inference_.push_back(std::make_unique<ShardedQueue<uint32_t>>(1));
   }
   if (params_.max_cache_size > 0) {
     auto per_group = params_.max_cache_size / num_model_groups_;
@@ -211,7 +226,7 @@ PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p)
     gd.v.setZero();
     gd.pi.setZero();
     games_.push_back(std::move(gd));
-    awaiting_mcts_.push(i);
+    awaiting_mcts_.push(i, i);
   }
 
   scores_ = Vector<float>{base_gs_->num_players() + 1};
@@ -245,8 +260,17 @@ void PlayManager::play() {
   AZ_ZONE_SCOPED;
   thread_local std::default_random_engine re{std::random_device{}()};
   thread_local std::uniform_real_distribution<float> dist{0.0F, 1.0F};
+  // Each worker thread claims a "home" shard once, round-robin. Games are
+  // pushed back to awaiting_mcts_ keyed by their (stable) game index, so a
+  // worker's home shard mostly serves the same subset of games across the
+  // whole run -- reducing cross-thread contention -- while ShardedQueue::pop
+  // still scans every shard before blocking, so no shard can starve even if
+  // num_shards and thread count don't divide evenly.
+  const uint32_t home_shard =
+      next_worker_id_.fetch_add(1, std::memory_order_relaxed) %
+      awaiting_mcts_.num_shards();
   while (games_completed_ < params_.games_to_play && !stopped_.load(std::memory_order_relaxed)) {
-    std::optional<uint32_t> i = awaiting_mcts_.pop(MAX_WAIT);
+    std::optional<uint32_t> i = awaiting_mcts_.pop(home_shard, MAX_WAIT);
     if (!i.has_value()) {
       continue;
     }
@@ -558,7 +582,7 @@ void PlayManager::play() {
       } else {
         std::tie(game.v, game.pi) = dumb_eval(*leaf);
       }
-      awaiting_mcts_.push(i.value());
+      awaiting_mcts_.push(i.value(), i.value());
       continue;
     }
 
@@ -567,11 +591,11 @@ void PlayManager::play() {
 
     if (!caches_.empty() && caches_[group]) {
       if (caches_[group]->find(game.leaf_hash, game.pi.data(), game.v.data())) {
-        awaiting_mcts_.push(i.value());
+        awaiting_mcts_.push(i.value(), i.value());
         continue;
       }
     }
-    awaiting_inference_[group]->push(i.value());
+    awaiting_inference_[group]->push(i.value(), i.value());
   }
 }
 
@@ -614,7 +638,7 @@ void PlayManager::update_inferences(const uint8_t group,
     caches_[group]->insert_many(hashes.data(), policies.data(), vals.data(),
                                 hashes.size());
   }
-  awaiting_mcts_.push_many(game_indices);
+  awaiting_mcts_.push_many(game_indices, [](uint32_t idx) { return idx; });
 }
 
 PlayManager::PlayManager(std::unique_ptr<GameState> gs, PlayParams p,

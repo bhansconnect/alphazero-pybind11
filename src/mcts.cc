@@ -146,8 +146,15 @@ void MCTS::update_root(const GameState& gs, uint32_t move) {
     std::cout << gs.dump();
     throw std::runtime_error("ahh, what is this move: " + std::to_string(move));
   }
-  Node tmp = *x;
-  root_ = tmp;
+  // Re-root onto the chosen child, reusing its already-built subtree. Move
+  // instead of copy: a plain `Node tmp = *x; root_ = tmp;` deep-copies the
+  // entire subtree twice (Node owns std::vector<Node> children). `*x` lives
+  // inside root_.children, so we cannot move-assign it into root_ directly
+  // (that would free root_.children -- and thus *x -- mid-read). Moving into a
+  // temporary first detaches the subtree from root_.children, after which the
+  // old root (now holding a moved-from, empty *x) is cheap to destroy.
+  Node tmp = std::move(*x);
+  root_ = std::move(tmp);
   reset_gumbel_state();
 }
 

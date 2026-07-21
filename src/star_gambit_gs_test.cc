@@ -614,13 +614,13 @@ TEST(Combat, CannonInfoDreadnought) {
 }
 
 TEST(Combat, LineOfSightEmpty) {
-  std::vector<Hex> occupied;
+  SmallHexVec occupied;
   EXPECT_TRUE(has_line_of_sight({0, 0}, 0, 1, occupied));
   EXPECT_TRUE(has_line_of_sight({0, 0}, 0, 2, occupied));
 }
 
 TEST(Combat, LineOfSightBlocked) {
-  std::vector<Hex> occupied = {{1, 0}};  // Hex at East
+  SmallHexVec occupied = {{1, 0}};  // Hex at East
   // Shooting East from origin, blocked at distance 2 (passes through {1, 0})
   EXPECT_FALSE(has_line_of_sight({0, 0}, 0, 2, occupied));
 }

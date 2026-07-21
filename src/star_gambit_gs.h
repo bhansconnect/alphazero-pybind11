@@ -1,7 +1,10 @@
 #pragma once
 
 #include <array>
+#include <cassert>
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <random>
@@ -133,6 +136,55 @@ struct Hex {
 
   bool operator==(const Hex& other) const { return q == other.q && r == other.r; }
   bool operator!=(const Hex& other) const { return !(*this == other); }
+};
+
+// ============================================================================
+// SmallHexVec — fixed-capacity inline container for small hex collections.
+//
+// The hex-list helpers (get_unit_hexes, get_portal_hexes,
+// get_all_occupied_hexes, get_row_hexes, ...) return tiny lists that were
+// previously std::vector<Hex>. Because these are called in extremely tight
+// loops during valid_moves()/is_hex_occupied()/find_unit_at_hex(), the
+// per-call heap malloc/free dominated CPU time (~50% of self time in
+// profiling). SmallHexVec stores its elements inline (no heap allocation),
+// preserving identical value semantics and the subset of the std::vector
+// interface these call sites use (push_back, size, empty, operator[],
+// range-for iteration, initializer-list construction, copy).
+//
+// Capacity bound: the largest hex list produced is get_all_occupied_hexes()
+// which, for the biggest configuration (BattleConfig: per player 4 fighters +
+// 3 cruisers + 2 dreadnoughts + 1 portal), totals 2 * (4*1 + 3*2 + 2*3 + 1*3)
+// = 38 hexes. A board row is at most 2*BOARD_SIDE+1 = 13 hexes. CAP=48 leaves
+// comfortable headroom; push_back asserts against overflow.
+// ============================================================================
+class SmallHexVec {
+ public:
+  static constexpr int CAP = 48;
+
+  SmallHexVec() = default;
+  SmallHexVec(std::initializer_list<Hex> init) {
+    for (const Hex& h : init) push_back(h);
+  }
+
+  void push_back(const Hex& h) {
+    assert(size_ < CAP && "SmallHexVec capacity exceeded");
+    data_[size_++] = h;
+  }
+
+  std::size_t size() const { return static_cast<std::size_t>(size_); }
+  bool empty() const { return size_ == 0; }
+
+  Hex& operator[](std::size_t i) { return data_[i]; }
+  const Hex& operator[](std::size_t i) const { return data_[i]; }
+
+  Hex* begin() { return data_; }
+  Hex* end() { return data_ + size_; }
+  const Hex* begin() const { return data_; }
+  const Hex* end() const { return data_ + size_; }
+
+ private:
+  Hex data_[CAP];
+  int size_ = 0;
 };
 
 // ============================================================================
@@ -343,10 +395,10 @@ Hex index_to_hex(int index, int board_side);
 int compute_num_hexes(int board_side);
 
 // Get all hexes occupied by a unit given its anchor and facing
-std::vector<Hex> get_unit_hexes(UnitType type, const Hex& anchor, int facing);
+SmallHexVec get_unit_hexes(UnitType type, const Hex& anchor, int facing);
 
 // Get all hexes of the portal at a given corner (top or bottom)
-std::vector<Hex> get_portal_hexes(int player, int board_side);
+SmallHexVec get_portal_hexes(int player, int board_side);
 
 // Get the deploy hex for a player
 Hex get_deploy_hex(int player, int board_side);
@@ -390,7 +442,7 @@ struct FireInfo {
 
 // Line of sight check
 bool has_line_of_sight(const Hex& from, int direction, int distance,
-                       const std::vector<Hex>& occupied_hexes);
+                       const SmallHexVec& occupied_hexes);
 
 // ============================================================================
 // Spatial Action Space Encoding
@@ -619,7 +671,7 @@ class StarGambitGS : public GameState {
   MoveResult compute_dreadnought_move(const Unit& unit, int direction) const;
 
   // Get all hexes currently occupied by any unit
-  std::vector<Hex> get_all_occupied_hexes() const;
+  SmallHexVec get_all_occupied_hexes() const;
 
   // Check if a hex is occupied (optionally excluding a specific unit)
   bool is_hex_occupied(const Hex& h, int exclude_unit_idx = -1) const;
@@ -628,7 +680,7 @@ class StarGambitGS : public GameState {
   int find_unit_at_hex(const Hex& h) const;
 
   // Check if new position would collide (excluding the moving unit's current position)
-  bool would_collide(const std::vector<Hex>& new_hexes, int exclude_unit_idx) const;
+  bool would_collide(const SmallHexVec& new_hexes, int exclude_unit_idx) const;
 
   // Movement validation
   bool is_fighter_move_valid(const Unit& unit, int direction) const;

@@ -197,6 +197,32 @@ class TrainConfig:
     max_cache_size: int = 200_000
     cache_shards: int = -1  # -1 = os.cpu_count()
 
+    # Self-play work-distribution queue sharding (PlayManager.awaiting_mcts_).
+    # Every MCTS worker thread pops/pushes a game index through this queue on
+    # every single simulation step (even cache hits); at high thread counts a
+    # single shared queue mutex becomes the binding throughput constraint.
+    # Sharding it (like the cache above) lets worker threads mostly hit
+    # independent shards instead of one global lock.
+    queue_shards: int = -1  # -1 = os.cpu_count()
+
+    # Number of independent eval-dispatch pipelines (batcher + result-worker
+    # thread pairs) spawned per model group during self-play. The GPU is a
+    # single device, so exactly one gpu_loop thread ever calls
+    # model.process() regardless of this setting (concurrent calls into a
+    # torch.compile'd/CUDA-graph model are unsafe) -- but the CPU-side batch
+    # construction (queue pop + memcpy) and result handling (device->host
+    # copy + cache insert) can run in parallel across multiple threads to
+    # keep the GPU fed instead of being serialized behind a single thread.
+    #
+    # Default is 1 (off): measured head-to-head on the 4d64c net, raising
+    # this to 2 regressed real self-play throughput (~113 -> ~51 ksims/s at
+    # 16 workers, cache on) instead of helping -- the extra Python threads'
+    # GIL/scheduling overhead outweighed the CPU-parallelism benefit for
+    # this workload. Left configurable (and wired through GameRunner) in
+    # case a bigger net / batch size ever makes CPU-side batch construction
+    # the true bottleneck, but don't raise it without measuring.
+    eval_pipelines: int = 1
+
     # Workers
     result_workers: int = 2
     data_workers: int = -1  # -1 = os.cpu_count() - 1
@@ -400,6 +426,10 @@ class TrainConfig:
     @property
     def resolved_cache_shards(self) -> int:
         return os.cpu_count() if self.cache_shards == -1 else self.cache_shards
+
+    @property
+    def resolved_queue_shards(self) -> int:
+        return os.cpu_count() if self.queue_shards == -1 else self.queue_shards
 
     @property
     def resolved_data_workers(self) -> int:

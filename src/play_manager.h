@@ -63,6 +63,22 @@ struct PlayParams {
   uint32_t max_batch_size = 1;
   uint32_t max_cache_size = 0;
   uint8_t cache_shards = 1;
+  // Shard count for the awaiting_mcts_ work-distribution queue. Every MCTS
+  // worker thread pops/pushes a game index through this queue on every
+  // single simulation step (even cache hits), so at high thread counts a
+  // single shared queue's mutex becomes the binding throughput constraint.
+  // Sharding it (analogous to cache_shards above) lets worker threads mostly
+  // hit independent shards instead of one global lock.
+  uint8_t queue_shards = 1;
+  // Shard count for each model group's awaiting_inference_ queue, and the
+  // number of independent batcher/result-worker pipelines the Python side
+  // (GameRunner) spawns per model group. The GPU itself is a single device
+  // so only one gpu_loop thread ever calls model.process() (to keep
+  // CUDA-graph/torch.compile state safe under concurrent calls), but the
+  // CPU-side batch-construction (queue pop + memcpy) and result handling
+  // (device->host copy + cache insert) can run on multiple threads in
+  // parallel to keep the GPU fed.
+  uint8_t eval_pipelines = 1;
   std::vector<uint32_t> mcts_visits{};
   float cpuct = 2.0;
   float start_temp = 1.0;
@@ -168,21 +184,26 @@ class DLLEXPORT PlayManager {
     return games_completed_;
   }
   [[nodiscard]] std::optional<uint32_t> pop_game(uint32_t player) noexcept {
-    return awaiting_inference_[player]->pop(MAX_WAIT);
+    return awaiting_inference_[player]->pop(0, MAX_WAIT);
   }
   [[nodiscard]] std::vector<uint32_t> pop_games_upto(uint32_t player,
                                                      size_t n) noexcept {
-    return awaiting_inference_[player]->pop_upto(n, MAX_WAIT);
+    return awaiting_inference_[player]->pop_upto(0, n, MAX_WAIT);
   }
   [[nodiscard]] std::vector<uint32_t> pop_games_filled(uint32_t player,
                                                         size_t n) noexcept {
-    return awaiting_inference_[player]->pop_upto_filled(n, MAX_WAIT);
+    return pop_games_upto(player, n);
   }
+  // `shard` is only a *preference* (checked first): pop_upto always scans
+  // every shard of this group's queue before giving up, so a caller that
+  // doesn't know or care about sharding (shard=0, the default) still drains
+  // every game -- it just doesn't get the contention-reduction benefit of a
+  // dedicated per-pipeline shard. See ShardedQueue::pop_upto.
   template <class Rep, class Period>
   [[nodiscard]] std::vector<uint32_t> pop_games_upto_timed(
-      uint32_t group, size_t n,
+      uint32_t group, uint32_t shard, size_t n,
       const std::chrono::duration<Rep, Period>& timeout) noexcept {
-    return awaiting_inference_[group]->pop_upto(n, timeout);
+    return awaiting_inference_[group]->pop_upto(shard, n, timeout);
   }
 
   // Model group accessors
@@ -261,7 +282,7 @@ class DLLEXPORT PlayManager {
   [[nodiscard]] std::vector<PlayHistory> pop_hist_upto(size_t n) noexcept {
     return history_.pop_upto(n, MAX_WAIT);
   }
-  void push_inference(const uint32_t i) noexcept { awaiting_mcts_.push(i); }
+  void push_inference(const uint32_t i) noexcept { awaiting_mcts_.push(i, i); }
   [[nodiscard]] GameData& game_data(uint32_t i) noexcept { return games_[i]; }
   [[nodiscard]] const PlayParams& params() const noexcept { return params_; }
   float avg_game_length() const noexcept {
@@ -365,9 +386,12 @@ class DLLEXPORT PlayManager {
   std::atomic<bool> stopped_{false};
   Vector<float> resign_scores_;
 
-  ConcurrentQueue<uint32_t> awaiting_mcts_;
-  std::vector<std::unique_ptr<ConcurrentQueue<uint32_t>>> awaiting_inference_;
+  ShardedQueue<uint32_t> awaiting_mcts_;
+  std::vector<std::unique_ptr<ShardedQueue<uint32_t>>> awaiting_inference_;
   ConcurrentQueue<PlayHistory> history_;
+  // Assigns each MCTS worker thread a "home" shard (round-robin) the first
+  // time it calls play(). See ShardedQueue::pop.
+  std::atomic<uint32_t> next_worker_id_{0};
 
   std::vector<std::shared_ptr<Cache>> caches_;
 

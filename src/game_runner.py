@@ -414,6 +414,16 @@ class GameRunner:
         self._nn_groups = [g for g in range(self.num_model_groups)
                            if self._group_models[g] is not None]
 
+        # Number of independent batcher/result-worker pipelines per NN
+        # group. The GPU itself is a single device -- exactly one gpu_loop
+        # thread per group ever calls model.process(), regardless of this
+        # setting, since concurrent calls into a torch.compile'd/CUDA-graph
+        # model aren't safe -- but batch construction (queue pop + memcpy)
+        # and result handling (device->host copy + cache insert) are plain
+        # CPU/tensor work that can run on multiple threads in parallel to
+        # keep the single GPU thread fed instead of serialized behind one.
+        self._eval_pipelines = max(1, int(self.pm.params().eval_pipelines))
+
         # Pipeline queues
         self.gpu_ready_queue = queue.SimpleQueue()
         self.gpu_result_queue = queue.SimpleQueue()
@@ -424,9 +434,11 @@ class GameRunner:
         self._batch_sizes = []
         self._inference_times = []
 
-        # Buffer pool: 1 per batcher thread + 1 GPU + 1 result worker
+        # Buffer pool: eval_pipelines batchers in flight + 1 GPU + 1 result
+        # worker per NN group, so pipelines never block on a buffer being
+        # freed by a slower stage.
         cs = self.args.game.CANONICAL_SHAPE()
-        num_buffers = len(self._nn_groups) + 2
+        num_buffers = len(self._nn_groups) * (self._eval_pipelines + 2)
         for _ in range(num_buffers):
             buf = torch.zeros(self.args.max_batch_size, cs[0], cs[1], cs[2])
             if str(self.device) == "cuda":
@@ -488,15 +500,31 @@ class GameRunner:
         prev_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
             batcher_threads = []
+            result_threads = []
             if has_nn:
+                # Multiple independent batcher threads per NN group, all
+                # competing for items on the SAME (unsharded) eval queue --
+                # each can still assemble a full-size batch from the whole
+                # backlog, so this parallelizes the CPU-side batch
+                # construction (queue pop + memcpy) without shrinking batch
+                # sizes the way per-thread eval-queue sharding would. A
+                # single gpu_loop thread still serializes the actual GPU
+                # calls (required for correctness with CUDA graphs/
+                # torch.compile), but several result workers can pull
+                # finished batches off gpu_result_queue and do the
+                # device->host copy + cache insert + buffer release in
+                # parallel.
                 for g in self._nn_groups:
-                    t = threading.Thread(target=self.batcher, args=(g,))
-                    t.start()
-                    batcher_threads.append(t)
+                    for _ in range(self._eval_pipelines):
+                        t = threading.Thread(target=self.batcher, args=(g,))
+                        t.start()
+                        batcher_threads.append(t)
                 gpu_thread = threading.Thread(target=self.gpu_loop)
                 gpu_thread.start()
-                result_thread = threading.Thread(target=self.result_worker)
-                result_thread.start()
+                for _ in range(self._eval_pipelines):
+                    rt = threading.Thread(target=self.result_worker)
+                    rt.start()
+                    result_threads.append(rt)
 
             mcts_workers = []
             for i in range(self.args.mcts_workers):
@@ -517,7 +545,8 @@ class GameRunner:
             for bt in batcher_threads:
                 bt.join()
             gpu_thread.join()
-            result_thread.join()
+            for rt in result_threads:
+                rt.join()
         monitor.join()
         if self.pm.params().history_enabled:
             hist_saver.join()
@@ -620,7 +649,7 @@ class GameRunner:
 
     @tracy_zone
     def batcher(self, group):
-        tracy_thread(f"batcher_{group}")
+        tracy_thread(f"batcher_{group}_{threading.get_ident()}")
         while self.pm.remaining_games() > 0:
             try:
                 batch_tensor = self.buffer_pool.get(timeout=1)
@@ -763,6 +792,8 @@ def base_params(config, start_temp, bs, cb):
     params = alphazero.PlayParams()
     params.cache_shards = config.resolved_cache_shards
     params.max_cache_size = config.max_cache_size
+    params.queue_shards = config.resolved_queue_shards
+    params.eval_pipelines = config.eval_pipelines
     params.cpuct = config.cpuct
     params.start_temp = start_temp
     if isinstance(config.temp_decay_half_life, dict):

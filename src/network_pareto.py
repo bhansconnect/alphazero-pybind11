@@ -383,9 +383,16 @@ def measure_selfplay_throughput(nn_wrapper, config, iteration, device,
         if sum(probs) <= 0:
             probs = [1.0 / len(UNIFIED_VARIANT_NAMES)] * len(UNIFIED_VARIANT_NAMES)
 
-    pm = alphazero.PlayManager(_make_game_instance(config, probs), p)
     if workers is None:
         workers = max(1, (os.cpu_count() or 2) - 1)
+    # Never shard the work-distribution queue more finely than the number of
+    # MCTS worker threads that will actually consume it. Sharding is a pure
+    # contention-reduction trick (see PlayManager.awaiting_mcts_); with far
+    # more shards than worker threads, most workers' "home" shard scans come
+    # up empty and pay for extra (cheap, but non-zero) cross-shard sweeps for
+    # no benefit, which can regress throughput at low thread counts.
+    p.queue_shards = max(1, min(int(p.queue_shards), workers))
+    pm = alphazero.PlayManager(_make_game_instance(config, probs), p)
     gr = GameRunner(players, pm, GRArgs(
         title="SP throughput", game=Game, iteration=iteration,
         max_batch_size=bs, mcts_workers=workers, record_batch_metrics=False,

@@ -34,6 +34,14 @@ struct DLLEXPORT Node {
 
   void add_children(const Vector<uint8_t>& valids) noexcept;
   void update_policy(const Vector<float>& pi) noexcept;
+  // Set child priors directly from pi indexed at each child's move, then
+  // renormalize to sum 1. children already enumerate exactly the legal moves,
+  // so this avoids building a dense num_moves-sized valids mask / masked-pi
+  // array. When apply_temp is true each prior is first raised to inv_temp
+  // (root-policy temperature); the pre-temp normalization cancels out and is
+  // therefore skipped.
+  void set_policy_normalized(const Vector<float>& pi, bool apply_temp,
+                             float inv_temp) noexcept;
   [[nodiscard]] float uct(float sqrt_parent_n, float cpuct,
                           float fpu_value) const noexcept;
   [[nodiscard]] Node* best_child(float cpuct, float fpu_reduction) noexcept;

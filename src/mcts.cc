@@ -106,6 +106,20 @@ void Node::update_policy(const Vector<float>& pi) noexcept {
   }
 }
 
+void Node::set_policy_normalized(const Vector<float>& pi, bool apply_temp,
+                                 float inv_temp) noexcept {
+  float sum = 0.0f;
+  for (auto& c : children) {
+    float p = pi(c.move);
+    if (apply_temp) p = std::pow(p, inv_temp);
+    c.policy = p;
+    sum += p;
+  }
+  for (auto& c : children) {
+    c.policy /= sum;
+  }
+}
+
 float Node::uct(float sqrt_parent_n, float cpuct,
                 float fpu_value) const noexcept {
   return (n == 0 ? fpu_value : q) +
@@ -483,30 +497,27 @@ std::unique_ptr<GameState> MCTS::find_leaf(const GameState& gs) {
   return leaf;
 }
 
-void MCTS::process_result(const GameState& gs, Vector<float>& value,
-                          Vector<float>& pi, bool root_noise_enabled) {
+void MCTS::process_result([[maybe_unused]] const GameState& gs,
+                          Vector<float>& value, Vector<float>& pi,
+                          bool root_noise_enabled) {
   if (current_->scores != nullptr) {
     value = *current_->scores;
   } else {
-    // Rescale pi based on valid moves.
-    auto valids = Vector<float>(gs.num_moves());
-    valids.setZero();
-    for (auto& c : current_->children) {
-      valids(c.move) = 1;
-    }
-    pi.array() *= valids.array();
-    pi /= pi.sum();
+    // Renormalize child priors directly from pi over the legal moves.
+    // current_->children already enumerates exactly the legal move indices, so
+    // there is no need to materialize a dense num_moves-sized valids mask or a
+    // masked pi array (which would waste memory bandwidth zeroing/scanning
+    // ~num_moves entries every non-terminal simulation).
     if (current_ == &root_) {
-      pi = pi.array().pow(1.0f / root_policy_temp_);
-      pi /= pi.sum();
-      current_->update_policy(pi);
+      current_->set_policy_normalized(pi, root_policy_temp_ != 1.0f,
+                                      1.0f / root_policy_temp_);
       // Gumbel replaces Dirichlet noise (paper Section 3.1): if Gumbel is
       // active for this search, skip noise even when caller asked for it.
       if (root_noise_enabled && !gumbel_enabled_) {
         add_root_noise();
       }
     } else {
-      current_->update_policy(pi);
+      current_->set_policy_normalized(pi, /*apply_temp=*/false, 1.0f);
     }
     if (relative_values_) {
       value = relative_to_absolute(value, current_->player, num_players_);
@@ -774,9 +785,9 @@ std::unique_ptr<GameState> MCTS::find_leaf_batched(const GameState& gs) {
   return leaf;
 }
 
-void MCTS::process_result_batched(const GameState& gs, uint32_t leaf_index,
-                                  Vector<float>& value, Vector<float>& pi,
-                                  bool root_noise_enabled) {
+void MCTS::process_result_batched([[maybe_unused]] const GameState& gs,
+                                  uint32_t leaf_index, Vector<float>& value,
+                                  Vector<float>& pi, bool root_noise_enabled) {
   auto& ifl = in_flight_.at(leaf_index);
   current_ = ifl.leaf;
   --current_->n_in_flight;
@@ -784,25 +795,21 @@ void MCTS::process_result_batched(const GameState& gs, uint32_t leaf_index,
   if (current_->scores != nullptr) {
     value = *current_->scores;
   } else {
-    // Rescale pi based on valid moves.
-    auto valids = Vector<float>(gs.num_moves());
-    valids.setZero();
-    for (auto& c : current_->children) {
-      valids(c.move) = 1;
-    }
-    pi.array() *= valids.array();
-    pi /= pi.sum();
+    // Renormalize child priors directly from pi over the legal moves.
+    // current_->children already enumerates exactly the legal move indices, so
+    // there is no need to materialize a dense num_moves-sized valids mask or a
+    // masked pi array (which would waste memory bandwidth zeroing/scanning
+    // ~num_moves entries every non-terminal simulation).
     if (current_ == &root_) {
-      pi = pi.array().pow(1.0f / root_policy_temp_);
-      pi /= pi.sum();
-      current_->update_policy(pi);
+      current_->set_policy_normalized(pi, root_policy_temp_ != 1.0f,
+                                      1.0f / root_policy_temp_);
       // Gumbel replaces Dirichlet noise (paper Section 3.1): if Gumbel is
       // active for this search, skip noise even when caller asked for it.
       if (root_noise_enabled && !gumbel_enabled_) {
         add_root_noise();
       }
     } else {
-      current_->update_policy(pi);
+      current_->set_policy_normalized(pi, /*apply_temp=*/false, 1.0f);
     }
     if (relative_values_) {
       value = relative_to_absolute(value, current_->player, num_players_);

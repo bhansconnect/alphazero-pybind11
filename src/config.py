@@ -226,6 +226,7 @@ class TrainConfig:
     # Workers
     result_workers: int = 2
     data_workers: int = -1  # -1 = os.cpu_count() - 1
+    mcts_workers: int = -1  # -1 = os.cpu_count() - 1
 
     # Training I/O
     streaming_active_files: int = 8
@@ -434,6 +435,10 @@ class TrainConfig:
     @property
     def resolved_data_workers(self) -> int:
         return os.cpu_count() - 1 if self.data_workers == -1 else self.data_workers
+
+    @property
+    def resolved_mcts_workers(self) -> int:
+        return os.cpu_count() - 1 if self.mcts_workers == -1 else self.mcts_workers
 
     @property
     def resolved_loader_threads(self) -> int:

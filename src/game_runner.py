@@ -2063,6 +2063,7 @@ def self_play(config, paths, experiment_name, best, iteration, depth, fast_depth
         game=Game,
         iteration=iteration,
         max_batch_size=bs,
+        mcts_workers=config.resolved_mcts_workers,
         record_batch_metrics=True,
         data_folder=paths["tmp_history"],
     )
@@ -2243,6 +2244,7 @@ def play_past(config, paths, experiment_name, depth, iteration, past_iter, batch
         game=Game,
         iteration=iteration,
         max_batch_size=bs,
+        mcts_workers=config.resolved_mcts_workers,
     )
     gr = GameRunner(players, pm, grargs)
     gr.run()

@@ -195,7 +195,7 @@ play_manager_bench = executable(
   'play_manager_bench',
   'play_manager_bench.cc',
   dependencies: [gbench_main_dep, gbench_dep, thread_dep, eigen_dep, absl_container_dep, absl_hash_dep],
-  link_with: [play_manager, tawlbwrdd_gs],
+  link_with: [play_manager, tawlbwrdd_gs, opentafl_gs, connect4_gs, star_gambit_gs],
 )
 
 py3_install.extension_module(
